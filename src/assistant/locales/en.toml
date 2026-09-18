@@ -1,0 +1,33 @@
+# English (design.md 3.12).
+#
+# The middle link of the fallback chain: a key another pack leaves out is
+# answered here, and a key this pack leaves out is answered by the English
+# constant written beside the code that says it.
+#
+# There is deliberately no [ui] table. Every sentence already exists in English
+# next to the code that says it, and a second copy here would be a second thing
+# to keep in step - the two would drift, and the drift would be invisible.
+# No [speech] table either, for the same reason: the English yes and no words
+# are the constants beside the code that listens for them.
+
+code = "en"
+name = "English"
+
+[stt]
+# What the recogniser is told to expect. Usually `code`, but not always: this
+# is the language people *speak* to the assistant, not the one it shows them.
+language = "en"
+# What the recogniser is told to expect before each sentence (design.md 3.4):
+# a sentence with the commands people say most, and the installed apps' names
+# where {apps} is - the program fills them in.
+prompt = "Installed apps: {apps}. Open the app, open the site, show settings, play music, next song, what time is it?"
+
+[tts.voice]
+# The preferred voice, matched against the names Windows actually lists. It is
+# a preference, not an identifier: when it is not installed, any other voice
+# for this language is used instead. Zira is one of the voices Windows ships
+# for English.
+sapi = "Zira"
+# Google's synthesiser (`[tts] provider = "gemini"`): the thirty voices read
+# every language, so this is a matter of timbre.
+gemini = "Kore"

@@ -1,0 +1,94 @@
+# What a million tokens cost, in US dollars, per provider and model
+# (design.md section 6).
+#
+# The application never carries a price in code: it reads this file, and
+# reads `%APPDATA%\live-assistant\pricing.toml` over it if you write one. A price
+# that changed is an edit here; a model this file does not name is a table
+# you add. A model with no table is *not* priced at zero - `live-assistant cost`
+# says its price is unknown, and its turns stay out of the total.
+#
+#   [<provider>."<model>"]          the provider id from providers.toml, and
+#                                   the model name as `config.toml` writes it
+#   input_per_mtok   = 0.30         fresh input tokens
+#   output_per_mtok  = 2.50         output tokens
+#   cached_per_mtok  = 0.03         input tokens served from the prompt cache;
+#                                   left out, they are charged as fresh input
+#
+# Cached tokens are a subset of the input, not an addition to it: a turn of
+# 1000 input tokens with 400 cached is 600 fresh and 400 cached.
+#
+# Gemini prices read from https://ai.google.dev/gemini-api/docs/pricing on
+# 2026-09-09 (the page's own date: 2026-09-08), paid tier, text. Where a
+# price depends on the prompt length, the tier for prompts up to 200k tokens
+# is written, which is every turn this assistant makes.
+
+[gemini."gemini-3.5-flash-lite"]
+input_per_mtok = 0.30
+output_per_mtok = 2.50
+cached_per_mtok = 0.03
+
+[gemini."gemini-3.5-flash"]
+input_per_mtok = 1.50
+output_per_mtok = 9.00
+cached_per_mtok = 0.15
+
+# Introductory price through 2026-12-31; doubles on 2027-01-01.
+[gemini."gemini-3.8-flash"]
+input_per_mtok = 0.75
+output_per_mtok = 3.75
+cached_per_mtok = 0.075
+
+[gemini."gemini-2.5-pro"]
+input_per_mtok = 1.25
+output_per_mtok = 10.00
+cached_per_mtok = 0.125
+
+[gemini."gemini-2.5-flash"]
+input_per_mtok = 0.30
+output_per_mtok = 2.50
+cached_per_mtok = 0.03
+
+[gemini."gemini-2.5-flash-lite"]
+input_per_mtok = 0.10
+output_per_mtok = 0.40
+cached_per_mtok = 0.01
+
+# Anthropic prices as of 2026-06-24 (first-party API, per million tokens).
+# A cache read is a tenth of the input price, Anthropic's standard rate;
+# the models above the Opus tier price differently and are not listed.
+# Model ids carry no date suffix: `claude-opus-5`, never `claude-opus-5-2026...`.
+
+[anthropic."claude-opus-5"]
+input_per_mtok = 5.00
+output_per_mtok = 25.00
+cached_per_mtok = 0.50
+
+[anthropic."claude-opus-4-8"]
+input_per_mtok = 5.00
+output_per_mtok = 25.00
+cached_per_mtok = 0.50
+
+[anthropic."claude-opus-4-7"]
+input_per_mtok = 5.00
+output_per_mtok = 25.00
+cached_per_mtok = 0.50
+
+[anthropic."claude-opus-4-6"]
+input_per_mtok = 5.00
+output_per_mtok = 25.00
+cached_per_mtok = 0.50
+
+[anthropic."claude-sonnet-5"]
+input_per_mtok = 2.00
+output_per_mtok = 10.00
+cached_per_mtok = 0.20
+
+[anthropic."claude-sonnet-4-6"]
+input_per_mtok = 3.00
+output_per_mtok = 15.00
+cached_per_mtok = 0.30
+
+[anthropic."claude-haiku-4-5"]
+input_per_mtok = 1.00
+output_per_mtok = 5.00
+cached_per_mtok = 0.10

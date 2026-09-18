@@ -1,0 +1,28 @@
+# Provider catalogue (plan.md section 4.6).
+#
+# The point of this file is that adding a provider is an edit here, not a code
+# change: `adapter` names one of the adapters in `live/`, and everything else
+# is data the setup command shows or the adapter needs. An entry whose
+# `adapter` does not exist yet would be offered to the user and then fail
+# after they typed their key in, so entries arrive with their adapter.
+#
+# The entry id is the vendor, not the API: the key is filed under it in the
+# Credential Manager, and `[stt]` and `[tts]` share the same entry when they
+# name the same vendor - one key, stored once. The OpenAI entry arrives with
+# its adapter (plan.md L2.2), under whichever API the owner picks in L2.0.
+#
+# Fields:
+#   adapter          which adapter class builds it            (required)
+#   display_name     what the setup command shows             (required)
+#   key_url          where the user gets a key
+#   key_prefix       expected start of the key, for a typo check
+#   base_url         the endpoint, for adapters that speak to an address
+#   requires_key     false for a local endpoint (default true)
+#   has_live_pricing the model list returns prices too (default false)
+
+# The first adapter (plan.md D1, D13): Google's Live API, on the owner's
+# AI Studio key. The adapter is task L1.1.
+[gemini]
+adapter      = "gemini_live"
+display_name = "Google Gemini Live"
+key_url      = "https://aistudio.google.com/apikey"

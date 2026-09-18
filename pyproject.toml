@@ -1,0 +1,122 @@
+[project]
+name = "live-assistant"
+version = "0.1.0"                       # L0: the baseline copied from windows-voice-assistant; the live loop is L1 (docs/plan.md)
+description = "A Windows desktop voice assistant on live speech-to-speech models, running on your own API key."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "emreux", email = "feneremree553@gmail.com" }]
+requires-python = ">=3.13"
+dependencies = [
+    "anyascii>=0.3.3",
+    "faster-whisper>=1.2.1",
+    "google-genai>=2.20.0",
+    "httpx>=0.28.1",
+    "httpx2>=2.12.0",
+    "keyring>=25.7.0",
+    "loguru>=0.7.3",
+    "numpy>=2.5.2",
+    "pillow>=12.3.0",
+    "platformdirs>=4.11.4",
+    "pydantic-settings>=2.15.0",
+    "pynput>=1.8.2",
+    "pystray>=0.19.5",
+    "python-dateutil>=2.9.0.post0",
+    "pywin32>=312",
+    "questionary>=2.1.1",
+    "rich>=15.0.0",
+    "selectolax>=0.4.11",
+    "sounddevice>=0.5.6",
+    "soundfile>=0.14.0",
+    "telethon>=1.45.0",
+    "tenacity>=9.1.4",
+    # Named rather than left transitive: both live adapters ride on it
+    # (`google-genai` brings this version; the OpenAI adapter may use it
+    # directly, L2.1).
+    "websockets>=16.1.1",
+    "winrt-windows-media-control>=3.2.1",
+    "ytmusicapi>=1.12.2",
+]
+
+[project.scripts]
+live-assistant = "assistant.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13.0"]
+build-backend = "uv_build"
+
+# The product is `live-assistant`; the package stays `assistant` so that
+# every module copied from the old repository imports unchanged (plan.md D2).
+[tool.uv.build-backend]
+module-name = "assistant"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.4",
+    "types-python-dateutil>=2.9.0.20260807",
+]
+
+# --------------------------------------------------------------------------
+# Lint, format, type check, test.
+# --------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+# Ruff also formats Python blocks embedded in Markdown. The documents are
+# prose whose snippets are illustrative, not compiled code - keep it out.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "ASYNC",  # flake8-async - the 50 ms rule of section 3.1 starts here
+    "S",      # flake8-bandit
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "PTH",    # flake8-use-pathlib
+    "RUF",    # ruff-specific
+]
+# RUF001-003 flag letters that merely look like ASCII. Turkish text is expected
+# in this project, so they would fire on ordinary strings and comments.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]   # assert is the point of a test
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.mypy]
+strict = true
+python_version = "3.13"
+files = ["src", "tests"]
+warn_unreachable = true
+enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
+
+# Telethon ships no type stubs and no `py.typed` (1.45.0, 2026-09-15). Its
+# objects are `Any` inside `messaging/telegram.py`, which wraps every one of
+# them in a typed dataclass before anything else sees it; the code around
+# it stays strict.
+[[tool.mypy.overrides]]
+module = ["telethon", "telethon.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers --strict-config"
+# `test_latency.py` returns in L3.4 (plan.md): our own code's share of a
+# turn, as a relative regression against `main`.
+markers = [
+    "latency: our own code's share of a turn, under a loose local bound",
+]

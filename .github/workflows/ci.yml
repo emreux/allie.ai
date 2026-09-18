@@ -1,0 +1,52 @@
+# DISABLED - this workflow does not run.
+#
+# It has no automatic trigger: `workflow_dispatch` means it only starts if
+# someone presses the button in the Actions tab. Nothing happens on push, on
+# pull request, or on a schedule. The workflow is also disabled on GitHub's
+# side, so even the button does nothing until it is re-enabled.
+#
+# The same checks run locally before every commit through .pre-commit-config.yaml,
+# which is where they belong for now. The file is kept because the commands in
+# it are correct and phase 0.10 may be revisited later; delete it whenever.
+#
+# Notes for whoever re-enables it:
+#   - The runner has to be Windows: pywin32, SAPI and the Windows Credential
+#     Manager have no Linux equivalent.
+#   - This file has never worked. Its one run failed at "Set up job", before a
+#     single step executed, which points at an action reference the runner could
+#     not resolve. Check that the `actions/checkout` and `astral-sh/setup-uv`
+#     tags below still exist before trusting it.
+
+name: CI (disabled)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install the project
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Test
+        run: uv run pytest

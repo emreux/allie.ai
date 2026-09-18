@@ -1,0 +1,241 @@
+# Turkish (design.md 3.12). One of the two locales phase 1 ships complete.
+#
+# Comments here are English because they are notes to whoever edits the file;
+# the values are Turkish because they are what the user reads and hears.
+# `_template.toml` explains what each key is for.
+
+code = "tr"
+name = "Türkçe"
+
+[stt]
+language = "tr"
+# What the recogniser is told to expect before each sentence (design.md 3.4):
+# a sentence, not a list - the decoder is being shown what speech in this
+# language looks like - with the commands people say most, and the names of
+# the installed apps where {apps} is. The program fills them in, as many as
+# the recogniser's window holds.
+prompt = "Bilgisayarımdaki uygulamalar: {apps}. Uygulamayı aç, siteyi aç, ayarları göster, müzik çal, sonraki şarkı, saat kaç?"
+
+[speech]
+# What the confirmation window listens for (design.md 3.1 rule 2). Whole
+# words, any case; a "no" anywhere in the answer wins over a "yes".
+yes_words = ["evet", "onaylıyorum", "tamam", "olur"]
+no_words = ["hayır", "iptal", "vazgeç", "olmaz"]
+# Said while a tool takes its time (design.md 4): short, and ending in a
+# pause. Used in turn, so two of them are not the same one twice.
+filler = ["Bir saniye, bakıyorum...", "Hemen bakıyorum..."]
+
+[probe]
+# The one question the setup wizard puts to a model to see whether it calls
+# a tool (design.md 3.2): it has to be something the model cannot answer
+# from memory, so that the only good answer is to call get_current_time.
+# In Turkish, so that the same request shows the model understands it.
+question = "İstanbul'da saat kaç?"
+
+[tts.voice]
+# Tolga is the voice Windows itself ships for Turkish. It lives in the
+# Speech_OneCore registry hive, which `tts/sapi.py` reads on purpose.
+sapi = "Tolga"
+# Google's synthesiser (`[tts] provider = "gemini"`): the thirty voices read
+# every language, so this is a matter of timbre. Kore is a clear, even
+# female voice; Charon a calm male one.
+gemini = "Kore"
+
+[ui]
+welcome = "Asistan, senin API anahtarınla, seçtiğin yapay zekâ sağlayıcısına bağlanır."
+provider = "Hangi sağlayıcıyı kullanmak istiyorsun?"
+only_provider = "Sağlayıcı: {name} — bu sürümün konuşabildiği tek sağlayıcı."
+no_provider = "Bu sürüm, listedeki sağlayıcıların hiçbirini kuramıyor."
+locale = "Asistan hangi dili konuşsun?"
+key_url = "Anahtarı buradan oluşturabilirsin: {url}"
+api_key = "API anahtarını yapıştır (yazarken ekranda görünmez)"
+api_key_keep = "API anahtarını yapıştır, ya da kayıtlı olanı korumak için Enter'a bas"
+key_needed = "Bu sağlayıcı, cevap vermeden önce bir anahtar istiyor."
+checking_key = "Anahtar kontrol ediliyor..."
+base_url = "Sunucunun adresi — OpenAI uyumlu taban URL, sonu /v1 ile biter"
+checking_server = "Sunucunun cevap verip vermediği kontrol ediliyor..."
+bad_key = "Bu anahtar çalışmadı — yanlış yazılmış, iptal edilmiş ya da kredisi bitmiş olabilir."
+provider_unreachable = "Sağlayıcıya ulaşılamadı. Bağlantını kontrol edip tekrar dene."
+loading_models = "Anahtarın erişebildiği modeller soruluyor..."
+no_models = "Anahtar çalışıyor ama hiçbir modele erişemiyor. Sağlayıcının konsolunu kontrol et."
+model = "Hangi model cevap versin?"
+probing_tools = "Modelin araç çağırıp çağıramadığı sınanıyor..."
+tools_ok = "Model araç çağırabiliyor — ilk yanıt {ms} ms'de geldi."
+tools_failed = "Bu model araç çağıramıyor; asistanın işlerinin çoğu buna bağlı. Başka bir model seç."
+probe_refused = "Model sınanamadı: {problem}. Başka bir model seç ya da tekrar dene."
+microphone = "Asistan hangi mikrofonu dinlesin?"
+windows_microphone = "Windows'un seçtiği mikrofon (şu an: {name})"
+no_microphones = "Hiç mikrofon bulunamadı."
+microphone_saved = "Mikrofon: {microphone}. Ayarlar: {path}"
+saved = "Hazır. Ayarlar: {path} — anahtarın kendisi Windows Kimlik Bilgisi Yöneticisi'nde."
+cancelled = "Kurulum iptal edildi. Hiçbir şey değiştirilmedi."
+
+# Spoken out loud rather than shown, so they are short (item 1.10).
+unreachable = "Sağlayıcıya bağlanamadım, tekrar dener misin?"
+key_invalid = "API anahtarın geçersiz görünüyor, yenilemen gerekiyor."
+took_too_long = "Bu iş uzadı, tekrar dener misin?"
+confirm_hint = "Evet ya da hayır de."
+confirm_again = "Anlayamadım. Evet mi, hayır mı?"
+daily_over = "Bugünkü harcama sınırını aştın."
+monthly_over = "Bu ayki harcama sınırını aştın."
+spend_stopped = "Harcama sınırı aşıldı, bu yüzden modele sormuyorum."
+# Asked before a remembered fact is removed (2.10); {fact} is the fact as
+# the model named it. The hint on how to answer is added after it.
+forget_confirm = "'{fact}' kaydı unutulacak."
+# Asked before a note is deleted (4.1); {text} is the note as it was written.
+note_delete_confirm = "'{text}' notu silinecek."
+# Asked before a reminder is cancelled (4.2); {text} is the reminder as
+# the user gave it.
+reminder_cancel_confirm = "'{text}' hatırlatıcısı iptal edilecek."
+# Said by the scheduler, without the model (4.2): a reminder said late,
+# and the one sentence for reminders that went by while the assistant was
+# off. {minutes} is how late, {count} how many, {text} the reminder.
+reminder_late = "{minutes} dakika gecikmeli hatırlatma: {text}"
+reminder_missed_one = "Kapalıyken bir hatırlatıcın geçti: {text}"
+reminder_missed_many = "Kapalıyken {count} hatırlatıcın geçti. Sonuncusu: {text}"
+# Asked before an app is downloaded from the Microsoft Store (2026-09-13);
+# {name} is the app as the Store lists it and {publisher} who made it - said
+# out loud because the Store is full of look-alikes. The word below stands
+# in for a publisher the Store did not name.
+store_install_confirm = "'{name}' ({publisher}) Microsoft Store'dan indirilecek."
+unknown_publisher = "yayıncısı bilinmiyor"
+# Asked before a message goes (2026-09-15); {text} is the message word for
+# word, {contact} the person as the user said them, {app} WhatsApp or
+# Telegram. The hint on how to answer is added after it.
+send_message_confirm = "'{text}' mesajı {contact} kişisine {app} üzerinden gönderilecek."
+# `live-assistant telegram login`: the questions, in order, and the two answers.
+telegram_api_id = "Telegram api_id'n (bir sayı). https://my.telegram.org adresinde 'API development tools' altından alınır"
+telegram_api_hash = "Telegram api_hash'in (yazarken görünmez)"
+telegram_phone = "Telegram hesabının telefon numarası, ülke koduyla (+90...)"
+telegram_code = "Telegram'ın az önce Telegram uygulamana gönderdiği kod (SMS değil)"
+telegram_password = "Telegram iki adımlı doğrulama şifren (yazarken görünmez)"
+telegram_logged_in = "Telegram'a {name} olarak giriş yapıldı. Oturum Windows Kimlik Bilgisi Yöneticisi'nde."
+telegram_login_failed = "Telegram girişi başarısız: {reason}"
+duplicate_done = "Bunu {ago} önce zaten yaptın."
+duplicate_uncertain = "Bunu {ago} önce denedin, sonucu belirsiz kaldı."
+seconds_ago = "{count} saniye"
+minutes_ago = "{count} dakika"
+
+# Shown on screen while it runs - the status line and what a turn left behind
+# (item 1.11). Short: they share one line with the hotkey.
+paused = "Dinlemiyorum. {toggle} dinlemeyi açar, Ctrl+C durdurur."
+hands_free = "Dinliyorum - konuşman yeterli. {toggle} dinlemeyi kapatır (konuşuyorsa susturur), Ctrl+C her şeyi."
+loading_speech = "Konuşma modeli yükleniyor..."
+checking_model = "Modelin araç çağırıp çağıramadığı sınanıyor..."
+state_idle = "hazır"
+state_listening = "dinliyor"
+state_transcribing = "yazıya döküyor"
+state_thinking = "düşünüyor"
+state_confirming = "onay bekliyor"
+state_speaking = "konuşuyor"
+state_announcing = "hatırlatıyor"
+you_said = "sen"
+it_said = "asistan"
+turn_cost = "{input} girdi, {output} çıktı"
+not_caught = "(anlaşılmadı - güven {confidence})"
+
+# Said once, by the command line itself, when it can or cannot start.
+not_set_up = "Henüz kurulum yapılmamış. Önce 'live-assistant setup' çalıştır."
+cannot_start = "Asistan başlayamıyor: {problem}"
+stopped = "Durduruldu."
+run_not_wired = "Canlı konuşma döngüsü henüz bağlanmadı: bu sürüm daha konuşmuyor. setup, doctor, cost, purge ve autostart çalışıyor."
+model_no_tools = "Model araç çağıramıyor; asistanın işlerinin çoğu buna bağlı. Başka bir model seçmek için 'live-assistant setup' çalıştır."
+
+# Shown by `live-assistant cost` (design.md section 6): two small tables, today
+# and this month, one row per model. Amounts are written by the code, as
+# `$0.0004`.
+cost_none = "Henüz kayıtlı harcama yok."
+cost_today = "bugün"
+cost_month = "bu ay"
+cost_model = "model"
+cost_turns = "tur"
+cost_tokens = "girdi / çıktı / önbellek"
+cost_spent = "harcama"
+cost_total = "toplam"
+cost_unpriced = "{model} için {count} turun fiyatı pricing.toml'da yok; toplama girmedi."
+
+# Shown by `live-assistant purge --all`: what will go, what stays, and the one
+# word that is asked for before anything is deleted (`yes`, in every
+# language - the sentence names it).
+purge_will_delete = "Asistanın kaydettiği her şey silinecek:"
+purge_file = "  dosya: {path}"
+purge_secret = "  Kimlik Bilgisi Yöneticisi girdisi: {name}"
+purge_keeps = "config.toml ve contacts.toml kalıyor: onları sen yazdın."
+purge_confirm = "Hepsini silmek için yes yaz:"
+purge_cancelled = "Hiçbir şey silinmedi."
+purge_done = "{count} öğe silindi."
+purge_nothing = "Silinecek bir şey yok."
+
+# The tray icon (`run --tray`): its menu, and the tooltip of an idle
+# microphone that is off. The states themselves use the `state_*` labels.
+tray_not_listening = "dinlemiyor"
+tray_stop_listening = "Dinlemeyi durdur"
+tray_start_listening = "Dinlemeye başla"
+tray_open_settings = "Ayar klasörünü aç"
+tray_quit = "Çık"
+
+# `live-assistant autostart on | off | status`: the Run key of your own sign-in.
+autostart_on = "Asistan oturum açtığında başlayacak; komut: {command}"
+autostart_off = "Asistan artık oturum açtığında başlamayacak."
+autostart_status_on = "Oturum açınca başlıyor; komut: {command}"
+autostart_status_off = "Oturum açınca başlamıyor. 'live-assistant autostart on' bunu değiştirir."
+
+# Asked and said by `live-assistant mail login`: the IMAP server, the address,
+# an app password, and how it went.
+mail_host = "Posta hesabının IMAP sunucusu (imap.gmail.com, outlook.office365.com)"
+mail_user = "Giriş yaptığın e-posta adresi"
+mail_password = "IMAP için uygulama şifresi - hesap şifren değil (yazarken görünmez)"
+mail_logged_in = "{host} sunucusuna {user} olarak girildi: {mailbox} klasöründe {count} ileti var. Şifre Windows Kimlik Bilgisi Yöneticisi'nde."
+mail_login_failed = "Posta girişi başarısız: {reason}"
+
+# `live-assistant doctor`: one screen of labels. Values - paths, numbers,
+# names - are written by the code; a key is never one of them.
+doctor_pack = "dil paketi: {name} ({code})"
+doctor_who_answers = "Kim cevap veriyor"
+doctor_model = "  model: {model} ({provider})"
+doctor_key_stored = "  API anahtarı: Kimlik Bilgisi Yöneticisi'nde kayıtlı"
+doctor_key_missing = "  API anahtarı: kayıtlı değil - 'live-assistant setup' çalıştır"
+doctor_key_not_needed = "  API anahtarı: gerekmiyor"
+doctor_verdict_ok = "  araç çağırma: geçti, {days} gün önce denendi"
+doctor_verdict_failed = "  araç çağırma: KALDI, {days} gün önce denendi - araçların çoğu çalışmayacak"
+doctor_verdict_none = "  araç çağırma: henüz denenmedi (bir sonraki açılışta denenir)"
+doctor_stt_local = "  tanıyıcı: Whisper '{size}', bu makinede"
+doctor_stt_gemini = "  tanıyıcı: Google ({model}), arkasında Whisper '{size}'"
+doctor_tts_sapi = "  ses: Windows ({voice})"
+doctor_tts_gemini = "  ses: Google ({model}), arkasında Windows"
+doctor_leaves = "Bu makineden ne çıkıyor"
+doctor_voice_stays = "  sesin: burada kalıyor"
+doctor_voice_goes = "  sesin: Google'a gidiyor (tanıyıcı)"
+doctor_text_goes = "  söylediklerin, metin olarak: {provider} sağlayıcısına gidiyor"
+doctor_content_goes = "  sorduğun sayfalar, pano metni ve mailler: {provider} sağlayıcısına gidiyor"
+doctor_answer_stays = "  asistanın söyledikleri: burada kalıyor"
+doctor_answer_goes = "  asistanın söyledikleri: Google'a gidiyor (ses)"
+doctor_weather = "  havasını sorduğun yer: Open-Meteo'ya gidiyor"
+doctor_store = "  sende olmayan bir uygulamanın adı: Microsoft Store'a gidiyor"
+doctor_messages = "  bir mesaj: bu bilgisayardaki WhatsApp uygulaması ya da senin adına Telegram sunucuları"
+doctor_where = "Neler nerede"
+doctor_settings = "  ayarlar: {path}"
+doctor_contacts = "  kişiler: {path} ({count} kişi)"
+doctor_contacts_none = "  kişiler: {path} (henüz yazılmadı)"
+doctor_memory = "  hafıza: {path} ({count} bilgi)"
+doctor_tools_dir = "  kendi araçların: {path}"
+doctor_database = "  veritabanı: {path} ({size})"
+doctor_database_none = "  veritabanı: {path} (henüz oluşmadı)"
+doctor_log = "  günlük: {path}"
+doctor_tools = "Araçlar"
+doctor_builtin = "  yerleşik: {count}"
+doctor_local = "  kendi araçların: {count} ({names})"
+doctor_local_none = "  kendi araçların: yok"
+doctor_limits = "Sınırlar"
+doctor_per_turn = "  tur başına: {calls} araç çağrısı, {tokens} çıktı jetonu, {seconds} sn"
+doctor_spend_warn = "  harcama: günde ${daily}, ayda ${monthly} - aşılınca uyarı"
+doctor_spend_stop = "  harcama: günde ${daily}, ayda ${monthly} - aşılınca modele sorulmaz"
+doctor_retention = "  aracın verdiği cevap kayıtta {days} gün tutuluyor"
+doctor_retention_forever = "  aracın verdiği cevap kayıtta hep tutuluyor"
+doctor_set_up = "Kurulu olanlar"
+doctor_mail = "  posta: {host} sunucusunda {user} ({mailbox})"
+doctor_mail_none = "  posta: kurulu değil ('live-assistant mail login')"
+doctor_telegram = "  telegram: giriş yapılmış (api_id {api_id})"
+doctor_telegram_none = "  telegram: kurulu değil ('live-assistant telegram login')"
+doctor_autostart_on = "  oturum açınca başlıyor: evet ({command})"
+doctor_autostart_off = "  oturum açınca başlıyor: hayır ('live-assistant autostart on')"

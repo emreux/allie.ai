@@ -1,0 +1,271 @@
+"""Locale packs - everything that depends on the language (design.md 3.12).
+
+The product is not pinned to one language, and the way that is kept true is
+mechanical: no module carries a sentence in a language other than English, and
+every language-dependent value lives in one TOML file per language, next to
+this one. Adding a language is a file and a pull request, not a code change.
+
+**The fallback chain runs requested pack -> `en` -> the constant in the code.**
+The last link is not a table somewhere: it is the English sentence written
+beside the code that says it, passed to `say` as the default. That is why
+`en.toml` carries no sentences at all - a second English copy here would be a
+second thing to keep in step - and why a language nobody has translated still
+produces a working assistant with an English interface.
+
+**Sentences fall back; identity does not.** `code`, `name`, the speech hint and
+the voice preference default to the locale itself rather than to English. An
+English voice reading German, or a recogniser told to expect English while a
+German speaks, are both worse than having no preference at all: the first is
+merely unpleasant, the second means the model never sees what was said.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import locale as windows
+import tomllib
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
+from importlib import resources
+from pathlib import Path
+from typing import Any
+
+__all__ = ["FALLBACK_CODE", "Locale", "available", "iso_code", "load", "system_code"]
+
+# The language every other one falls back to, and the language this project
+# writes its code in. Those two being the same is a convenience, not a rule.
+FALLBACK_CODE = "en"
+
+SUFFIX = ".toml"
+
+# A file whose name starts with this is a scaffold rather than a language.
+# `_template.toml` is one; it is there to be copied and translated.
+NOT_A_LANGUAGE = "_"
+
+
+@dataclass(frozen=True, slots=True)
+class Locale:
+    """One language, as everything outside this package sees it."""
+
+    code: str
+    name: str
+
+    # The language the *user speaks*, which is what the recogniser is told to
+    # expect. Usually the code above, and deliberately separate from it: a
+    # locale is free to show one language and listen for another.
+    stt_language: str
+
+    # Preferred voice per engine, from `[tts.voice]`. The value is matched
+    # against the voices actually installed, so it is a preference and not an
+    # identifier - `tr.toml` naming Tolga on a machine without Tolga still
+    # leaves any other Turkish voice usable.
+    voices: Mapping[str, str]
+
+    # What `[ui]` translated, already merged over `en`. Anything missing here
+    # is answered by the caller's own English constant through `say`.
+    ui: Mapping[str, str]
+
+    # What the recogniser is told to expect before each utterance, from
+    # `[stt] prompt`: a sentence in this language with `{apps}` where the
+    # installed apps' names go (`stt/local_whisper.py`). Like the speech
+    # language it does not fall back to English - English words would not
+    # help a Turkish speaker be understood - so a pack that leaves it out
+    # gives the recogniser the names alone rather than the wrong sentence.
+    stt_prompt: str = ""
+
+    # The words the confirmation window listens for, from `[speech]`
+    # (design.md 3.1 rule 2). They fall back the way sentences do, not the
+    # way identity does: a pack without them gets the English words beside
+    # the code that listens (`app.py`), together with the English hint that
+    # tells the user which words to say - so the two always agree.
+    yes_words: tuple[str, ...] = ()
+    no_words: tuple[str, ...] = ()
+
+    # What is said while a tool takes its time, from `[speech] filler`
+    # (design.md section 4, 2.8): said in turn, one per turn. They fall
+    # back like the yes and no words, to the English beside the code that
+    # says them (`app.py`).
+    fillers: tuple[str, ...] = ()
+
+    # The short commands answered without the model, from `[intents]`
+    # (design.md section 4): the English name of the intent, to the phrases
+    # that mean it in this language. They fall back like the yes and no
+    # words, intent by intent - a pack that lists none for an intent gets
+    # the English phrases beside the code that answers it
+    # (`agent/intents.py`), and `en.toml` carries none for that reason.
+    intents: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+
+    # The question the setup wizard asks a model to see whether it calls a
+    # tool, from `[probe]` (design.md section 3.2, 2.6). In the pack's own
+    # language, so that one request also shows the model understands the
+    # user; it falls back like a sentence, to the English beside the code
+    # that asks it (`live/probe.py`), and `en.toml` carries none.
+    probe_question: str = ""
+
+    def voice(self, engine: str) -> str | None:
+        """The voice this locale prefers for `engine`, if it names one."""
+        return self.voices.get(engine) or None
+
+    def say(self, key: str, default: str) -> str:
+        """The sentence for `key`, or `default` - the last link of the chain.
+
+        `default` is the English constant written beside the code that says
+        the sentence. A pack that leaves a key out, or leaves it blank, gets
+        that instead: half a translation reads better in one language than in
+        two.
+        """
+        return self.ui.get(key) or default
+
+
+def load(code: str | None = None, *, directory: Path | None = None) -> Locale:
+    """The pack for `code`, with English behind it.
+
+    `directory` reads packs from somewhere other than this package, which is
+    how the tests exercise the chain without shipping a language to do it.
+    """
+    wanted = _normalise(code)
+    english = _read(FALLBACK_CODE, directory) or {}
+    pack = english if wanted == FALLBACK_CODE else (_read(wanted, directory) or {})
+
+    return Locale(
+        code=wanted,
+        name=_text(pack, "name") or wanted,
+        stt_language=_text(_table(pack, "stt"), "language") or wanted,
+        voices=_texts(_table(_table(pack, "tts"), "voice")),
+        ui={**_texts(_table(english, "ui")), **_texts(_table(pack, "ui"))},
+        stt_prompt=_text(_table(pack, "stt"), "prompt").strip(),
+        yes_words=_words(_table(pack, "speech"), "yes_words"),
+        no_words=_words(_table(pack, "speech"), "no_words"),
+        fillers=_words(_table(pack, "speech"), "filler"),
+        intents=_word_lists(_table(pack, "intents")),
+        probe_question=_text(_table(pack, "probe"), "question").strip(),
+    )
+
+
+def available(*, directory: Path | None = None) -> list[Locale]:
+    """Every language there is a pack for, in a settled order.
+
+    Sorted by code rather than by name: a menu that reshuffles itself between
+    runs is a menu nobody learns, and sorting names written in their own
+    scripts would put the order at the mercy of the alphabet.
+    """
+    return [load(code, directory=directory) for code in sorted(_codes(directory))]
+
+
+def system_code() -> str:
+    """The language Windows itself is in, for use before anyone has been asked.
+
+    The setup wizard has to word its language question in some language, and
+    the one the machine is already set to is the best guess available.
+    """
+    return iso_code(_ui_language_id())
+
+
+def iso_code(identifier: int) -> str:
+    """A Windows language identifier as ISO 639-1, or the fallback.
+
+    `tts/sapi.py` reads the same table and returns `""` for a language Windows
+    will not name, because a voice may honestly have no language. An interface
+    may not: it has to be in something before the first question is asked.
+    """
+    return windows.windows_locale.get(identifier, "").partition("_")[0] or FALLBACK_CODE
+
+
+# --------------------------------------------------------------------------
+# Reading the files
+# --------------------------------------------------------------------------
+
+
+def _normalise(code: str | None) -> str:
+    """`tr-TR`, `tr_TR` and `TR` all name the pack `tr.toml`."""
+    wanted = (code or "").strip().partition("-")[0].partition("_")[0].casefold()
+
+    # The code arrives from a settings file, and is about to be turned into a
+    # file name. A language is letters; anything else is a path, and following
+    # one would be this module's own fault.
+    return wanted if wanted.isalpha() else FALLBACK_CODE
+
+
+def _codes(directory: Path | None) -> Iterator[str]:
+    for name in _file_names(directory):
+        code = name[: -len(SUFFIX)]
+        if not name.endswith(SUFFIX) or code.startswith(NOT_A_LANGUAGE):
+            continue
+        # A pack that does not parse is not offered as a language: the menu
+        # would list one that speaks nothing but English.
+        if _read(code, directory) is not None:
+            yield code
+
+
+def _file_names(directory: Path | None) -> Iterator[str]:
+    if directory is not None:
+        return (path.name for path in directory.iterdir())
+    return (entry.name for entry in resources.files(__name__).iterdir())
+
+
+def _read(code: str, directory: Path | None) -> Mapping[str, Any] | None:
+    """One pack, or `None` if there is none or it does not parse."""
+    text = _source(code, directory)
+    if text is None:
+        return None
+
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        # Somebody else's typo, in a file this product only reads. Refusing to
+        # start over it would punish the user for a contributor's slip;
+        # `test_locales.py` is what catches it in the packs shipped here.
+        return None
+
+
+def _source(code: str, directory: Path | None) -> str | None:
+    if directory is not None:
+        path = directory / f"{code}{SUFFIX}"
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+
+    # Through `importlib.resources` rather than by walking from `__file__`:
+    # once installed, the package need not be a directory on disk.
+    resource = resources.files(__name__) / f"{code}{SUFFIX}"
+    try:
+        return resource.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+
+
+def _table(values: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    """One TOML table, or an empty one if the pack put something else there."""
+    found = values.get(key)
+    return found if isinstance(found, Mapping) else {}
+
+
+def _text(values: Mapping[str, Any], key: str) -> str:
+    found = values.get(key)
+    return found if isinstance(found, str) else ""
+
+
+def _texts(values: Mapping[str, Any]) -> dict[str, str]:
+    return {key: value for key, value in values.items() if isinstance(value, str)}
+
+
+def _words(values: Mapping[str, Any], key: str) -> tuple[str, ...]:
+    """A list of words, or nothing if the pack put something else there."""
+    found = values.get(key)
+    if not isinstance(found, list):
+        return ()
+    return tuple(word.strip() for word in found if isinstance(word, str) and word.strip())
+
+
+def _word_lists(values: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    """Every list of words in a table, by key; a key with nothing usable
+    under it is left out, so that the code's own list answers for it."""
+    lists = {key: _words(values, key) for key in values}
+    return {key: words for key, words in lists.items() if words}
+
+
+def _ui_language_id() -> int:
+    try:
+        return int(ctypes.windll.kernel32.GetUserDefaultUILanguage())
+    except (AttributeError, OSError):
+        # Not Windows, or a Windows too stripped down to answer. Either way
+        # there is no interface language to read, and `iso_code` says so.
+        return 0

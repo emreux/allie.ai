@@ -1,0 +1,95 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv  (uv.lock IS committed - design.md section 7)
+.uv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+# Google OAuth drops these two next to the code; they are live credentials.
+credentials.json
+token.json
+client_secret*.json
+
+# Runtime data (production path is %LOCALAPPDATA%\assistant, kept out regardless)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+logs/
+debug_audio/
+
+# Models and large binaries
+*.onnx
+*.bin
+*.pt
+*.gguf
+models/
+
+# Recordings. Your voice is personal data and audio bloats the repository;
+# only the reference .txt next to each take belongs here - see fixtures/audio/README.md.
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+fixtures/
+
+# Design, planning and progress notes stay on this machine. The published
+# repository is the code and the README; the thinking behind it is not part of
+# what gets shipped.
+design.md
+CLAUDE.md
+docs/
+
+# Node - MCP servers are launched with npx from phase 5 on
+node_modules/
+package-lock.json
+
+# Packaging (phase 5.7)
+*.spec
+*.msi
+*.exe
+
+# Windows
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Editors and local tool state
+.vscode/
+.vs/
+.idea/
+.claude/
+*.swp
+*.bak
+*.orig
+*.rej
+*.tmp
+.DS_Store
