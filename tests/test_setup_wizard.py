@@ -18,13 +18,21 @@ its models call tools and which only talk.
 Since 2026-09-15 the last question is which microphone to listen through,
 and `live-assistant mic` asks that one question on its own. The device list is
 handed in, so no test touches PortAudio.
+
+The live product (plan.md L1.6) added three questions between the model and
+the microphone: the model's voice (free text, empty for its own - D19), who
+hears the yes or no of a confirmation and who reads the questions out loud
+(D10: the local recogniser and the local voice serve only the gate window
+and the reminders now). And the microphone list puts the Windows audio
+engine first and warns on a raw kernel-streaming choice (D18): that path
+has no echo cancellation, and the assistant hears itself.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import ClassVar
 
@@ -42,12 +50,23 @@ from assistant.config import (
     LiveSettings,
     LocaleSettings,
     Settings,
+    STTSettings,
+    TTSSettings,
     config_path,
     load_settings,
     save_settings,
     store_api_key,
 )
-from assistant.live.base import Delta, Message, ModelInfo, ProviderError, ToolCall, ToolSpec
+from assistant.live.base import (
+    LiveEvent,
+    ModelInfo,
+    OutputText,
+    ProviderError,
+    SessionConfig,
+    ToolCall,
+    ToolCallEvent,
+    TurnComplete,
+)
 from assistant.live.probe import NO_TOOL_CALL, QUESTION, ProbeResult, remembered
 from assistant.live.registry import ADAPTERS, ProviderEntry
 from assistant.setup_wizard import (
@@ -62,6 +81,7 @@ from assistant.store import db
 from assistant.store.db import open_database
 from assistant.store.repos import SettingsRepo
 from tests.conftest import MemoryKeyring
+from tests.live_contract import FakeLiveSession
 
 GOOD_KEY = "good-key"
 # A key checked while the network is down: the provider cannot say whether it
@@ -76,6 +96,7 @@ class FakeProvider:
     refuse the request, any other only talks."""
 
     id = "fake"
+    capabilities: ClassVar[frozenset[str]] = frozenset()
     models: ClassVar[list[ModelInfo]] = [
         ModelInfo(id="fast", display_name="Fast"),
         ModelInfo(id="smart", display_name="Smart"),
@@ -103,25 +124,22 @@ class FakeProvider:
     async def list_models(self) -> list[ModelInfo]:
         return list(self.models)
 
-    async def stream(
-        self,
-        messages: list[Message],
-        tools: list[ToolSpec],
-        *,
-        model: str,
-        temperature: float | None = None,
-        max_tokens: int = 4096,
-    ) -> AsyncIterator[Delta]:
-        self.probed.append((model, messages[-1].content, [tool.name for tool in tools]))
-        if model in self.refusing:
-            raise ProviderError("fake refused the request (429): slow down")
-        if model in self.tool_callers:
-            yield Delta(
-                tool_call=ToolCall(id="c1", name="get_current_time", arguments={"city": "x"})
+    @asynccontextmanager
+    async def connect(self, config: SessionConfig) -> AsyncIterator[FakeLiveSession]:
+        if config.model in self.refusing:
+            raise ProviderError("fake refused the request (429): slow down", kind="rate_limit")
+        answer: LiveEvent
+        if config.model in self.tool_callers:
+            answer = ToolCallEvent(
+                ToolCall(id="c1", name="get_current_time", arguments={"city": "x"})
             )
         else:
-            yield Delta(text="It is about three.")
-        yield Delta(finish_reason="stop")
+            answer = OutputText("It is about three.")
+        session = FakeLiveSession([answer, TurnComplete()])
+        yield session
+        # What the probe asked: the model, the one text turn, the tools offered.
+        question = session.texts[0][0] if session.texts else ""
+        self.probed.append((config.model, question, [tool.name for tool in config.tools]))
 
 
 class ScriptedPrompter:
@@ -230,6 +248,9 @@ def complete_run(**overrides: str | list[str | None] | None) -> ScriptedPrompter
         "locale": "tr",
         "api_key": GOOD_KEY,
         "model": "fast",
+        "voice": "",
+        "hears": "local",
+        "reads": "sapi",
         "microphone": "",
     }
     answers.update(overrides)
@@ -353,7 +374,7 @@ async def test_a_provider_that_needs_no_key_is_not_asked_for_one(
 ) -> None:
     """A local Ollama has nothing to authenticate with. The server is asked
     whether it answers, and nothing goes to the Credential Manager."""
-    prompter = ScriptedPrompter(locale="tr", model="fast", microphone="")
+    prompter = ScriptedPrompter(locale="tr", model="fast", voice="", microphone="")
 
     exit_code = await run_setup(prompter, catalog=local_catalog())
 
@@ -521,7 +542,7 @@ async def test_a_stored_key_that_stopped_working_is_replaced(
     exit_code = await run_setup(prompter, catalog=fake_catalog())
 
     assert exit_code == 0
-    assert prompter.asked == ["locale", "api_key_keep", "api_key", "model", "microphone"]
+    assert prompter.asked[:4] == ["locale", "api_key_keep", "api_key", "model"]
     assert vault.vault == {(KEYRING_SERVICE, "gemini"): GOOD_KEY}
 
 
@@ -730,6 +751,139 @@ def test_the_failed_verdict_has_the_reason_of_section_3_2() -> None:
 
 
 # --------------------------------------------------------------------------
+# The voice, who hears the yes or no, who reads the questions (L1.6)
+# --------------------------------------------------------------------------
+
+
+async def test_the_voice_is_free_text_and_empty_means_the_model_s_own(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """Plan.md D19: the owner's ear preferred the model's default, and no
+    adapter lists voices, so the question is a line to type - or to leave
+    empty, which is what `[live] voice = ""` means."""
+    prompter = complete_run(voice="  ")
+
+    await run_setup(prompter, catalog=fake_catalog())
+
+    assert "voice" in prompter.asked
+    assert load_settings().live.voice == ""
+
+
+async def test_a_voice_that_was_named_lands_in_the_settings(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    await run_setup(complete_run(voice=" Kore "), catalog=fake_catalog())
+
+    assert load_settings().live.voice == "Kore"
+
+
+async def test_who_hears_the_yes_or_no_is_asked_when_google_is_at_hand(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """D10: the recogniser serves the gate window only. Google's is offered
+    beside Whisper when the key just checked is Google's - the same entry -
+    and the labels are the wizard's own wording, like the microphone's
+    first line: the language of last time, which is what the file says
+    before the run."""
+    save_settings(Settings(locale=LocaleSettings(code="tr")))
+    prompter = complete_run(hears="gemini")
+
+    await run_setup(prompter, catalog=fake_catalog())
+
+    assert prompter.offered["hears"] == ["local", "gemini"]
+    assert prompter.labelled["hears"] == [turkish("hears_local"), turkish("hears_gemini")]
+    assert prompter.labelled["hears"] != [TEXT["hears_local"], TEXT["hears_gemini"]]
+    assert load_settings().stt.provider == "gemini"
+
+
+async def test_who_reads_the_questions_is_asked_the_same_way(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    save_settings(Settings(locale=LocaleSettings(code="tr")))
+    prompter = complete_run(reads="gemini")
+
+    await run_setup(prompter, catalog=fake_catalog())
+
+    assert prompter.offered["reads"] == ["sapi", "gemini"]
+    assert prompter.labelled["reads"] == [turkish("reads_sapi"), turkish("reads_gemini")]
+    assert load_settings().tts.provider == "gemini"
+
+
+def turkish(key: str) -> str:
+    """A sentence of the wizard's as the Turkish pack has it."""
+    return locales.load("tr").say(key, TEXT[key])
+
+
+async def test_without_a_google_key_the_local_engines_are_taken_without_a_question(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """Another provider's key is no use to Google's recogniser or voice;
+    with one choice there is no question, and the file says local."""
+    prompter = complete_run(provider="openrouter")
+
+    await run_setup(prompter, catalog=fake_catalog("gemini", "openrouter"))
+
+    assert "hears" not in prompter.asked
+    assert "reads" not in prompter.asked
+    settings = load_settings()
+    assert (settings.stt.provider, settings.tts.provider) == ("local", "sapi")
+
+
+async def test_a_google_key_stored_earlier_is_enough_to_offer_google(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """Set up on OpenRouter after a Gemini run: the Gemini key is still in
+    the Credential Manager, and the two engines can use it."""
+    store_api_key("gemini", "AIza-from-last-time")
+    prompter = complete_run(provider="openrouter", hears="gemini", reads="sapi")
+
+    await run_setup(prompter, catalog=fake_catalog("gemini", "openrouter"))
+
+    assert prompter.offered["hears"] == ["local", "gemini"]
+    assert prompter.offered["reads"] == ["sapi", "gemini"]
+    assert load_settings().stt.provider == "gemini"
+
+
+async def test_the_questions_come_in_the_plan_s_order(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """Plan.md L1.6: provider, key, model, voice, who hears, who reads,
+    microphone - the microphone last, so that walking away there still
+    leaves nothing written."""
+    prompter = complete_run()
+
+    await run_setup(prompter, catalog=fake_catalog())
+
+    assert prompter.asked == ["locale", "api_key", "model", "voice", "hears", "reads", "microphone"]
+
+
+async def test_setup_run_again_keeps_the_session_tuning_and_the_engines_models(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """The owner tunes `[live]` by hand in the real run (ADR-001) and may
+    come back to setup for the voice: what setup does not ask about, it
+    keeps - the session numbers, the recogniser's and the voice's model."""
+    save_settings(
+        Settings(
+            live=LiveSettings(
+                primary="gemini:fast", idle_close_seconds=30.0, end_sensitivity="HIGH"
+            ),
+            stt=STTSettings(provider="gemini", model="a-recogniser"),
+            tts=TTSSettings(provider="gemini", model="a-voice"),
+        )
+    )
+
+    await run_setup(complete_run(model="smart", voice="Kore"), catalog=fake_catalog())
+
+    settings = load_settings()
+    assert settings.live.primary == "gemini:smart"
+    assert settings.live.voice == "Kore"
+    assert (settings.live.idle_close_seconds, settings.live.end_sensitivity) == (30.0, "HIGH")
+    assert (settings.stt.provider, settings.stt.model) == ("local", "a-recogniser")
+    assert (settings.tts.provider, settings.tts.model) == ("sapi", "a-voice")
+
+
+# --------------------------------------------------------------------------
 # The microphone
 # --------------------------------------------------------------------------
 
@@ -776,11 +930,70 @@ async def test_every_device_is_offered_by_its_line_and_labelled_by_its_name(
     await run_setup(prompter, catalog=fake_catalog())
 
     assert prompter.offered["microphone"][1:] == [
+        "Headset (Buds3 Hands-Free AG Audio), Windows WASAPI",
         "Microphone Array (Intel Smart , MME",
         "Microphone Array 1 (), Windows WDM-KS",
-        "Headset (Buds3 Hands-Free AG Audio), Windows WASAPI",
     ]
-    assert prompter.labelled["microphone"][2] == "Microphone Array 1 () - Windows WDM-KS"
+    assert prompter.labelled["microphone"][3] == "Microphone Array 1 () - Windows WDM-KS"
+
+
+async def test_the_windows_audio_engine_is_offered_before_raw_kernel_streaming(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """D18: through WASAPI or MME the microphone has echo cancellation and
+    the assistant can be talked over; through WDM-KS it hears itself. The
+    safe paths lead the list, in the order `LiveCapture` trusts them, and
+    PortAudio's order is kept within each."""
+    prompter = complete_run()
+
+    await run_setup(prompter, catalog=fake_catalog())
+
+    assert prompter.offered["microphone"] == ["", HEADSET.setting, ARRAY.setting, RAW_ARRAY.setting]
+
+
+async def test_a_raw_kernel_streaming_choice_is_warned_about_and_still_taken(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """The owner's array through WDM-KS was the old product's choice; here
+    it is a loop that answers itself (ADR-001 section 4). The choice is the
+    user's, the sentence says what it costs."""
+    prompter = complete_run(microphone=RAW_ARRAY.setting)
+
+    await run_setup(prompter, catalog=fake_catalog())
+
+    assert ("microphone_raw", {}) in prompter.said
+    assert load_settings().audio.input_device == RAW_ARRAY.setting
+
+
+async def test_a_windows_audio_engine_choice_is_not_warned_about(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    prompter = complete_run(microphone=HEADSET.setting)
+
+    await run_setup(prompter, catalog=fake_catalog())
+
+    assert "microphone_raw" not in [key for key, _ in prompter.said]
+
+
+async def test_windows_own_choice_is_not_warned_about_either(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """Whatever Windows has chosen comes through the audio engine."""
+    prompter = complete_run(microphone="")
+
+    await run_setup(prompter, catalog=fake_catalog())
+
+    assert "microphone_raw" not in [key for key, _ in prompter.said]
+
+
+async def test_mic_warns_on_raw_kernel_streaming_too(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    prompter = ScriptedPrompter(microphone=RAW_ARRAY.setting)
+
+    await run_microphone_setup(prompter, microphones=LAPTOP)
+
+    assert [key for key, _ in prompter.said] == ["microphone_raw", "microphone_saved"]
 
 
 async def test_a_machine_without_a_microphone_is_told_so_and_setup_goes_on(
@@ -843,7 +1056,7 @@ async def test_mic_finds_the_devices_itself_when_handed_none(
 
     await run_microphone_setup(prompter)
 
-    assert prompter.offered["microphone"] == ["", ARRAY.setting, RAW_ARRAY.setting, HEADSET.setting]
+    assert prompter.offered["microphone"] == ["", HEADSET.setting, ARRAY.setting, RAW_ARRAY.setting]
 
 
 async def test_mic_cancelled_leaves_the_file_as_it_was(

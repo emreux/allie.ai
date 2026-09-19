@@ -76,7 +76,7 @@ class TTSProvider(Protocol):
         """Speaks text as it arrives, yielding one buffer per sentence.
 
         Declared `def` rather than `async def` for the same reason as
-        `LLMProvider.stream`: implementations are async generators.
+        `LiveSession.events`: implementations are async generators.
         """
         ...
 

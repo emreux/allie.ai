@@ -54,7 +54,6 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from typing import Any
 
-import numpy as np
 from google import genai
 from google.genai import errors, types
 from loguru import logger
@@ -63,7 +62,14 @@ from loguru import logger
 # dropped or refused socket looks like from here.
 from websockets.exceptions import WebSocketException
 
-from assistant.stt.base import SAMPLE_RATE, Audio, STTProvider, Transcript, buffered_stream
+from assistant.stt.base import (
+    SAMPLE_RATE,
+    Audio,
+    STTProvider,
+    Transcript,
+    buffered_stream,
+    to_pcm16,
+)
 
 __all__ = [
     "CHUNK_SECONDS",
@@ -114,15 +120,6 @@ NOTHING_TO_DECODE = 1.0
 
 # How much of Google's message one warning line carries.
 DESCRIBED_CHARS = 240
-
-
-def to_pcm16(pcm: Audio) -> bytes:
-    """One channel, 16 kHz, 16-bit little-endian: what the session is fed.
-
-    Values outside [-1, 1] are clipped rather than wrapped - a wrapped
-    sample is a click the recogniser hears as a consonant.
-    """
-    return (np.clip(pcm, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
 
 class GeminiSTT:

@@ -1,7 +1,9 @@
 """The tray icon (`ui/tray.py`, 4.3): a surface, not a second brain.
 
 What is claimed: the icon and its tooltip follow the state and the mode the
-state machine reports; the menu's switch line and "quit" reach the event
+state machine reports; the tooltip also says whether a session is open and
+how many minutes this run has had one open (plan.md 4.2 - a live model
+bills by the minute); the menu's switch line and "quit" reach the event
 loop and nothing else; the folder line opens the settings folder without
 going near the loop; and every word is the pack's. The real `pystray`
 icon is built once, without being shown, to prove the adapter hands it
@@ -49,12 +51,23 @@ class FakeIcon:
         self.menu_updates += 1
 
 
+class Clock:
+    """A clock the test moves by hand, in seconds."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 class Built:
     """A tray over a fake icon, with what its clicks did written down."""
 
     def __init__(self, loop: asyncio.AbstractEventLoop, code: str = "tr") -> None:
         self.toggles = 0
         self.quits = 0
+        self.clock = Clock()
         # Which thread each callback ran on: the claim is that it is the
         # loop's, never the tray's.
         self.threads: list[int] = []
@@ -81,6 +94,7 @@ class Built:
             settings_folder=FOLDER,
             icon=icon,
             open=self.opened.append,
+            clock=self.clock,
         )
         [self.icon] = icons
 
@@ -107,13 +121,29 @@ def label_of(state: State) -> str:
     return turkish(status.label_key(state), status.TEXT)
 
 
+def meter(*, open: bool = False, minutes: int = 0, code: str = "tr") -> str:
+    """The session half of the tooltip, as the pack for `code` words it."""
+    pack = locales.load(code)
+    which = pack.say(
+        "session_open" if open else "session_closed",
+        status.TEXT["session_open" if open else "session_closed"],
+    )
+    count = pack.say("session_minutes", status.TEXT["session_minutes"]).format(minutes=minutes)
+    return f"{which} · {count}"
+
+
+def titled(state: State, *, open: bool = False, minutes: int = 0) -> str:
+    """The whole tooltip: the state, then the session and the minutes."""
+    return f"{label_of(state)} · {meter(open=open, minutes=minutes)}"
+
+
 # --------------------------------------------------------------------------
 # What it shows
 # --------------------------------------------------------------------------
 
 
 def test_it_goes_up_idle_with_the_four_lines_and_comes_down_when_told(built: Built) -> None:
-    assert built.icon.title == label_of(State.IDLE)
+    assert built.icon.title == titled(State.IDLE)
     assert built.icon.icon is not None
     assert len(built.icon.entries) == 4
     assert built.icon.entries[0].action is None
@@ -129,10 +159,10 @@ def test_it_goes_up_idle_with_the_four_lines_and_comes_down_when_told(built: Bui
 def test_the_state_is_the_tooltip_the_first_line_and_the_colour(built: Built) -> None:
     idle = built.icon.icon
 
-    built.tray.state(State.LISTENING)
+    built.tray.state(State.USER_SPEAKING)
 
-    assert built.icon.title == label_of(State.LISTENING)
-    assert built.labels[0] == label_of(State.LISTENING)
+    assert built.icon.title == titled(State.USER_SPEAKING)
+    assert built.labels[0] == titled(State.USER_SPEAKING)
     assert built.icon.icon is not idle
     assert built.icon.icon.getpixel(CENTRE) != idle.getpixel(CENTRE)
 
@@ -141,7 +171,7 @@ def test_the_state_is_the_tooltip_the_first_line_and_the_colour(built: Built) ->
 def test_every_state_has_its_own_label_and_a_picture(built: Built, state: State) -> None:
     built.tray.state(state)
 
-    assert built.icon.title == label_of(state)
+    assert built.icon.title == titled(state)
     assert built.icon.icon.size == (ICON_SIZE, ICON_SIZE)
 
 
@@ -150,14 +180,14 @@ def test_an_idle_microphone_that_is_off_says_so_and_offers_to_start(built: Built
     the switch line turns round, and the menu is told to redraw."""
     built.tray.hands_free(False)
 
-    assert built.icon.title == turkish("tray_not_listening")
+    assert built.icon.title == f"{turkish('tray_not_listening')} · {meter()}"
     assert built.labels[1] == turkish("tray_start_listening")
     assert built.icon.icon.getpixel(CENTRE)[3] == 0
     assert built.icon.menu_updates == 1
 
     built.tray.hands_free(True)
 
-    assert built.icon.title == label_of(State.IDLE)
+    assert built.icon.title == titled(State.IDLE)
     assert built.labels[1] == turkish("tray_stop_listening")
     assert built.icon.icon.getpixel(CENTRE)[3] == 255
 
@@ -167,13 +197,35 @@ def test_a_busy_state_keeps_its_label_even_with_the_microphone_off(built: Built)
     built.tray.hands_free(False)
     built.tray.state(State.SPEAKING)
 
-    assert built.icon.title == label_of(State.SPEAKING)
+    assert built.icon.title == titled(State.SPEAKING)
     assert built.icon.icon.getpixel(CENTRE)[3] == 0
 
 
+def test_the_tooltip_says_whether_a_session_is_open_and_the_minutes_so_far(
+    built: Built,
+) -> None:
+    """Plan.md 4.2: the live model bills by the minute while a session is
+    open, so the icon is where that is read at a glance - whole minutes of
+    open session this run, the one under way included."""
+    built.tray.session(True)
+    assert built.icon.title == titled(State.IDLE, open=True)
+
+    built.clock.now += 150
+    built.tray.state(State.SPEAKING)
+    assert built.icon.title == titled(State.SPEAKING, open=True, minutes=2)
+
+    built.tray.session(False)
+    built.clock.now += 600
+    built.tray.session(True)
+    built.clock.now += 60
+    built.tray.session(False)
+    assert built.icon.title == titled(State.SPEAKING, open=False, minutes=3)
+    assert built.labels[0] == titled(State.SPEAKING, open=False, minutes=3)
+
+
 def test_the_ring_and_the_disc_are_drawn_in_the_states_colour() -> None:
-    disc = draw_icon(State.LISTENING, listening=True)
-    ring = draw_icon(State.LISTENING, listening=False)
+    disc = draw_icon(State.USER_SPEAKING, listening=True)
+    ring = draw_icon(State.USER_SPEAKING, listening=False)
 
     assert disc.getpixel(CENTRE) == disc.getpixel((4, CENTRE[1]))
     assert ring.getpixel(CENTRE)[3] == 0
@@ -257,7 +309,7 @@ def test_without_a_pack_the_menu_is_the_english_in_the_code() -> None:
         TEXT["tray_open_settings"],
         TEXT["tray_quit"],
     ]
-    assert english.icon.title == status.TEXT["state_idle"]
+    assert english.icon.title == f"{status.TEXT['state_idle']} · {meter(code='en')}"
 
 
 # --------------------------------------------------------------------------

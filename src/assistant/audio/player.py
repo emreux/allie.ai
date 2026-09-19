@@ -27,6 +27,13 @@ its own traceback.
 
 The device itself is injected, so the tests are about what was written rather
 than about what was heard.
+
+`LivePlayback` is the live product's way in (plan.md section 4.4 rule 2): the
+model's audio arrives in blobs, faster than it plays and with no warning of
+the last one, so it is pushed into a queue that feeds `play`, and the state
+machine says when an answer is over (`flush`), waits for it (`drained`) or
+cuts it (`stop`). The device is opened and closed per answer, as before: the
+local voice of a confirmation or a reminder needs it in between.
 """
 
 from __future__ import annotations
@@ -36,10 +43,13 @@ import threading
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol, runtime_checkable
 
+from loguru import logger
+
 __all__ = [
     "BLOCK_FRAMES",
     "BYTES_PER_FRAME",
     "CHANNELS",
+    "LivePlayback",
     "PlaybackError",
     "Speaker",
     "SystemSpeaker",
@@ -168,6 +178,104 @@ class SystemSpeaker:
                 stream.close()
         except Exception as failure:
             raise PlaybackError(f"the sound device failed while finishing: {failure}") from failure
+
+
+class LivePlayback:
+    """A queue in front of a `Speaker`, for audio that arrives as it is said.
+
+    `push` queues a chunk and starts the sound if none is under way. `flush`
+    says the answer is over: what is queued is still heard to its last word,
+    then the device is given back. `drained` waits for exactly that - and
+    ends the answer itself if nobody has, since waiting for an answer never
+    told it was over would wait for ever. `stop` is the interruption: the
+    queue is dropped and what the sound card holds is aborted, not drained,
+    within one block (`BLOCK_FRAMES`).
+
+    An answer is one open-to-close of the device, at one rate. The next one
+    waits for the device to be given back - two streams on one device is
+    two answers talking over each other - and a chunk at another rate is
+    another answer: a device opened at one rate cannot play the other.
+
+    The device failing loses the answer, not the program: `PlaybackError`
+    goes to the log, the words are in the transcript, and the next answer
+    tries the device again. Anything else raised in the speaker is a bug,
+    and comes out of `drained`.
+
+    Called from the event loop only. `stop` is the one that is urgent, and
+    it does nothing that blocks.
+    """
+
+    def __init__(self, speaker: Speaker) -> None:
+        self._speaker = speaker
+        # The answer under way, while chunks may still be pushed into it;
+        # `None` between answers, and once one has been flushed.
+        self._queue: asyncio.Queue[bytes | None] | None = None
+        self._rate = 0
+        # The task playing the latest answer, which waits for the one before.
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def playing(self) -> bool:
+        """Whether there is sound still to come: queued, or in the device."""
+        return self._task is not None and not self._task.done()
+
+    def push(self, pcm16: bytes, *, sample_rate: int) -> None:
+        """Queues a chunk of the answer, starting the sound if none is under
+        way. `sample_rate` is the audio's own (`AudioChunk.sample_rate`)."""
+        if self._queue is None or sample_rate != self._rate:
+            self.flush()
+            self._queue = asyncio.Queue()
+            self._rate = sample_rate
+            self._task = asyncio.create_task(
+                self._play(self._queue, sample_rate, after=self._task),
+            )
+        self._queue.put_nowait(pcm16)
+
+    def flush(self) -> None:
+        """The answer is over (`TurnComplete`). What is queued is still
+        played; pushing more starts the next answer."""
+        queue, self._queue = self._queue, None
+        if queue is not None:
+            queue.put_nowait(None)
+
+    async def drained(self) -> None:
+        """Returns once everything pushed so far has been heard - or dropped
+        by `stop`. The answer under way is ended first, as `flush` would."""
+        self.flush()
+        task = self._task
+        if task is not None:
+            await task
+
+    def stop(self) -> None:
+        """Cuts the sound short: what is queued is dropped, what the device
+        holds is aborted. Safe to call when nothing is playing."""
+        queue, self._queue = self._queue, None
+        if queue is not None:
+            while not queue.empty():
+                queue.get_nowait()
+            queue.put_nowait(None)
+        self._speaker.stop()
+
+    async def _play(
+        self,
+        queue: asyncio.Queue[bytes | None],
+        sample_rate: int,
+        *,
+        after: asyncio.Task[None] | None,
+    ) -> None:
+        if after is not None:
+            # The previous answer is still in the device: one at a time.
+            await after
+        try:
+            await self._speaker.play(_queued(queue), sample_rate=sample_rate)
+        except PlaybackError as failure:
+            logger.warning("playback failed, the answer was lost: {failure}", failure=failure)
+
+
+async def _queued(queue: asyncio.Queue[bytes | None]) -> AsyncIterator[bytes]:
+    """The chunks of one answer, as they come, until the answer is over."""
+    while (chunk := await queue.get()) is not None:
+        yield chunk
 
 
 def _open_output(sample_rate: int) -> Any:

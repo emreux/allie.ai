@@ -45,6 +45,17 @@ no_words = ["no", "cancel", "stop"]
 # they are said in turn. Leave it out and the English one is used.
 filler = ["One moment, let me check..."]
 
+[live]
+# Two hints for the live speech model (plan.md D19). `language_code` is the
+# BCP-47 code of your language - `de-DE`, `es-ES`, `ja-JP` - and is given to
+# the session so that the recogniser behind the model and its voice expect
+# your language; `user_language_rule` is one English sentence for the
+# system prompt naming the language you speak. Without them a short or
+# quiet sentence can be heard as another language and answered in it.
+# Leave both empty to let the server and the prompt use their defaults.
+language_code = "xx-XX"
+user_language_rule = "The user speaks <your language>. A short or quiet utterance is <your language> unless it is unmistakably another language; never switch languages on a guess."
+
 [probe]
 # The one question the setup wizard puts to a model to find out whether it
 # calls a tool: a model that answers this by calling the clock tool passes,
@@ -102,9 +113,17 @@ probe_refused = "The model could not be tested: {problem}. Choose another model,
 # The last question of setup, and the whole of `live-assistant mic`. {name} is the
 # device Windows has chosen at that moment, as PortAudio names it; {microphone}
 # is the label of the choice that was just stored.
+voice = "Which voice should the model speak in? Leave it empty for the model's own."
+hears = "Who hears your yes or no when a tool asks first?"
+hears_local = "Whisper, on this machine - nothing leaves it"
+hears_gemini = "Google's recogniser, with the same key - those two words go to Google"
+reads = "Who reads the questions and the reminders out loud?"
+reads_sapi = "Windows' own voice - nothing leaves this machine"
+reads_gemini = "Google's voice, with the same key - those sentences go to Google"
 microphone = "Which microphone should the assistant listen through?"
 windows_microphone = "Whatever Windows has chosen (right now: {name})"
 no_microphones = "No microphone was found."
+microphone_raw = "That path has no echo cancellation: on speakers the assistant will hear itself and cut itself off. The same microphone's Windows WASAPI or MME entry is safer."
 microphone_saved = "Microphone: {microphone}. Settings: {path}"
 saved = "Ready. Settings: {path} - the key itself is in the Windows Credential Manager."
 cancelled = "Setup cancelled. Nothing was changed."
@@ -172,24 +191,31 @@ hands_free = "Listening - just talk. {toggle} stops listening (and cuts an answe
 loading_speech = "Loading the speech model..."
 # Shown while the tool-use test of 3.2 is repeated at startup, once a week.
 checking_model = "Checking whether the model calls tools..."
+state_off = "off"
 state_idle = "ready"
-state_listening = "listening"
-state_transcribing = "writing it down"
-state_thinking = "thinking"
+state_user_speaking = "hearing you"
 state_confirming = "waiting for a yes or no"
 state_speaking = "speaking"
 state_announcing = "reminding"
+state_reconnecting = "reconnecting"
 you_said = "you"
 it_said = "assistant"
 turn_cost = "{input} in, {output} out"
 not_caught = "(not caught - confidence {confidence})"
+# The session and the meter beside the state: a live model bills by the
+# minute while a session is open. {minutes} is a whole number.
+session_open = "session open"
+session_closed = "session closed"
+session_minutes = "{minutes} min this run"
+# Said once when the server heard the microphone too quietly; {level} and
+# {quiet} are dBFS numbers written by the code.
+microphone_quiet = "The microphone is quiet: {level} dBFS reached the server, under {quiet} dBFS. Raise its level or boost in Windows' sound settings."
 
 # Said once, by the command line itself, when it can or cannot start.
 not_set_up = "Nothing is set up yet. Run 'live-assistant setup' first."
 cannot_start = "The assistant cannot start: {problem}"
 stopped = "Stopped."
 # Said by `run` while the live loop is not built yet; every other command works.
-run_not_wired = "The live loop is not wired yet: this build does not talk. setup, doctor, cost, purge and autostart work."
 # Said at startup when the tool-use test failed; the assistant runs anyway.
 model_no_tools = "The model does not call tools, and most of what the assistant does depends on that. Run 'live-assistant setup' to choose another."
 

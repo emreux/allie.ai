@@ -466,3 +466,67 @@ def test_a_question_of_the_wrong_shape_is_no_question(tmp_path: Path) -> None:
 
     assert load("de", directory=tmp_path).probe_question == ""
     assert load("fr", directory=tmp_path).probe_question == ""
+
+
+# --------------------------------------------------------------------------
+# The two hints the live model needs (plan.md D19, ADR-001 section 6)
+# --------------------------------------------------------------------------
+
+
+def test_turkish_tells_the_live_model_which_language_it_will_hear() -> None:
+    """Measured 2026-09-18: without the two hints a short or quiet "Saat
+    kaç" is heard as Hindi and answered in it. The BCP-47 code goes to the
+    session, the sentence to the prompt - both from the pack, so that no
+    language is named in the code (section 3.12)."""
+    pack = load("tr")
+
+    assert pack.language_code == "tr-TR"
+    assert pack.user_language_rule
+    assert "Turkish" in pack.user_language_rule
+
+
+def test_english_leaves_both_hints_to_the_server_and_the_prompt() -> None:
+    """ADR-001: both empty in `en.toml` - the server's default language and
+    the prompt's own mirroring rule are what an English pack means."""
+    pack = load("en")
+
+    assert (pack.language_code, pack.user_language_rule) == ("", "")
+
+
+def test_the_template_offers_the_two_hints_a_translator_has_to_write() -> None:
+    assert set(read(PACKAGED / "_template.toml")["live"]) == {
+        "language_code",
+        "user_language_rule",
+    }
+
+
+def test_the_hints_come_from_the_pack_that_was_asked_for(tmp_path: Path) -> None:
+    write(
+        tmp_path,
+        "de",
+        '[live]\nlanguage_code = " de-DE "\nuser_language_rule = " The user speaks German. "\n',
+    )
+
+    pack = load("de", directory=tmp_path)
+
+    assert (pack.language_code, pack.user_language_rule) == ("de-DE", "The user speaks German.")
+
+
+def test_english_does_not_lend_its_hints_to_another_language(tmp_path: Path) -> None:
+    """Identity, not a sentence: an English hint on a German pack would make
+    the server hear German as English, which is the failure the hints
+    exist to prevent."""
+    write(tmp_path, "en", '[live]\nlanguage_code = "en-US"\nuser_language_rule = "English."\n')
+
+    pack = load("de", directory=tmp_path)
+
+    assert (pack.language_code, pack.user_language_rule) == ("", "")
+
+
+def test_hints_of_the_wrong_shape_are_no_hints(tmp_path: Path) -> None:
+    write(tmp_path, "de", '[live]\nlanguage_code = 5\nuser_language_rule = ["a"]\n')
+    write(tmp_path, "fr", 'live = "not a table"\n')
+
+    assert load("de", directory=tmp_path).language_code == ""
+    assert load("de", directory=tmp_path).user_language_rule == ""
+    assert load("fr", directory=tmp_path).language_code == ""

@@ -29,16 +29,20 @@ from assistant.audio.capture import (
     CHUNK_FRAMES,
     DEFAULT_TOGGLE_HOTKEY,
     ECHO_TAIL_SECONDS,
+    QUIET_DBFS,
     HandsFree,
     KeyCombination,
+    LiveCapture,
     MicrophoneInfo,
     MicrophoneUnavailableError,
     SystemHotkey,
     SystemMicrophone,
     available_microphones,
     device_choice,
+    duplex_for,
 )
-from assistant.stt.base import SAMPLE_RATE, Audio
+from assistant.audio.vad import PREROLL_SECONDS
+from assistant.stt.base import SAMPLE_RATE, Audio, to_pcm16
 
 CTRL, ALT, SPACE, SHIFT = "ctrl", "alt", "space", "shift"
 
@@ -76,8 +80,9 @@ class FakeHotkey:
 class FakeMicrophone:
     """An input stream that hears exactly what a test tells it to."""
 
-    def __init__(self) -> None:
+    def __init__(self, host_api: str = "Windows WASAPI") -> None:
         self.opened = False
+        self.host_api = host_api
         self._on_chunk: Any = None
 
     def open(self, on_chunk: Any) -> None:
@@ -1111,3 +1116,556 @@ def test_the_label_is_the_name_on_one_line() -> None:
     assert entry.label == (
         "Headset (@System32\\drivers\\bthhfenum.sys,#2;%1 Hands-Free%0 ;(Buds3)) - Windows WDM-KS"
     )
+
+
+# --------------------------------------------------------------------------
+# Streaming to a live session (plan.md section 4.1, L1.2)
+# --------------------------------------------------------------------------
+
+# One block of the size the microphone really delivers, so that the pre-roll
+# counts in the same units the ring buffer does.
+BLOCK = CHUNK_FRAMES
+PREROLL_BLOCKS = round(PREROLL_SECONDS * SAMPLE_RATE / BLOCK)
+
+
+def block(value: float) -> Audio:
+    return tone(value, frames=BLOCK)
+
+
+def live(**extra: Any) -> tuple[LiveCapture, FakeHotkey, FakeMicrophone, FakeEndpoint]:
+    """A live capture with no keyboard, no microphone and no model. The fake
+    microphone sits behind WASAPI unless a test says otherwise, so that the
+    duplex rule is the full-duplex one the owner's machine takes (D18)."""
+    toggle, microphone, endpoint = FakeHotkey(), FakeMicrophone(), FakeEndpoint()
+    talk = LiveCapture(microphone=microphone, toggle=toggle, endpoint=endpoint, **extra)
+    return talk, toggle, microphone, endpoint
+
+
+async def heard_by_loop(microphone: FakeMicrophone, *blocks: Audio) -> None:
+    """Blocks from the audio thread, each examined by the loop before the next."""
+    for chunk in blocks:
+        microphone.hear(chunk)
+        await asyncio.sleep(0)
+
+
+async def taken(talk: LiveCapture) -> list[bytes]:
+    """What `chunks()` hands over right now, without waiting for more."""
+    got: list[bytes] = []
+    try:
+        async with asyncio.timeout(0.02):
+            async for chunk in talk.chunks():
+                got.append(chunk)
+    except TimeoutError:
+        pass
+    return got
+
+
+def pcm(*values: float) -> list[bytes]:
+    return [to_pcm16(block(value)) for value in values]
+
+
+def test_the_live_capture_is_the_hands_free_capture_with_a_stream() -> None:
+    """The key, the confirmation window and the mode report are the old
+    ones; only what happens to a block once the detector has seen it differs."""
+    talk, _, _, _ = live()
+
+    assert isinstance(talk, HandsFree)
+    assert talk.taking is False
+
+
+async def test_nothing_is_taken_before_anybody_speaks() -> None:
+    """A session costs money from the moment it opens (D5, D12): the room
+    being quiet is not a reason to have one."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.1), block(0.2))
+
+        assert talk.taking is False
+        assert await taken(talk) == []
+
+
+async def test_the_moment_speech_starts_is_reported_and_so_is_its_end() -> None:
+    """`USER_SPEAKING` is a state of the screen (section 4.2): on at the
+    onset, off when the sentence ends. The server decides the turn."""
+    talk, _, microphone, _ = live()
+    reports: list[bool] = []
+    talk.on_speech = reports.append
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9), block(0.9), block(0.1))
+
+    assert reports == [True, False]
+
+
+async def test_speech_at_the_door_starts_the_stream_from_before_it_began() -> None:
+    """The detector is a few frames late by the time it is sure, and those
+    frames hold the first consonant: what goes to the session begins with
+    the pre-roll, then the block that convinced the detector."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.1), block(0.2), block(0.9))
+
+        assert talk.taking is True
+        assert await taken(talk) == pcm(0.1, 0.2, 0.9)
+
+
+async def test_the_pre_roll_is_no_longer_than_it_says() -> None:
+    """A ring buffer, not a recording: the quiet minute before the sentence
+    is not sent to the server at the sentence's price. The stream begins
+    `PREROLL_SECONDS` before the block that convinced the detector, that
+    block being the last of them - the old `Endpoint` counted the same way."""
+    talk, _, microphone, _ = live()
+    before = [block(0.01 * index) for index in range(1, PREROLL_BLOCKS + 6)]
+
+    with talk:
+        await heard_by_loop(microphone, *before, block(0.9))
+
+        got = await taken(talk)
+
+    assert len(got) == PREROLL_BLOCKS
+    assert got[0] == to_pcm16(before[-(PREROLL_BLOCKS - 1)])
+    assert got[-1] == to_pcm16(block(0.9))
+
+
+async def test_what_is_said_while_the_session_opens_is_not_lost() -> None:
+    """Opening a session takes 0.6-0.8 s (ADR-001): the sentence that opened
+    it is half over before anything can be sent. It waits here, in order."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9), block(0.8), block(0.7), block(0.6))
+
+        assert await taken(talk) == pcm(0.9, 0.8, 0.7, 0.6)
+
+
+async def test_the_stream_is_sixteen_bit_pcm_at_the_capture_rate() -> None:
+    """What the session protocol takes (`LiveSession.send_audio`): the same
+    conversion the recogniser uses, so clipping happens the same way."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+
+        [chunk] = await taken(talk)
+
+    assert chunk == to_pcm16(block(0.9))
+    assert len(chunk) == BLOCK * 2
+
+
+async def test_silence_keeps_flowing_once_the_stream_is_open() -> None:
+    """The server's own detector finds the end of the sentence in the
+    silence after it. A stream that stops when the room goes quiet would
+    never let the model answer."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9), block(0.1), block(0.2))
+
+        assert await taken(talk) == pcm(0.9, 0.1, 0.2)
+
+
+async def test_closing_ends_the_stream_and_drops_what_was_not_sent() -> None:
+    """The session closed on silence (D5) or was hung up: whatever was
+    queued behind a slow socket has nobody to go to."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9), block(0.8))
+        talk.close()
+
+        assert talk.taking is False
+        assert await taken(talk) == []
+
+
+async def test_a_consumer_already_reading_learns_that_the_stream_ended() -> None:
+    """The forwarding task of `app.py` sits in `chunks()`; closing has to
+    return it, not leave it waiting for a block that will never come."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+        reader = asyncio.ensure_future(taken(talk))
+        await asyncio.sleep(0)
+        talk.close()
+
+        assert await asyncio.wait_for(reader, 1) == pcm(0.9)
+
+
+async def test_after_closing_the_next_sentence_starts_a_fresh_stream() -> None:
+    """Nothing of the last conversation leaks into the next one: a block
+    goes to the server once, so the pre-roll of the next stream holds only
+    what came after the close."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9), block(0.1))
+        talk.close()
+        await heard_by_loop(microphone, block(0.2), block(0.8))
+
+        assert await taken(talk) == pcm(0.2, 0.8)
+
+
+async def test_a_second_sentence_while_the_stream_is_open_changes_nothing() -> None:
+    """The onset matters at the door. Inside, the blocks were flowing anyway,
+    and sending the pre-roll again would send the last 300 ms twice."""
+    talk, _, microphone, _ = live()
+    reports: list[bool] = []
+    talk.on_speech = reports.append
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9), block(0.1), block(0.8))
+
+        assert await taken(talk) == pcm(0.9, 0.1, 0.8)
+        assert reports == [True, False, True]
+
+
+async def test_the_stream_of_a_door_nobody_has_come_through_is_empty() -> None:
+    """Asked for the stream with nobody speaking, `chunks()` ends at once
+    rather than waiting for an onset it was never meant to announce."""
+    talk, _, _, _ = live()
+
+    with talk:
+        assert [chunk async for chunk in talk.chunks()] == []
+
+
+# --------------------------------------------------------------------------
+# The gate: paused input
+# --------------------------------------------------------------------------
+
+
+async def test_paused_input_is_dropped_and_not_kept_for_later() -> None:
+    """The confirmation window (section 4.4 rule 3) and the announcement
+    (D4): what the room says meanwhile is for the local recogniser or for
+    nobody, never for the model - not now and not after."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+        talk.pause()
+        await heard_by_loop(microphone, block(0.8), block(0.7))
+        talk.resume()
+        await heard_by_loop(microphone, block(0.6))
+
+        assert await taken(talk) == pcm(0.9, 0.6)
+
+
+async def test_the_detector_keeps_watching_while_input_is_paused() -> None:
+    """A reminder being read out is cut by the user starting to talk
+    (section 4.2, `ANNOUNCING`), which only works if the detector still
+    hears the room while nothing is forwarded."""
+    talk, _, microphone, _ = live()
+    reports: list[bool] = []
+    talk.on_speech = reports.append
+
+    with talk:
+        talk.pause()
+        await heard_by_loop(microphone, block(0.9))
+
+    assert reports == [True]
+
+
+async def test_a_sentence_at_the_door_while_paused_still_opens_the_stream() -> None:
+    """The announcement was cut by the onset; the state machine resumes and
+    opens a session for what is being said, pre-roll included."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        talk.pause()
+        await heard_by_loop(microphone, block(0.1), block(0.9))
+        talk.resume()
+        await heard_by_loop(microphone, block(0.8))
+
+        assert talk.taking is True
+        assert await taken(talk) == pcm(0.1, 0.9, 0.8)
+
+
+async def test_resuming_what_was_never_paused_is_harmless() -> None:
+    talk, _, microphone, _ = live()
+
+    with talk:
+        talk.resume()
+        await heard_by_loop(microphone, block(0.9))
+
+        assert await taken(talk) == pcm(0.9)
+
+
+# --------------------------------------------------------------------------
+# The key, the window
+# --------------------------------------------------------------------------
+
+
+async def test_switching_off_ends_the_stream() -> None:
+    """Rule 4 of section 4.4: off is a hang-up. The half sentence in the
+    queue does not wait for the next session to be sent as its opening."""
+    talk, toggle, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+        toggle.press()
+        await asyncio.sleep(0)
+
+        assert talk.taking is False
+        assert await taken(talk) == []
+
+
+async def test_switched_back_on_it_starts_afresh_at_the_door() -> None:
+    talk, toggle, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+        toggle.press()
+        toggle.press()
+        await asyncio.sleep(0)
+        await heard_by_loop(microphone, block(0.1), block(0.8))
+
+        assert await taken(talk) == pcm(0.1, 0.8)
+
+
+async def test_the_confirmation_window_hears_the_answer_and_says_nothing_of_it() -> None:
+    """The window of the old product, unchanged: the sentence goes to
+    whoever asked, and the state machine is not told a new sentence began -
+    it would take the user's yes for a new question."""
+    talk, _, microphone, _ = live()
+    reports: list[bool] = []
+    talk.on_speech = reports.append
+
+    with talk:
+        talk.pause()
+        window = asyncio.ensure_future(talk.listen_for(1))
+        await asyncio.sleep(0)
+        await heard_by_loop(microphone, block(0.9), block(0.1))
+        answer = await window
+
+    assert answer is not None and float(answer[0]) == pytest.approx(0.9)
+    assert reports == []
+
+
+# --------------------------------------------------------------------------
+# Full and half duplex (D18)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("host_api", ["Windows WASAPI", "MME", "Windows DirectSound"])
+def test_a_microphone_behind_the_windows_audio_engine_is_full_duplex(host_api: str) -> None:
+    """Measured 2026-09-18 (ADR-001 section 4): through the audio engine the
+    array's own echo canceller removes the speakers, and the model can be
+    talked over."""
+    assert duplex_for(host_api, barge_in=True) == "full"
+
+
+def test_kernel_streaming_is_half_duplex() -> None:
+    """The same array, raw: the server hears its own voice, interrupts itself
+    and answers itself. Measured the same day, 16 interruptions in 17 turns."""
+    assert duplex_for("Windows WDM-KS", barge_in=True) == "half"
+
+
+def test_a_host_api_nobody_measured_is_half_duplex() -> None:
+    """A loop that answers itself costs money every round; no barge-in costs
+    a key press."""
+    assert duplex_for("ASIO", barge_in=True) == "half"
+    assert duplex_for("", barge_in=True) == "half"
+
+
+def test_barge_in_off_forces_half_duplex_on_any_microphone() -> None:
+    """`[live] barge_in = false` is the user's choice over the rule."""
+    assert duplex_for("Windows WASAPI", barge_in=False) == "half"
+
+
+async def test_the_capture_reads_the_duplex_off_the_microphone_it_opened() -> None:
+    """Not off the setting: with `[audio] input_device` empty the host API is
+    whatever Windows handed over, and only the opened stream knows."""
+    toggle, endpoint = FakeHotkey(), FakeEndpoint()
+    raw = LiveCapture(microphone=FakeMicrophone("Windows WDM-KS"), toggle=toggle, endpoint=endpoint)
+    engine = LiveCapture(microphone=FakeMicrophone("MME"), toggle=toggle, endpoint=endpoint)
+
+    with raw:
+        assert raw.duplex == "half"
+    with engine:
+        assert engine.duplex == "full"
+
+
+async def test_the_duplex_is_known_by_the_time_the_mode_is_reported() -> None:
+    """The status line reads it in `on_mode`, which `start` calls."""
+    talk, _, _, _ = live(barge_in=False)
+    seen: list[str] = []
+    talk.on_mode = lambda listening: seen.append(talk.duplex)
+
+    with talk:
+        pass
+
+    assert seen == ["half"]
+
+
+async def test_in_full_duplex_the_microphone_stays_live_while_the_assistant_speaks() -> None:
+    """Barge-in as section 4.1: the server hears the user over its own voice
+    and says `Interrupted`. Deaf, it could not."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+        talk.mute()
+        await heard_by_loop(microphone, block(0.8))
+        talk.unmute()
+        await heard_by_loop(microphone, block(0.7))
+
+        assert await taken(talk) == pcm(0.9, 0.8, 0.7)
+
+
+async def test_in_half_duplex_the_microphone_is_deaf_while_the_assistant_speaks() -> None:
+    """The old product's rule, copied: without it the detector hears the
+    answer come out of the speakers and the assistant answers itself."""
+    talk, _, microphone, endpoint = live(barge_in=False)
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+        talk.mute()
+        await heard_by_loop(microphone, block(0.8))
+        talk.unmute()
+        await heard_by_loop(microphone, tone(0.9, frames=round(ECHO_TAIL_SECONDS * SAMPLE_RATE)))
+        await heard_by_loop(microphone, block(0.7))
+
+        assert await taken(talk) == pcm(0.9, 0.7)
+        assert len(endpoint.heard) == 2, "the echo tail reached the detector"
+
+
+async def test_in_full_duplex_unmuting_does_not_restart_the_detector() -> None:
+    """The frames either side of the answer *are* neighbours here: the
+    microphone never stopped."""
+    talk, _, _, endpoint = live()
+
+    with talk:
+        before = endpoint.resets
+        talk.mute()
+        talk.unmute()
+
+    assert endpoint.resets == before
+
+
+# --------------------------------------------------------------------------
+# The sent level (D18: no digital gain; a quiet microphone is said)
+# --------------------------------------------------------------------------
+
+
+async def test_the_level_of_what_was_sent_is_measured_in_dbfs() -> None:
+    """Measured on the owner's machine: speech at -45 dBFS RMS is heard as
+    Hindi. The number is the RMS of the blocks that were not silence, so
+    that the pauses between words do not pull it down."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9), block(0.1))
+
+    assert talk.level_dbfs == pytest.approx(20 * np.log10(np.sqrt((0.9**2 + 0.1**2) / 2)), abs=0.01)
+
+
+async def test_silence_does_not_count_towards_the_level() -> None:
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9), block(0.0), block(0.0))
+
+    assert talk.level_dbfs == pytest.approx(20 * np.log10(0.9), abs=0.01)
+
+
+async def test_with_nothing_sent_there_is_no_level() -> None:
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.1))
+
+    assert talk.level_dbfs is None
+
+
+async def test_only_what_the_session_gets_is_measured() -> None:
+    """The level answers "what does the server hear": a block dropped at the
+    gate or before the onset was not heard by anybody."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+        talk.pause()
+        await heard_by_loop(microphone, block(0.001))
+        talk.resume()
+
+    assert talk.level_dbfs == pytest.approx(20 * np.log10(0.9), abs=0.01)
+
+
+class Sensitive(FakeEndpoint):
+    """A detector that hears a whisper, for the tests about quiet speech."""
+
+    LOUD = 0.0015
+
+
+async def test_a_quiet_microphone_is_written_down_when_the_stream_closes() -> None:
+    """The line the owner needed on 2026-09-18 and did not have: the level
+    the server got, once per session, and a warning under the threshold."""
+    microphone = FakeMicrophone()
+    talk = LiveCapture(microphone=microphone, toggle=FakeHotkey(), endpoint=Sensitive())
+    lines: list[str] = []
+    sink = logger.add(lines.append, format="{level} {message}")
+    try:
+        with talk:
+            await heard_by_loop(microphone, block(0.002))
+            talk.close()
+    finally:
+        logger.remove(sink)
+
+    [line] = [line for line in lines if "dBFS" in line]
+    assert line.startswith("WARNING")
+    assert "-54 dBFS" in line
+
+
+async def test_a_microphone_at_a_good_level_is_written_down_quietly() -> None:
+    talk, _, microphone, _ = live()
+    lines: list[str] = []
+    sink = logger.add(lines.append, format="{level} {message}")
+    try:
+        with talk:
+            await heard_by_loop(microphone, block(0.5))
+            talk.close()
+    finally:
+        logger.remove(sink)
+
+    [line] = [line for line in lines if "dBFS" in line]
+    assert line.startswith("INFO")
+    assert "-6 dBFS" in line
+
+
+async def test_a_stream_that_sent_nothing_writes_no_level() -> None:
+    talk, _, microphone, _ = live()
+    lines: list[str] = []
+    sink = logger.add(lines.append, format="{message}")
+    try:
+        with talk:
+            await heard_by_loop(microphone, block(0.1))
+            talk.close()
+    finally:
+        logger.remove(sink)
+
+    assert not any("dBFS" in line for line in lines)
+
+
+def test_the_quiet_threshold_is_the_one_measured() -> None:
+    """ADR-001 section 5: -45 dBFS was too quiet, -35 is the target; the
+    warning sits between them."""
+    assert QUIET_DBFS == -40.0
+
+
+# --------------------------------------------------------------------------
+# The real microphone knows which way it was opened
+# --------------------------------------------------------------------------
+
+
+def test_the_real_microphone_reports_its_host_api_once_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, _ = fake_sounddevice(host_api="Windows WDM-KS")
+    monkeypatch.setitem(sys.modules, "sounddevice", module)
+    microphone = SystemMicrophone()
+
+    assert microphone.host_api == ""
+    microphone.open(lambda chunk: None)
+
+    assert microphone.host_api == "Windows WDM-KS"

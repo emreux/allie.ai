@@ -34,36 +34,49 @@ few seconds, and hands it back to whoever asked instead of queueing it as a
 question. What is said inside it is an answer, so its beginning is not
 announced: the state machine would otherwise take the user's "yes" for a new
 question and withdraw the one it was asking.
+
+`LiveCapture` is the same microphone, key and window for a live session
+(plan.md section 4.1): the detector is a doorman rather than a scribe, and
+the blocks themselves go to the server as a stream that starts at the door
+with the pre-roll and ends when the state machine says so. Whether the
+microphone stays live while the assistant speaks is decided by the way the
+microphone was opened (D18), not by a setting alone.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import threading
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Protocol, Self, runtime_checkable
+from typing import Any, Literal, Protocol, Self, runtime_checkable
 
 import numpy as np
 from loguru import logger
 
 from assistant.audio.resample import Resampler
-from assistant.audio.vad import Endpoint, Segmenter
-from assistant.stt.base import SAMPLE_RATE, Audio
+from assistant.audio.vad import PREROLL_SECONDS, Endpoint, Segmenter
+from assistant.stt.base import SAMPLE_RATE, Audio, to_pcm16
 
 __all__ = [
     "CHUNK_FRAMES",
     "DEFAULT_TOGGLE_HOTKEY",
     "ECHO_TAIL_SECONDS",
+    "FULL_DUPLEX_HOST_APIS",
+    "QUIET_DBFS",
+    "Duplex",
     "HandsFree",
     "Hotkey",
     "KeyCombination",
+    "LiveCapture",
     "Microphone",
     "MicrophoneUnavailableError",
     "SystemHotkey",
     "SystemMicrophone",
     "device_choice",
+    "duplex_for",
 ]
 
 # The one key, in `pynput`'s own spelling. Phase 4 moves it into
@@ -85,9 +98,32 @@ ECHO_TAIL_SECONDS = 0.25
 # kept small.
 CHUNK_FRAMES = SAMPLE_RATE // 50
 
+# Which ways to a microphone go through the Windows audio engine, where the
+# device's own echo canceller runs. Measured 2026-09-18 (ADR-001 section 4):
+# through any of these the array is clean in full duplex, and the model can
+# be talked over; raw kernel streaming has no canceller, and the server hears
+# its own voice, interrupts itself and answers itself. A host API not on the
+# list is treated as raw: a loop that answers itself costs money every
+# round, and no barge-in costs a key press.
+FULL_DUPLEX_HOST_APIS = ("WASAPI", "MME", "DirectSound")
+
+# Under this sent level the microphone is called quiet. ADR-001 section 5:
+# the owner's array at -45 dBFS RMS was heard as Hindi, -35 is the target.
+# No digital gain - measured, x6 made recognition worse - so the number is
+# said (log, `doctor`, the status line) and the fix is Windows' own level and
+# boost controls.
+QUIET_DBFS = -40.0
+
+# Below this RMS a block is silence and does not count towards the level:
+# the pauses between words would otherwise pull it down.
+_SILENCE_RMS = 0.001
+
+Duplex = Literal["full", "half"]
+
 OnChunk = Callable[[Audio], None]
 OnEvent = Callable[[], None]
 OnMode = Callable[[bool], None]
+OnSpeech = Callable[[bool], None]
 
 
 @runtime_checkable
@@ -102,6 +138,11 @@ class Hotkey(Protocol):
 @runtime_checkable
 class Microphone(Protocol):
     """An input stream that hands over one block at a time."""
+
+    # PortAudio's name for the way to the device ("Windows WASAPI", "MME",
+    # "Windows WDM-KS"), known once it is open; empty before. The live
+    # capture reads its duplex off it (D18).
+    host_api: str
 
     def open(self, on_chunk: OnChunk) -> None: ...
 
@@ -363,6 +404,267 @@ class HandsFree:
             self._finished.put_nowait([utterance])
 
 
+def duplex_for(host_api: str, *, barge_in: bool) -> Duplex:
+    """Whether the microphone stays live while the assistant speaks (D18).
+
+    "full": it does, and the server hears the user over its own voice.
+    "half": it is deaf while the assistant speaks and for `ECHO_TAIL_SECONDS`
+    after - the old product's rule - and the only way to interrupt is the
+    key. `barge_in` is `[live] barge_in`, the user's choice over the rule.
+    """
+    if barge_in and any(name in host_api for name in FULL_DUPLEX_HOST_APIS):
+        return "full"
+    return "half"
+
+
+class LiveCapture(HandsFree):
+    """`HandsFree` for a live session: the blocks themselves go to the server.
+
+    The old capture collected sentences and handed each over whole. This one
+    hands over the stream, and the detector is a doorman rather than a
+    scribe. Three rules, each about money or about not hearing oneself.
+
+    **The stream starts at the door.** Nothing is taken while the room is
+    quiet: a session costs money from the moment it opens (D5, D12). The
+    detector's onset opens the stream with the pre-roll - `PREROLL_SECONDS`
+    of what came before, the first consonant included - and says so through
+    `on_speech`; every block after that is queued, silence included, since
+    the server's own detector finds the end of the sentence in the silence
+    after it. Queued rather than dropped, because opening a session takes
+    most of a second (ADR-001) and the sentence that opened it is half over
+    by then. `close()` ends the stream - the state machine's call, on
+    silence or a hang-up - and drops what nobody took.
+
+    **The gate pauses the stream, not the doorman.** While paused, blocks
+    are dropped instead of queued: the yes of a confirmation window and the
+    room during a reminder are not for the model, now or later. The
+    detector keeps watching, so that a reminder being read out is cut by
+    the user starting to talk.
+
+    **Full or half duplex is the microphone's to say** (D18). Through the
+    Windows audio engine the microphone stays live while the assistant
+    speaks, and `mute`/`unmute` do nothing; through raw kernel streaming
+    they do what they did in the old product, deaf while speaking and
+    `ECHO_TAIL_SECONDS` after. `barge_in=False` is half duplex on any
+    microphone. Decided at `start`, from the microphone actually opened.
+
+    The level of what was sent is kept (`level_dbfs`) and written down when
+    the stream closes: a quiet microphone is the first thing to check when
+    the model hears another language (ADR-001 section 5).
+    """
+
+    def __init__(
+        self,
+        *,
+        microphone: Microphone | None = None,
+        toggle: Hotkey | None = None,
+        endpoint: Segmenter | None = None,
+        on_speech: OnSpeech | None = None,
+        on_mode: OnMode | None = None,
+        listening: bool = True,
+        barge_in: bool = True,
+    ) -> None:
+        super().__init__(
+            microphone=microphone,
+            toggle=toggle,
+            endpoint=endpoint,
+            on_mode=on_mode,
+            listening=listening,
+        )
+
+        # Called on the event loop when the detector hears speech begin
+        # (`True`) and end (`False`): the `USER_SPEAKING` state of the
+        # screen, and at the door the reason to open a session. Not called
+        # for what is said inside a confirmation window.
+        self.on_speech = on_speech
+
+        self._barge_in = barge_in
+        # Which of the two rules applies: known once the microphone is open,
+        # and half - the safe one - until then.
+        self.duplex: Duplex = "half"
+
+        # The pre-roll: the last `PREROLL_SECONDS` of blocks while nobody is
+        # talking, counted in samples so that a block of any size costs what
+        # it holds. Emptied into the stream at the onset.
+        self._preroll_samples = round(PREROLL_SECONDS * SAMPLE_RATE)
+        self._recent: list[Audio] = []
+        self._recent_samples = 0
+
+        # The stream, while one is open; `None` at the door. A new queue per
+        # stream, so that a reader of the last one ends where it ended.
+        self._queue: asyncio.Queue[bytes | None] | None = None
+        self._paused = False
+
+        # What was last reported through `on_speech`, so that a sentence cut
+        # by a reset is still reported as ended.
+        self._speaking = False
+
+        # The level of what was sent this stream: the sum of squares and the
+        # count of the samples in the blocks that were not silence.
+        self._level_squares = 0.0
+        self._level_samples = 0
+
+    @property
+    def taking(self) -> bool:
+        """Whether a stream is open - blocks are being queued for `chunks`."""
+        return self._queue is not None
+
+    @property
+    def level_dbfs(self) -> float | None:
+        """The RMS level, in dBFS, of what the current or last stream sent,
+        silence left out; `None` until a block that was not silence went."""
+        if not self._level_samples:
+            return None
+        return 20 * math.log10(math.sqrt(self._level_squares / self._level_samples))
+
+    def start(self) -> None:
+        """Opens the microphone, learns which way it was opened, starts
+        watching the key, and says which mode it is in - in that order, so
+        that whoever hears the mode can already read the duplex."""
+        self._loop = asyncio.get_running_loop()
+        self._microphone.open(self._heard)
+        self.duplex = duplex_for(self._microphone.host_api, barge_in=self._barge_in)
+        logger.info(
+            "microphone: {duplex} duplex ({host}, barge_in={barge})",
+            duplex=self.duplex,
+            host=self._microphone.host_api or "unknown host API",
+            barge=self._barge_in,
+        )
+        self._toggle.watch(on_press=self.toggle, on_release=_nothing)
+        self._switched(self._on.is_set())
+
+    def mute(self) -> None:
+        """Deaf while the assistant speaks - in half duplex. In full duplex
+        the microphone stays live: that is what barge-in is."""
+        if self.duplex == "half":
+            super().mute()
+
+    def unmute(self) -> None:
+        if self.duplex == "half":
+            super().unmute()
+
+    def pause(self) -> None:
+        """Stops forwarding without stopping the detector: the gate is
+        asking, or a reminder is being read."""
+        self._paused = True
+
+    def resume(self) -> None:
+        self._paused = False
+
+    def close(self) -> None:
+        """Ends the stream. The session closed on silence or was hung up;
+        what was queued and not taken is dropped, and the level the server
+        got is written down."""
+        queue, self._queue = self._queue, None
+        if queue is None:
+            return
+        while not queue.empty():
+            queue.get_nowait()
+        queue.put_nowait(None)
+        self._report_level()
+
+    async def chunks(self) -> AsyncIterator[bytes]:
+        """The stream: 16-bit PCM at `SAMPLE_RATE`, one block at a time, from
+        the pre-roll on, until `close`. Ends at once when no stream is open."""
+        queue = self._queue
+        if queue is None:
+            return
+        while (chunk := await queue.get()) is not None:
+            yield chunk
+
+    # ----------------------------------------------------------------------
+    # Called on the event loop.
+    # ----------------------------------------------------------------------
+
+    def _switched(self, listening: bool) -> None:
+        if not listening:
+            # Off is a hang-up (section 4.4 rule 4): the half sentence in the
+            # queue is not the opening of the next session, and the blocks
+            # either side of the switch are not neighbours.
+            self.close()
+            self._recent.clear()
+            self._recent_samples = 0
+            self._speaking = False
+        super()._switched(listening)
+
+    def _examine(self, chunk: Audio) -> None:
+        """One block: through the detector, then into the stream or the
+        pre-roll, and the onset reported."""
+        if self._deaf_samples > 0:
+            self._deaf_samples -= len(chunk)
+            return
+
+        finished = self._endpoint.feed(chunk)
+
+        if self._window is not None:
+            # The sentence answers the question just asked (`listen_for`).
+            for utterance in finished:
+                if not self._window.done():
+                    self._window.set_result([utterance])
+
+        if self._queue is not None:
+            if not self._paused:
+                self._send(chunk)
+        else:
+            self._remember(chunk)
+
+        if self._window is None:
+            self._report(self._endpoint.speaking)
+
+    def _report(self, speaking: bool) -> None:
+        if speaking == self._speaking:
+            return
+        self._speaking = speaking
+        # Opened before it is announced: whoever hears the onset opens a
+        # session and starts reading, and by then the pre-roll is queued.
+        if speaking:
+            self._open()
+        if self.on_speech is not None:
+            self.on_speech(speaking)
+
+    def _open(self) -> None:
+        if self._queue is not None:
+            return
+        self._queue = asyncio.Queue()
+        self._level_squares = 0.0
+        self._level_samples = 0
+        for chunk in self._recent:
+            self._send(chunk)
+        self._recent.clear()
+        self._recent_samples = 0
+
+    def _remember(self, chunk: Audio) -> None:
+        """Keeps the block in the pre-roll, and lets the oldest go once the
+        ring is longer than it should be."""
+        self._recent.append(chunk)
+        self._recent_samples += len(chunk)
+        while self._recent and self._recent_samples - len(self._recent[0]) >= self._preroll_samples:
+            self._recent_samples -= len(self._recent.pop(0))
+
+    def _send(self, chunk: Audio) -> None:
+        if self._queue is None:
+            return
+        squares = float(np.dot(chunk, chunk))
+        if squares > _SILENCE_RMS * _SILENCE_RMS * len(chunk):
+            self._level_squares += squares
+            self._level_samples += len(chunk)
+        self._queue.put_nowait(to_pcm16(chunk))
+
+    def _report_level(self) -> None:
+        level = self.level_dbfs
+        if level is None:
+            return
+        if level < QUIET_DBFS:
+            logger.warning(
+                "microphone level: {level:.0f} dBFS sent, under {quiet:.0f} dBFS - quiet; "
+                "raise the microphone level or boost in Windows' sound settings",
+                level=level,
+                quiet=QUIET_DBFS,
+            )
+        else:
+            logger.info("microphone level: {level:.0f} dBFS sent", level=level)
+
+
 def _as_audio(chunks: list[Audio]) -> Audio:
     """The blocks of one sentence as a single buffer."""
     if not chunks:
@@ -528,6 +830,8 @@ class SystemMicrophone:
         # The rate the device actually runs at once opened: `SAMPLE_RATE`
         # unless it would not, in which case the blocks are resampled.
         self.rate: int | None = None
+        # The way to the device, in PortAudio's words, once opened.
+        self.host_api = ""
         # Blocks the driver dropped before this saw them. In hands-free mode
         # each is a hole in a sentence that nothing else would notice.
         self.overflows = 0
@@ -562,6 +866,7 @@ class SystemMicrophone:
         """16 kHz if the device will run at it; its own rate, resampled, if not."""
         facts = sounddevice.query_devices(self._device, "input")
         host = str(sounddevice.query_hostapis(facts["hostapi"])["name"])
+        self.host_api = host
         native = round(float(facts["default_samplerate"]))
         # Which device this is, in the line `live-assistant mic` would store for
         # it. With the setting empty it is whatever Windows handed over, and

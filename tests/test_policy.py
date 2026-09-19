@@ -14,10 +14,9 @@ The gate also reads the table before it asks (2.4): the same call run a
 moment ago adds a sentence to the question. That is tested with the real
 `:memory:` table and a clock the test moves.
 
-The two tests that put the real `Confirm` behind the gate - the state
-machine's window over a fake microphone, where silence is what
-"unconfirmed" means in life - return with the live state machine (plan.md
-L1.4); the gate is proved here on its own.
+Two tests put the real `Confirm` behind the gate: the live state
+machine's window, over a fake microphone. Silence there is what
+"unconfirmed" means in life, and the tool still does not run.
 """
 
 from __future__ import annotations
@@ -42,7 +41,9 @@ from assistant.agent.policy import (
 from assistant.live.base import ToolCall, ToolSpec
 from assistant.store.db import open_database
 from assistant.store.repos import AuditRepo
+from assistant.stt.base import Transcript
 from assistant.tools.registry import Tool, ToolRegistry, tool
+from tests.test_app import FakeCapture, FakeSTT, assistant_with, speech
 
 TURN = "turn-1"
 
@@ -432,11 +433,32 @@ async def test_without_a_repository_the_gate_writes_nothing_and_still_works() ->
 
 
 # --------------------------------------------------------------------------
-# The gate and the microphone together: the two tests that drove the old
-# state machine's window through the real gate ("hears nothing" -> DECLINED,
-# "hears evet" -> ran) return in L1.4 against `LiveAssistant.confirm`
-# (plan.md 4.4 rule 3). The gate's own claims above do not depend on them.
+# The gate and the microphone together (2.3, plan.md D3)
 # --------------------------------------------------------------------------
+
+
+async def test_a_confirm_tool_does_not_run_when_the_microphone_hears_nothing() -> None:
+    """The claim CLAUDE.md names, with the real `Confirm` this time - the
+    state machine's own window. Nobody answers, and the tool does not run."""
+    assistant = assistant_with(capture=FakeCapture(), stt=FakeSTT())
+    await assistant.begin()
+
+    answer = await gate(call("open_app", name="Spotify"), confirm=assistant.confirm)
+
+    assert answer == DECLINED
+    assert ran == []
+
+
+async def test_a_confirm_tool_runs_when_the_microphone_hears_yes() -> None:
+    assistant = assistant_with(
+        capture=FakeCapture(answers=[speech()]), stt=FakeSTT(Transcript(text="evet"))
+    )
+    await assistant.begin()
+
+    answer = await gate(call("open_app", name="Spotify"), confirm=assistant.confirm)
+
+    assert answer == "Spotify opened"
+    assert ran == ["open_app:Spotify"]
 
 
 # --------------------------------------------------------------------------

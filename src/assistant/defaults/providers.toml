@@ -21,7 +21,7 @@
 #   has_live_pricing the model list returns prices too (default false)
 
 # The first adapter (plan.md D1, D13): Google's Live API, on the owner's
-# AI Studio key. The adapter is task L1.1.
+# AI Studio key. The adapter is `live/gemini_live.py`.
 [gemini]
 adapter      = "gemini_live"
 display_name = "Google Gemini Live"

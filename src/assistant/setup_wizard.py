@@ -1,9 +1,11 @@
 """`live-assistant setup` - the few questions phase 1 asks (design.md section 3.3).
 
-Provider, key, model, the language the assistant speaks, and the microphone
-it listens through. The fourteen step wizard of section 3.3 - device tests,
-tool probe, latency measurement, a fallback model - is phase 4.5; what is
-here is the smallest thing that can produce a working `config.toml`.
+Provider, key, model, the language the assistant speaks, the model's voice,
+who hears the yes or no of a confirmation, who reads the questions out loud,
+and the microphone it listens through. The fourteen step wizard of section
+3.3 - device tests, tool probe, latency measurement, a fallback model - is
+phase 4.5; what is here is the smallest thing that can produce a working
+`config.toml`.
 
 Two rules shape the code more than the questions do.
 
@@ -41,6 +43,17 @@ input once per host API, with "whatever Windows has chosen" on top and stored
 as the empty string that has meant the default since phase 1. `live-assistant mic`
 asks this one question again on its own - the day a headset comes out - and
 rewrites `[audio]` alone, so that nobody edits `config.toml` by hand for it.
+The Windows audio engine's entries lead the list and a raw kernel-streaming
+choice is warned about (plan.md D18): that path has no echo cancellation,
+and the assistant hears itself through the speakers.
+
+**The local engines serve the gate window and the reminders** (plan.md D3,
+D4, D10). The model speaks for itself; Whisper or Google's recogniser hears
+the yes or no after a tool asks first, and Windows' or Google's voice reads
+the question and the reminders. Google's are offered when its key is at
+hand - the one just checked, or one stored earlier - since they use the
+same entry. What setup does not ask about in `[live]`, `[stt]` and `[tts]`
+it keeps from the file: the session numbers are the owner's to tune.
 """
 
 from __future__ import annotations
@@ -54,10 +67,15 @@ import questionary
 from rich.console import Console
 
 from assistant import locales
-from assistant.audio.capture import Microphones, available_microphones
+from assistant.audio.capture import (
+    FULL_DUPLEX_HOST_APIS,
+    MicrophoneInfo,
+    Microphones,
+    available_microphones,
+    duplex_for,
+)
 from assistant.config import (
     AudioSettings,
-    LiveSettings,
     LocaleSettings,
     Settings,
     config_path,
@@ -67,7 +85,7 @@ from assistant.config import (
     store_api_key,
 )
 from assistant.live import probe
-from assistant.live.base import LLMProvider, ModelInfo, ProviderError
+from assistant.live.base import LiveProvider, ModelInfo, ProviderError
 from assistant.live.registry import (
     ADAPTERS,
     ProviderEntry,
@@ -161,9 +179,20 @@ TEXT: dict[str, str] = {
     "probe_refused": (
         "The model could not be tested: {problem}. Choose another model, or try again."
     ),
+    "voice": "Which voice should the model speak in? Leave it empty for the model's own.",
+    "hears": "Who hears your yes or no when a tool asks first?",
+    "hears_local": "Whisper, on this machine - nothing leaves it",
+    "hears_gemini": "Google's recogniser, with the same key - those two words go to Google",
+    "reads": "Who reads the questions and the reminders out loud?",
+    "reads_sapi": "Windows' own voice - nothing leaves this machine",
+    "reads_gemini": "Google's voice, with the same key - those sentences go to Google",
     "microphone": "Which microphone should the assistant listen through?",
     "windows_microphone": "Whatever Windows has chosen (right now: {name})",
     "no_microphones": "No microphone was found.",
+    "microphone_raw": (
+        "That path has no echo cancellation: on speakers the assistant will hear itself "
+        "and cut itself off. The same microphone's Windows WASAPI or MME entry is safer."
+    ),
     "microphone_saved": "Microphone: {microphone}. Settings: {path}",
     "saved": "Ready. Settings: {path} - the key itself is in the Windows Credential Manager.",
     "cancelled": "Setup cancelled. Nothing was changed.",
@@ -237,6 +266,7 @@ async def run_microphone_setup(
     except _WalkedAwayError:
         prompter.say("cancelled")
         return _GAVE_UP
+    _warn_if_raw(prompter, chosen, found)
 
     path = save_settings(Settings(audio=AudioSettings(input_device=chosen)))
     label = next(option.label for option in options if option.value == chosen)
@@ -284,16 +314,31 @@ async def _ask(
     model, verdict = await _model_that_calls_tools(
         prompter, provider, models, question=_probe_question(locale)
     )
+    voice = _answered(await prompter.ask("voice")).strip()
+    google = provider_id == "gemini" or load_api_key("gemini") is not None
+    hears = await _pick_engine(prompter, "hears", ("local", "gemini"), google=google)
+    reads = await _pick_engine(prompter, "reads", ("sapi", "gemini"), google=google)
     input_device = await _pick_microphone(prompter, _found(microphones))
 
     # Everything above could still be abandoned; from here it is written down.
+    # The tables setup asks part of keep the rest from the file: the session
+    # numbers of `[live]` and the engines' models are the owner's to tune.
     if api_key:
         store_api_key(provider_id, api_key)
+    kept = load_settings()
     path = save_settings(
         Settings(
-            live=LiveSettings(primary=f"{provider_id}:{model}", base_url=base_url or ""),
+            live=kept.live.model_copy(
+                update={
+                    "primary": f"{provider_id}:{model}",
+                    "base_url": base_url or "",
+                    "voice": voice,
+                }
+            ),
             locale=LocaleSettings(code=locale),
             audio=AudioSettings(input_device=input_device),
+            stt=kept.stt.model_copy(update={"provider": hears}),
+            tts=kept.tts.model_copy(update={"provider": reads}),
         )
     )
     _remember(database, provider_id, model, verdict)
@@ -334,7 +379,7 @@ async def _answering_server(
     entries: Mapping[str, ProviderEntry],
     *,
     base_url: str | None,
-) -> LLMProvider | None:
+) -> LiveProvider | None:
     """A provider that needs no key, checked once: does the server answer?
 
     There is no key to ask for again, so a server that cannot be reached
@@ -361,7 +406,7 @@ async def _working_key(
     entries: Mapping[str, ProviderEntry],
     *,
     base_url: str | None = None,
-) -> tuple[LLMProvider, str]:
+) -> tuple[LiveProvider, str]:
     """Asks for a key until the provider accepts one (section 3.3).
 
     A key that fails is not stored, not retried and not silently swapped for a
@@ -399,7 +444,7 @@ async def _working_key(
 
 
 async def _model_that_calls_tools(
-    prompter: Prompter, provider: LLMProvider, models: Sequence[ModelInfo], *, question: str
+    prompter: Prompter, provider: LiveProvider, models: Sequence[ModelInfo], *, question: str
 ) -> tuple[str, probe.ProbeResult]:
     """Offers the models until one is chosen that passes the probe (section 3.2).
 
@@ -428,6 +473,20 @@ async def _model_that_calls_tools(
         prompter.say("tools_failed")
 
 
+async def _pick_engine(
+    prompter: Prompter, key: str, engines: tuple[str, str], *, google: bool
+) -> str:
+    """Which local engine hears the yes or no (`hears`) or reads the
+    questions (`reads`): the one on this machine, or Google's when its key
+    is at hand. With one choice there is no question."""
+    local, remote = engines
+    if not google:
+        return local
+    said = wording()
+    options = [Option(local, said[f"{key}_{local}"]), Option(remote, said[f"{key}_{remote}"])]
+    return _answered(await prompter.choose(key, options))
+
+
 async def _pick_microphone(prompter: Prompter, found: Microphones) -> str:
     """The `[audio] input_device` line - or nothing, for a machine with no
     microphone yet: setup goes on, and the default is what it listens through
@@ -435,7 +494,9 @@ async def _pick_microphone(prompter: Prompter, found: Microphones) -> str:
     if not found.devices:
         prompter.say("no_microphones")
         return ""
-    return _answered(await prompter.choose("microphone", _microphone_options(found)))
+    chosen = _answered(await prompter.choose("microphone", _microphone_options(found)))
+    _warn_if_raw(prompter, chosen, found)
+    return chosen
 
 
 def _found(microphones: Microphones | None) -> Microphones:
@@ -443,16 +504,38 @@ def _found(microphones: Microphones | None) -> Microphones:
 
 
 def _microphone_options(found: Microphones) -> list[Option]:
-    """Windows' own choice first, then PortAudio's table line by line.
+    """Windows' own choice first, then PortAudio's table, the audio engine's
+    entries before the raw ones (plan.md D18).
 
     The first label is the one option worded rather than named, so it is
     the one place the wizard reads its own wording: the device it stands
     for changes with every headset, and the label says which it is today.
+    The rest are sorted by the trust `LiveCapture` puts in their path -
+    WASAPI, MME, DirectSound, then the rest - and PortAudio's order within.
     """
     current = " ".join((found.default or "?").split())
     options = [Option("", wording()["windows_microphone"].format(name=current))]
-    options.extend(Option(device.setting, device.label) for device in found.devices)
+    devices = sorted(found.devices, key=_trust)
+    options.extend(Option(device.setting, device.label) for device in devices)
     return options
+
+
+def _trust(device: MicrophoneInfo) -> int:
+    """Where a device's path stands in `FULL_DUPLEX_HOST_APIS`; past the end
+    for a path that is not there."""
+    for rank, name in enumerate(FULL_DUPLEX_HOST_APIS):
+        if name in device.host_api:
+            return rank
+    return len(FULL_DUPLEX_HOST_APIS)
+
+
+def _warn_if_raw(prompter: Prompter, chosen: str, found: Microphones) -> None:
+    """Says what a raw kernel-streaming path costs (plan.md D18): no echo
+    cancellation, so the assistant hears itself on speakers. The choice is
+    still the user's. Windows' own choice comes through the engine."""
+    device = next((device for device in found.devices if device.setting == chosen), None)
+    if device is not None and duplex_for(device.host_api, barge_in=True) == "half":
+        prompter.say("microphone_raw")
 
 
 def _probe_question(locale: str) -> str:

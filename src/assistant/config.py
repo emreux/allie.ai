@@ -123,6 +123,11 @@ def log_dir() -> Path:
 # --------------------------------------------------------------------------
 
 
+# What `[live] end_sensitivity` may say: the server's own two settings, or
+# nothing for its default. Any letter case; stored in capitals.
+END_SENSITIVITIES = ("", "HIGH", "LOW")
+
+
 class LiveSettings(BaseModel):
     """The `[live]` table: which model speaks, in which voice, and how the
     session is kept (plan.md section 4.6).
@@ -142,6 +147,13 @@ class LiveSettings(BaseModel):
     resumption handle is reused when it reopens, so that the conversation
     continues. `transcripts` asks the provider to send what was said both
     ways as text, for the screen and the log.
+
+    `end_sensitivity` and `silence_ms` are the two server-side turn-detection
+    knobs ADR-001 kept for the owner to tune: how eagerly the server decides
+    a sentence is over (`HIGH` or `LOW`; empty is its default) and how much
+    silence ends one (0 is its default). The fast setting cut the wait from
+    1.3 s to 0.9 s at the price of clipping a paused sentence, so both ship
+    at the server's default.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -158,13 +170,24 @@ class LiveSettings(BaseModel):
     idle_close_seconds: float = 60.0
     resume_minutes: float = 10.0
     transcripts: bool = True
+    end_sensitivity: str = ""
+    silence_ms: int = 0
 
-    @field_validator("idle_close_seconds", "resume_minutes")
+    @field_validator("idle_close_seconds", "resume_minutes", "silence_ms")
     @classmethod
     def _cannot_be_negative(cls, value: float) -> float:
         if value < 0:
             raise ValueError(f"expected 0 or more, got {value}")
         return value
+
+    @field_validator("end_sensitivity")
+    @classmethod
+    def _must_be_a_sensitivity(cls, value: str) -> str:
+        chosen = value.strip().upper()
+        if chosen not in END_SENSITIVITIES:
+            choices = ", ".join(END_SENSITIVITIES[1:])
+            raise ValueError(f"expected one of {choices} or nothing, got {value!r}")
+        return chosen
 
     @field_validator("primary")
     @classmethod

@@ -22,9 +22,11 @@ multilingual, it only has to be told to follow rather than lead.
 from __future__ import annotations
 
 __all__ = [
+    "ANNOUNCED_PREFIX",
     "BREVITY",
     "LANGUAGE_FALLBACK",
     "LANGUAGE_RULE",
+    "LIVE_RULES",
     "PERSONALITY",
     "SYSTEM_PROMPT",
     "UNTRUSTED_RULE",
@@ -41,14 +43,34 @@ PERSONALITY = (
     "Dry wit is welcome where it costs nothing; enthusiasm you do not have is not."
 )
 
+# Rewritten for speech (plan.md section 4.5): the model is heard, not read,
+# and its voice is its own - there is no text to keep free of markdown any
+# more, only a listener who cannot skim.
 BREVITY = (
-    "Everything you say is read out loud, so write for the ear. Answer in a sentence "
+    "You are heard, not read: you speak, and the user listens. Answer in a sentence "
     "or two - the length of something a person would actually say - and stop there; "
-    "offer the rest only if you are asked for it. "
-    "Use no markdown, no headings, no bullet lists, no code blocks and no emoji: none "
-    "of them survive being spoken, and a list read aloud is just a long sentence. "
-    "Write numbers, dates, times and units the way you would say them rather than the "
-    "way they are typed."
+    "offer the rest only if you are asked for it. A list said aloud is just a long "
+    "sentence, so do not recite one. Say numbers, dates, times and units the way you "
+    "would say them to a person in the room."
+)
+
+# The first words of the one line the assistant sends the session after it
+# has read a reminder aloud itself (D4): the model learns what was said and
+# says nothing about it. Written once here and read by `app.py`, so that the
+# rule below and the line it names cannot drift apart.
+ANNOUNCED_PREFIX = "[Already said aloud by the assistant] "
+
+# Added 2026-09-18 with the live product (plan.md section 4.5). A tool may
+# answer that the user declined: the gate asked and heard a no, and a model
+# that asks again is asking the user to repeat themselves. A line beginning
+# with the prefix above is not the user talking: it is what the assistant
+# itself said a moment ago, on its own, between turns.
+LIVE_RULES = (
+    "When a tool answers that the user declined, say so in a few words and do not "
+    "try the same thing again unless the user asks for it. "
+    f"A message that begins with {ANNOUNCED_PREFIX.strip()} is something you yourself "
+    "already said aloud a moment ago - a reminder - not something the user said: "
+    "acknowledge it silently and do not repeat it."
 )
 
 # Verbatim from design.md section 3.12. The three sentences are load bearing:
@@ -85,5 +107,5 @@ UNTRUSTED_RULE = (
 )
 
 SYSTEM_PROMPT = "\n\n".join(
-    (PERSONALITY, BREVITY, LANGUAGE_RULE, LANGUAGE_FALLBACK, UNTRUSTED_RULE)
+    (PERSONALITY, BREVITY, LANGUAGE_RULE, LANGUAGE_FALLBACK, UNTRUSTED_RULE, LIVE_RULES)
 )

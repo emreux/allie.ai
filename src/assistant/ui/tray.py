@@ -25,11 +25,17 @@ tray is built, so that a change of state costs a lookup and not a picture.
 **No sentence is written here.** The menu's labels come from the pack, and
 the state's name is the status line's own label under the same key, so a
 pack that translated the terminal has translated the tray.
+
+**The tooltip is the state, the session and the minutes** (plan.md section
+4.2): a live model bills by the minute while a session is open, and the
+icon is where that is read at a glance. The meter is the status line's
+`SessionMinutes`, told the same thing the line is told.
 """
 
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,7 +47,7 @@ from assistant import shell
 from assistant.app import State
 from assistant.locales import Locale
 from assistant.ui.status import TEXT as STATUS_TEXT
-from assistant.ui.status import label_key
+from assistant.ui.status import SessionMinutes, label_key
 
 __all__ = ["ICON_SIZE", "TEXT", "MenuEntry", "Tray", "TrayIcon", "draw_icon", "system_icon"]
 
@@ -60,10 +66,10 @@ _RING = 8
 # in pixels. A state with no colour of its own is grey, like idle.
 _GREY = (140, 140, 140)
 _COLOURS: dict[State, tuple[int, int, int]] = {
+    State.OFF: _GREY,
     State.IDLE: _GREY,
-    State.LISTENING: (46, 204, 113),
-    State.TRANSCRIBING: (241, 196, 15),
-    State.THINKING: (52, 152, 219),
+    State.USER_SPEAKING: (46, 204, 113),
+    State.RECONNECTING: (241, 196, 15),
     State.CONFIRMING: (243, 156, 18),
     State.SPEAKING: (155, 89, 182),
     State.ANNOUNCING: (155, 89, 182),
@@ -151,11 +157,19 @@ class Tray:
         icon: IconFactory = system_icon,
         open: Callable[[Path], None] = open_folder,
         name: str = "assistant",
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._said = {key: locale.say(key, default) for key, default in TEXT.items()}
         self._labels = {
             state: locale.say(label_key(state), STATUS_TEXT[label_key(state)]) for state in State
         }
+        # The session half of the tooltip: the status line's words under
+        # the status line's keys, and the same meter.
+        self._meter_said = {
+            key: locale.say(key, STATUS_TEXT[key])
+            for key in ("session_open", "session_closed", "session_minutes")
+        }
+        self._session = SessionMinutes(clock=clock)
         self._loop = loop
         self._on_toggle = on_toggle
         self._on_quit = on_quit
@@ -205,16 +219,27 @@ class Tray:
         self._redraw()
         self._icon.update_menu()
 
+    def session(self, open: bool) -> None:
+        """Says whether a session is open - the meter is running - and
+        redraws the tooltip with the minutes so far."""
+        self._session.told(open)
+        self._redraw()
+
     def _redraw(self) -> None:
         self._icon.icon = self._images[(self._state, self._listening)]
         self._icon.title = self._title()
 
     def _title(self) -> str:
-        """The state's own label; "not listening" for an idle microphone
-        that is off, which is the one thing "ready" would misdescribe."""
+        """The state, then the session and its minutes. "Not listening" for
+        an idle microphone that is off, which is the one thing "ready" would
+        misdescribe."""
         if self._state is State.IDLE and not self._listening:
-            return self._said["tray_not_listening"]
-        return self._labels[self._state]
+            state = self._said["tray_not_listening"]
+        else:
+            state = self._labels[self._state]
+        which = self._meter_said["session_open" if self._session.open else "session_closed"]
+        minutes = self._meter_said["session_minutes"].format(minutes=int(self._session.minutes))
+        return f"{state} · {which} · {minutes}"
 
     def _toggle_label(self) -> str:
         return self._said["tray_stop_listening" if self._listening else "tray_start_listening"]

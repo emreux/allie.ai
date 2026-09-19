@@ -1,75 +1,101 @@
-"""The contract every LLM provider is reduced to (design.md section 3.2).
+"""The contract every live provider is reduced to (plan.md section 4.3).
 
-Providers disagree about almost everything: Anthropic sends content blocks,
-OpenAI sends a string plus `tool_calls`, Gemini sends `parts`. Tool definitions,
-tool results and streaming events differ again. Let those differences reach the
-rest of the application and the project is nailed to one vendor.
+Providers disagree about almost everything: Gemini Live speaks protobuf
+messages over the SDK's socket, OpenAI's live API speaks JSON events over a
+raw one; one ends the model's turn with `turn_complete`, the other with
+`response.done`; one hands out a resumption handle, the other has none. Let
+those differences reach the rest of the application and the project is
+nailed to one vendor.
 
-So the application sees only this module: five value types and one protocol.
-An adapter translates its vendor's shapes into these on the way in and out, and
-that is the only place vendor knowledge is allowed to live.
+So the application sees only this module: the value types, one provider
+protocol, one session protocol and the eleven events a session can produce.
+An adapter translates its vendor's shapes into these on the way in and out,
+and that is the only place vendor knowledge is allowed to live.
 
-Phase 1 shipped a single adapter and called `stream` with `tools=[]`. The tool
-types were defined here from the start anyway - the permission gate and the
-agent loop of phase 2 are written against them, and retrofitting a type this
-central breaks every call site (design.md section 8). Phase 2.1 turned them
-on, and two things the first real round trip taught are recorded on the types
-themselves: a tool result carries the name of the tool as well as the id of
-the call, and a call carries back whatever opaque token the provider attached
-to it.
+The shape is the old repository's text contract with the request loop taken
+out. `ToolSpec`, `ToolCall`, `Usage`, `ModelInfo` and the two errors are the
+same types every module of the tree already shares; `Message`, `Delta` and
+the stream went with the pipeline. What replaced them is a *session*: opened
+once per conversation, fed microphone audio and text, handing back audio,
+transcripts, tool calls and the moments that matter - the model was
+interrupted, the turn is over, the server is about to hang up.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
+    "AudioChunk",
     "AuthenticationError",
-    "Delta",
-    "LLMProvider",
-    "Message",
+    "Closed",
+    "GoingAway",
+    "InputText",
+    "Interrupted",
+    "LiveEvent",
+    "LiveProvider",
+    "LiveSession",
     "ModelInfo",
+    "OutputText",
     "ProviderError",
-    "Role",
+    "Resumable",
+    "SessionConfig",
     "ToolCall",
+    "ToolCallCancelled",
+    "ToolCallEvent",
     "ToolSpec",
+    "TurnComplete",
     "Usage",
-    "was_cut_off",
+    "UsageReport",
 ]
-
-Role = Literal["system", "user", "assistant", "tool"]
 
 
 class ProviderError(Exception):
     """Something the provider refused to do, in words the application knows.
 
     An adapter never lets its vendor's own exception out. `app.py` has to
-    decide what the assistant says out loud, and it cannot import three SDKs to
-    find out which of them just failed - that would put vendor knowledge in the
-    one place section 3.2 keeps it out of.
+    decide what the assistant says out loud, and it cannot import two SDKs to
+    find out which of them just failed - that would put vendor knowledge in
+    the one place section 4.3 keeps it out of.
+
+    `kind` is the one word the state machine reads to choose its sentence
+    and its next move: `"refused"` (the provider said no, for reasons of its
+    own), `"rate_limit"` (it said "slow down" - the free tier's word),
+    `"unreachable"` (the network, not the provider: a socket refused, a name
+    that did not resolve, a stream that stopped), `"timeout"` (an answer that
+    did not come in time). The message carries the provider's own words,
+    which are the only thing that makes a report of this diagnosable.
     """
+
+    def __init__(self, message: str, *, kind: str = "refused") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 class AuthenticationError(ProviderError):
     """The key was refused: mistyped, revoked, or out of credit.
 
-    Kept apart from every other refusal because the answer is different
-    (section 3.2). A connection that dropped will probably work next turn, so
-    it is retried; a key that was refused will not, so it is never retried and
-    never quietly failed over to another model the user is then billed for.
-    The three ways a key can be refused all end in the same sentence: renew it.
+    Kept apart from every other refusal because the answer is different. A
+    connection that dropped will probably work next turn, so it is retried;
+    a key that was refused will not, so it is never retried and never quietly
+    failed over to another model the user is then billed for. The three ways
+    a key can be refused all end in the same sentence: renew it.
     """
+
+    def __init__(self, message: str, *, kind: str = "key") -> None:
+        super().__init__(message, kind=kind)
 
 
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
-    """A tool offered to the model, described in the one language all three speak.
+    """A tool offered to the model, described in the one language both speak.
 
-    `parameters` is a JSON Schema object. Anthropic calls it `input_schema`,
-    OpenAI wraps it in a function object, Gemini calls it a function
-    declaration - all three are that same schema in a different envelope.
+    `parameters` is a JSON Schema object. Gemini calls it a function
+    declaration, OpenAI wraps it in a function object - both are that same
+    schema in a different envelope.
     """
 
     name: str
@@ -81,32 +107,28 @@ class ToolSpec:
 class ToolCall:
     """A complete request from the model to run one tool.
 
-    Every provider streams the arguments as partial JSON. An adapter buffers
-    those fragments and emits this object only once the arguments parse, so a
-    `ToolCall` is never half-built. The permission gate of section 3.9 depends
-    on that: it cannot judge an action it can only see the beginning of.
-
-    `signature` is whatever the provider attached to the call and wants back
-    with it, byte for byte, when the call is resent as history. Nothing above
-    the adapter reads it; the loop only carries it. Gemini 3 attaches one to
-    every function call it makes - a "thought signature", the encrypted trace
-    of the reasoning behind the call - and refuses the conversation without
-    it (measured 2026-09-09: a 400 on the second round of "saat kaç?").
+    A live session delivers a call whole - the arguments are not streamed as
+    partial JSON the way a text stream's were - and the adapter still
+    promises it: the permission gate cannot judge an action it can only see
+    the beginning of. The id is what the result is matched to on the way
+    back; the name travels with it because Gemini matches by name and
+    refuses a result without one.
     """
 
     id: str
     name: str
     arguments: Mapping[str, Any]
-    signature: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class Usage:
-    """Token counts for one request, in the shape the `usage_log` table stores.
+    """Token counts for one report, in the shape the `usage_log` table stores.
 
     `cached_tokens` is a subset of `input_tokens`, not an addition to it. Only
     some providers report it; the rest leave it at zero, which reads correctly
-    as "no cache hit" (design.md section 6).
+    as "no cache hit". The minutes of audio (plan.md D8) are not here: they
+    are counted by the session itself (`LiveSession.audio_in_ms`), exactly,
+    from the bytes that went each way.
     """
 
     input_tokens: int = 0
@@ -114,12 +136,11 @@ class Usage:
     cached_tokens: int = 0
 
     def __add__(self, other: Usage) -> Usage:
-        """What two requests cost together.
+        """What two reports cost together.
 
-        A turn that went round the tool loop made more than one request, and
-        the turn's cost is their sum. This is the one place counts are added:
-        within a request `Delta.usage` is already the total, and adding
-        *those* up is the mistake its docstring warns about.
+        A turn with a tool call in it is two server turns (the model stops at
+        the call and speaks the answer as a new one, measured 2026-09-18),
+        each with its own report; the turn's cost is their sum.
         """
         return Usage(
             input_tokens=self.input_tokens + other.input_tokens,
@@ -134,8 +155,8 @@ class ModelInfo:
 
     The optional fields are genuinely unknown for some providers rather than
     merely absent. `supports_tools=None` means "nobody has tested this model
-    yet" - the phase 2 probe replaces it with a measured answer instead of
-    letting the assistant fail silently at two in the morning (section 3.2).
+    yet" - the probe replaces it with a measured answer instead of letting
+    the assistant fail silently at two in the morning.
     """
 
     id: str
@@ -147,128 +168,229 @@ class ModelInfo:
 
 
 @dataclass(frozen=True, slots=True)
-class Message:
-    """One turn of the conversation, independent of any provider's wire format.
+class SessionConfig:
+    """Everything a session is opened with, independent of any vendor's config.
 
-    Frozen because the agent loop keeps a window of past turns and hands the
-    same objects to the adapter on every request; a message that could be
-    edited in place would rewrite history nobody meant to change.
+    `voice` empty is the model's own default (plan.md D19: the owner's ear
+    preferred it). `language_code` is the BCP-47 hint of the locale pack -
+    `tr-TR` - for the recogniser behind the model and for its voice; without
+    it a short or quiet Turkish sentence is heard as Hindi (ADR-001).
+    `end_sensitivity` (`""`, `"HIGH"`, `"LOW"`) and `silence_ms` (0 = the
+    server's default) are the two server-side turn-detection knobs the same
+    ADR kept for the owner to tune. `resume_handle` is what a previous
+    session handed out in `Resumable`; given, the conversation continues.
     """
 
-    role: Role
-    content: str = ""
-    tool_calls: tuple[ToolCall, ...] = field(default_factory=tuple)
-    tool_call_id: str | None = None
-    tool_name: str | None = None
+    model: str
+    voice: str = ""
+    system_prompt: str = ""
+    tools: Sequence[ToolSpec] = ()
+    input_rate: int = 16_000
+    transcripts: bool = True
+    resume_handle: str | None = None
+    language_code: str = ""
+    end_sensitivity: str = ""
+    silence_ms: int = 0
 
-    def __post_init__(self) -> None:
-        if self.role == "tool" and (self.tool_call_id is None or self.tool_name is None):
-            raise ValueError(
-                "a tool result needs the tool_call_id and the tool_name of the call it answers"
-            )
-        if self.tool_calls and self.role != "assistant":
-            raise ValueError(f"only an assistant message carries tool calls, not {self.role!r}")
 
-    @classmethod
-    def system(cls, content: str) -> Message:
-        return cls(role="system", content=content)
-
-    @classmethod
-    def user(cls, content: str) -> Message:
-        return cls(role="user", content=content)
-
-    @classmethod
-    def assistant(cls, content: str = "", tool_calls: tuple[ToolCall, ...] = ()) -> Message:
-        return cls(role="assistant", content=content, tool_calls=tool_calls)
-
-    @classmethod
-    def tool_result(cls, answering: ToolCall, content: str) -> Message:
-        """What a tool said back, tied to the call that asked for it.
-
-        Both the id and the name travel: OpenAI and Anthropic match a result
-        to its call by id, Gemini by name - and Gemini refuses a result that
-        has none (measured 2026-09-09, "Name cannot be empty"). Built from the
-        call itself, a result cannot carry a mismatched pair.
-        """
-        return cls(
-            role="tool", content=content, tool_call_id=answering.id, tool_name=answering.name
-        )
+# --------------------------------------------------------------------------
+# What a session sends up: eleven events, and nothing else
+# --------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
-class Delta:
-    """One piece of a streaming response.
+class AudioChunk:
+    """A piece of the model's voice: 16-bit little-endian mono PCM at
+    `sample_rate` (Gemini and OpenAI both speak at 24 kHz). Played the
+    moment it arrives; nothing is buffered for the sake of a whole answer."""
 
-    A chunk carries whichever of these the provider just produced: a piece of
-    text, one finished tool call, the reason generation stopped, or the token
-    counts that arrive last. An empty `Delta` is legal - providers do send
-    chunks that only advance their own state.
-
-    `usage` appears on **at most one** `Delta` per stream and carries the
-    totals for the whole request. Providers disagree about this - Gemini
-    repeats a running total on every chunk - so each adapter holds the counts
-    back and reports them once. Without that rule the obvious way to read them,
-    adding up every `Delta.usage`, would overstate a request several times over
-    and the cost report of section 6 would be quietly wrong.
-    """
-
-    text: str | None = None
-    tool_call: ToolCall | None = None
-    finish_reason: str | None = None
-    usage: Usage | None = None
+    pcm16: bytes
+    sample_rate: int
 
 
-# The word each vendor uses when the output token limit ended the answer
-# rather than the model: Anthropic `max_tokens`, OpenAI `length`, Gemini
-# `MAX_TOKENS`. An adapter passes its vendor's word through untouched in
-# `Delta.finish_reason`; this is the one place the three are read as one.
-_CUT_OFF = frozenset({"max_tokens", "length"})
+@dataclass(frozen=True, slots=True)
+class Interrupted:
+    """The server heard the user speak over the model and stopped it. What
+    is still queued for the speaker is thrown away, and nothing said after
+    this point counts as said."""
 
 
-def was_cut_off(finish_reason: str | None) -> bool:
-    """Whether `finish_reason` says the token limit ended the answer (section 3.11).
+@dataclass(frozen=True, slots=True)
+class ToolCallEvent:
+    """The model asks for one tool, whole. The answer goes back through
+    `LiveSession.send_tool_result` - after the gate, and nowhere else."""
 
-    The case is the vendor's own and is not held against it.
-    """
-    return finish_reason is not None and finish_reason.casefold() in _CUT_OFF
+    call: ToolCall
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCallCancelled:
+    """The model withdrew calls it had made - the user interrupted before
+    they were answered. A result for one of these ids is not sent."""
+
+    ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class InputText:
+    """A piece of the transcript of what the user said, as the server heard
+    it. For the status line and the log; the model has already understood
+    the audio itself."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class OutputText:
+    """A piece of the transcript of what the model is saying."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class TurnComplete:
+    """The model has finished its turn. Gemini sends this *at* a tool call
+    too, before the result is even sent, and speaks the answer as a new turn
+    (measured 2026-09-18); the state machine counts the two as one."""
+
+
+@dataclass(frozen=True, slots=True)
+class UsageReport:
+    """What the provider says a turn cost in tokens. Reported when the
+    provider reports it and never invented: a session that says nothing
+    about its cost sends no report."""
+
+    usage: Usage
+
+
+@dataclass(frozen=True, slots=True)
+class Resumable:
+    """A handle with which a later session continues this conversation
+    (`SessionConfig.resume_handle`). Gemini hands one out at the open and
+    again as the conversation goes on; the latest is the one to keep."""
+
+    handle: str
+
+
+@dataclass(frozen=True, slots=True)
+class GoingAway:
+    """The server will hang up soon - the session's hard time cap is near.
+    `time_left` is the provider's own text for how soon. The state machine
+    reconnects with the latest handle before it does."""
+
+    time_left: str
+
+
+@dataclass(frozen=True, slots=True)
+class Closed:
+    """The session is over and no more events are coming. `error` is `None`
+    when the socket closed the way sockets close - we hung up, or the server
+    did after `GoingAway` - and the `ProviderError` that says why otherwise,
+    in the same currency as a refusal at the open."""
+
+    error: ProviderError | None = None
+
+
+LiveEvent = (
+    AudioChunk
+    | Interrupted
+    | ToolCallEvent
+    | ToolCallCancelled
+    | InputText
+    | OutputText
+    | TurnComplete
+    | UsageReport
+    | Resumable
+    | GoingAway
+    | Closed
+)
+
+
+# --------------------------------------------------------------------------
+# The two protocols
+# --------------------------------------------------------------------------
 
 
 @runtime_checkable
-class LLMProvider(Protocol):
+class LiveSession(Protocol):
+    """One open conversation with the model. Nothing here mentions a vendor.
+
+    Audio goes in at `SessionConfig.input_rate` as 16-bit mono PCM and comes
+    out as `AudioChunk` events. The session counts both ways in milliseconds
+    - exactly, from the bytes, which is what live models bill by (plan.md
+    D8) - and the counts only grow: the state machine reads them at the end
+    of a turn and at the close and takes the difference.
+    """
+
+    @property
+    def audio_in_ms(self) -> int:
+        """Milliseconds of audio sent so far."""
+        ...
+
+    @property
+    def audio_out_ms(self) -> int:
+        """Milliseconds of the model's voice received so far."""
+        ...
+
+    async def send_audio(self, pcm16: bytes) -> None:
+        """Microphone audio, at the rate the session was opened with."""
+        ...
+
+    async def send_text(self, text: str, *, role: str = "user", turn_complete: bool = True) -> None:
+        """A text turn. `turn_complete` asks the model to answer it; `False`
+        only adds it to the conversation - what an announcement the assistant
+        already said aloud needs (plan.md D4), and a probe question does not."""
+        ...
+
+    async def send_tool_result(self, call: ToolCall, content: str) -> None:
+        """What the tool said back, tied to the call that asked for it."""
+        ...
+
+    async def interrupt(self) -> None:
+        """Local playback has been stopped by hand (the hotkey); the provider
+        is told if it needs telling. Gemini does not - its own detector
+        stopped it already."""
+        ...
+
+    def events(self) -> AsyncIterator[LiveEvent]:
+        """Everything the server sends, translated, until `Closed`.
+
+        Declared `def`, not `async def`, and this is deliberate. Adapters
+        write it as `async def ... yield`, an async generator: calling it
+        returns an `AsyncIterator` immediately, with no `await`. Declaring
+        `async def` here would type it as a coroutine that returns an
+        iterator, callers would have to await it first, and no adapter would
+        satisfy the protocol. `test_live_adapters.py` guards this.
+        """
+        ...
+
+
+@runtime_checkable
+class LiveProvider(Protocol):
     """What an adapter has to offer. Nothing here mentions a vendor.
 
-    Vendor-only features - Anthropic prompt caching, OpenAI `reasoning_effort` -
-    stay inside their adapter and are announced through a `capabilities`
-    attribute the adapter defines for itself. Adding them here would drag every
-    other adapter down to the common denominator (design.md section 3.2).
+    Vendor-only features - a resumption handle, transcripts, the server's own
+    turn detection - are announced through `capabilities` and never added
+    here, which would drag the other adapter down to the common denominator.
     """
 
     id: str
+    capabilities: frozenset[str]
 
     async def validate_credentials(self) -> bool:
         """Reports whether the stored key actually works, before it is saved."""
         ...
 
     async def list_models(self) -> list[ModelInfo]:
-        """Lists the models this key can reach, for the setup command to offer."""
+        """Lists the live-capable models this key can reach, for the setup command."""
         ...
 
-    def stream(
-        self,
-        messages: list[Message],
-        tools: list[ToolSpec],
-        *,
-        model: str,
-        temperature: float | None = None,
-        max_tokens: int = 4096,
-    ) -> AsyncIterator[Delta]:
-        """Sends a request and yields the response as it arrives.
+    def connect(self, config: SessionConfig) -> AbstractAsyncContextManager[LiveSession]:
+        """Opens a session: `async with provider.connect(config) as session`.
 
-        Declared `def`, not `async def`, and this is deliberate. Adapters write
-        it as `async def ... yield`, an async generator: calling it returns an
-        `AsyncIterator` immediately, with no `await`. Declaring `async def` here
-        would type it as a coroutine that returns an iterator, callers would
-        have to await it first, and no adapter would satisfy the protocol.
-        `test_llm_adapters.py` guards this.
+        Leaving the block closes the socket. A key the provider refuses is
+        `AuthenticationError`, anything else it refuses `ProviderError`, and a
+        network that is not there `ProviderError` with `kind="unreachable"` -
+        all raised on entering the block, never the SDK's own.
         """
         ...

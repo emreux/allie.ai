@@ -30,6 +30,7 @@ __all__ = [
     "STTProvider",
     "Transcript",
     "buffered_stream",
+    "to_pcm16",
 ]
 
 # What Whisper is trained on and what every other engine accepts. `audio/`
@@ -44,6 +45,18 @@ SAMPLE_RATE = 16_000
 NO_SPEECH_CEILING = 0.8
 
 Audio = NDArray[np.float32]
+
+
+def to_pcm16(pcm: Audio) -> bytes:
+    """One channel, 16-bit little-endian: what a live session is fed, at the
+    rate the audio already has.
+
+    Values outside [-1, 1] are clipped rather than wrapped - a wrapped
+    sample is a click the recogniser hears as a consonant. Here rather than
+    in the Gemini recogniser that first needed it, because the live capture
+    (`audio/capture.py`) sends the same bytes.
+    """
+    return (np.clip(pcm, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +107,7 @@ class STTProvider(Protocol):
         """Yields partial transcripts as the audio arrives, then one final one.
 
         Declared `def` rather than `async def` for the same reason as
-        `LLMProvider.stream`: implementations are async generators, and
+        `LiveSession.events`: implementations are async generators, and
         `async def` would type this as a coroutine returning an iterator.
         """
         ...

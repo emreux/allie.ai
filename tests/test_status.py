@@ -15,6 +15,13 @@ it, which is the only record the user gets in phase 1.
 **A terminal that is not a terminal still works.** `live-assistant run > run.log`
 redirects the output to a file, and a status line that only knew how to draw
 itself on a console would take the whole assistant down with it.
+
+**The session and its minutes are on the line** (plan.md 4.2, L1.7). A live
+model bills by the minute while a session is open, silent or not, so the
+line says whether one is open and how many minutes this run has spent -
+counted here, from the clock, since the usage rows do not carry minutes yet.
+And a microphone the server hears too quietly (D18) is said once, on a line
+that stays.
 """
 
 from __future__ import annotations
@@ -27,10 +34,10 @@ import pytest
 from rich.console import Console
 
 from assistant.app import State, Turn
-from assistant.audio.capture import DEFAULT_TOGGLE_HOTKEY
+from assistant.audio.capture import DEFAULT_TOGGLE_HOTKEY, QUIET_DBFS
 from assistant.live.base import Usage
 from assistant.locales import Locale
-from assistant.ui.status import TEXT, StatusLine, label_key, spell
+from assistant.ui.status import TEXT, SessionMinutes, StatusLine, label_key, spell
 
 TURKISH = Locale(
     code="tr",
@@ -38,12 +45,24 @@ TURKISH = Locale(
     stt_language="tr",
     voices={},
     ui={
-        "state_thinking": "düşünüyor",
+        "state_user_speaking": "seni duyuyor",
         "state_idle": "hazır",
         "paused": "Dinlemiyorum. {toggle} açar.",
         "you_said": "sen",
+        "session_open": "oturum açık",
     },
 )
+
+
+class Clock:
+    """A clock the test moves by hand, in seconds."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
 
 CONTROL = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 
@@ -67,8 +86,17 @@ def screen() -> Screen:
     return Screen()
 
 
-def line(screen: Screen, locale: Locale | None = None) -> StatusLine:
-    return StatusLine(locale or Locale("en", "English", "en", {}, {}), console=screen.console)
+def line(screen: Screen, locale: Locale | None = None, clock: Clock | None = None) -> StatusLine:
+    return StatusLine(
+        locale or Locale("en", "English", "en", {}, {}),
+        console=screen.console,
+        clock=clock if clock is not None else Clock(),
+    )
+
+
+def shown(screen: Screen) -> str:
+    """The line as it is now: what follows the last carriage return."""
+    return str(screen).rstrip().rpartition(chr(13))[2]
 
 
 # --------------------------------------------------------------------------
@@ -87,9 +115,9 @@ def test_the_line_says_what_the_assistant_is_doing(screen: Screen) -> None:
     """Read inside the block rather than after it: a line that only appears
     once the program has ended is not a status line."""
     with line(screen) as status:
-        status.state(State.THINKING)
+        status.state(State.USER_SPEAKING)
 
-        assert TEXT["state_thinking"] in str(screen)
+        assert TEXT["state_user_speaking"] in str(screen)
 
 
 def test_the_line_is_on_screen_before_anything_has_happened(screen: Screen) -> None:
@@ -118,10 +146,10 @@ def test_before_the_microphone_reports_itself_the_line_says_paused(screen: Scree
 
 def test_the_words_are_the_pack_s_and_not_the_code_s(screen: Screen) -> None:
     with line(screen, TURKISH) as status:
-        status.state(State.THINKING)
+        status.state(State.USER_SPEAKING)
 
-    assert "düşünüyor" in str(screen)
-    assert TEXT["state_thinking"] not in str(screen)
+    assert "seni duyuyor" in str(screen)
+    assert TEXT["state_user_speaking"] not in str(screen)
 
 
 def test_a_sentence_the_pack_leaves_out_is_still_said(screen: Screen) -> None:
@@ -156,7 +184,7 @@ def test_a_notice_stays_on_screen_when_the_state_moves_on(screen: Screen) -> Non
     user should read once - that the model failed the probe."""
     with line(screen) as status:
         status.notice("The model does not call tools.")
-        status.state(State.LISTENING)
+        status.state(State.USER_SPEAKING)
         status.state(State.IDLE)
 
     assert "The model does not call tools." in str(screen)
@@ -190,12 +218,11 @@ def test_the_mode_changes_without_the_state_changing(screen: Screen) -> None:
     """The two are independent: the assistant is thinking about the same thing
     whether or not the microphone stayed open behind it."""
     with line(screen) as status:
-        status.state(State.THINKING)
+        status.state(State.USER_SPEAKING)
         status.hands_free(True)
 
-    shown = str(screen).rstrip().rpartition(chr(13))[2]
-    assert TEXT["state_thinking"] in shown
-    assert "Ctrl+Alt+H stops listening" in shown
+    assert TEXT["state_user_speaking"] in shown(screen)
+    assert "Ctrl+Alt+H stops listening" in shown(screen)
 
 
 def test_a_pack_that_says_nothing_about_the_mode_still_says_something(
@@ -206,6 +233,136 @@ def test_a_pack_that_says_nothing_about_the_mode_still_says_something(
         status.hands_free(True)
 
     assert "Ctrl+Alt+H" in str(screen)
+
+
+# --------------------------------------------------------------------------
+# The session and its minutes (plan.md 4.2, L1.7)
+# --------------------------------------------------------------------------
+
+
+def test_the_line_says_no_session_is_open_before_one_is(screen: Screen) -> None:
+    """Honest from the start: the door is open and the meter is not running."""
+    with line(screen):
+        assert TEXT["session_closed"] in shown(screen)
+        assert TEXT["session_minutes"].format(minutes=0) in shown(screen)
+
+
+def test_the_line_says_when_a_session_opens_and_when_it_closes(screen: Screen) -> None:
+    with line(screen) as status:
+        status.session(True)
+        assert TEXT["session_open"] in shown(screen)
+        assert TEXT["session_closed"] not in shown(screen)
+
+        status.session(False)
+        assert TEXT["session_closed"] in shown(screen)
+
+
+def test_the_minutes_are_the_time_sessions_were_open_this_run(screen: Screen) -> None:
+    """What the live model bills by (D5): open time, silent or not, whole
+    minutes, added up across the sessions of one run."""
+    clock = Clock()
+    with line(screen, clock=clock) as status:
+        status.session(True)
+        clock.now += 150
+        status.session(False)
+        status.session(True)
+        clock.now += 60
+        status.session(False)
+
+        assert TEXT["session_minutes"].format(minutes=3) in shown(screen)
+        assert status.minutes == 3.5
+
+
+def test_the_minutes_of_the_session_under_way_count_too(screen: Screen) -> None:
+    """The line is redrawn at every change of state, and the number on it
+    then includes the session that is still open."""
+    clock = Clock()
+    with line(screen, clock=clock) as status:
+        status.session(True)
+        clock.now += 125
+        status.state(State.SPEAKING)
+
+        assert TEXT["session_minutes"].format(minutes=2) in shown(screen)
+
+
+def test_the_session_survives_a_change_of_state_and_of_mode(screen: Screen) -> None:
+    with line(screen) as status:
+        status.session(True)
+        status.state(State.USER_SPEAKING)
+        status.hands_free(True)
+
+        assert TEXT["session_open"] in shown(screen)
+        assert TEXT["state_user_speaking"] in shown(screen)
+
+
+def test_the_session_is_said_in_the_pack_s_words(screen: Screen) -> None:
+    with line(screen, TURKISH) as status:
+        status.session(True)
+
+    assert "oturum açık" in str(screen)
+    assert TEXT["session_open"] not in str(screen)
+
+
+def test_opening_twice_or_closing_twice_counts_once() -> None:
+    """The state machine may say the same thing twice on a reconnect; the
+    meter must not lose the minutes in between or double them."""
+    clock = Clock()
+    meter = SessionMinutes(clock=clock)
+
+    meter.told(True)
+    meter.told(True)
+    clock.now += 60
+    meter.told(False)
+    meter.told(False)
+
+    assert meter.minutes == 1.0
+    assert meter.open is False
+
+
+# --------------------------------------------------------------------------
+# A microphone the server hears too quietly (D18)
+# --------------------------------------------------------------------------
+
+
+def test_a_quiet_microphone_is_said_once_on_a_line_that_stays(screen: Screen) -> None:
+    """Measured 2026-09-18: the owner's array sends -45 dBFS, and a quiet
+    microphone is the first thing to check when the model hears another
+    language. Said once, not after every session."""
+    with line(screen) as status:
+        status.microphone_level(-45.2)
+        status.microphone_level(-46.0)
+        status.state(State.IDLE)
+
+    said = TEXT["microphone_quiet"].format(level=-45, quiet=int(QUIET_DBFS))
+    assert str(screen).count(said) == 1
+
+
+def test_a_microphone_that_is_loud_enough_is_not_mentioned(screen: Screen) -> None:
+    with line(screen) as status:
+        status.microphone_level(-30.0)
+        status.microphone_level(None)
+
+    assert TEXT["microphone_quiet"].split("{")[0] not in str(screen)
+
+
+def test_a_microphone_that_went_quiet_again_is_said_again(screen: Screen) -> None:
+    """Fixed and then broken again - a new headset, a Windows update -
+    deserves a new line."""
+    with line(screen) as status:
+        status.microphone_level(-45.0)
+        status.microphone_level(-30.0)
+        status.microphone_level(-45.0)
+
+    assert str(screen).count(TEXT["microphone_quiet"].split("{")[0]) == 2
+
+
+def test_the_quiet_microphone_is_said_in_the_pack_s_words(screen: Screen) -> None:
+    pack = Locale("tr", "Türkçe", "tr", {}, {"microphone_quiet": "mikrofon kısık ({level} dBFS)"})
+
+    with line(screen, pack) as status:
+        status.microphone_level(-45.0)
+
+    assert "mikrofon kısık (-45 dBFS)" in str(screen)
 
 
 # --------------------------------------------------------------------------
@@ -274,7 +431,7 @@ def test_a_turn_that_failed_does_not_claim_to_have_been_free(screen: Screen) -> 
     with line(screen) as status:
         status.turn(Turn(heard="saat kaç", said="Sağlayıcıya bağlanamadım."))
 
-    assert "0" not in str(screen)
+    assert TEXT["turn_cost"].format(input=0, output=0) not in str(screen)
 
 
 def test_who_said_which_half_is_written_in_the_user_s_language(screen: Screen) -> None:
@@ -291,7 +448,7 @@ def test_the_line_does_not_start_a_thread_to_redraw_itself(screen: Screen) -> No
     alone = threading.active_count()
 
     with line(screen) as status:
-        status.state(State.THINKING)
+        status.state(State.USER_SPEAKING)
 
         assert threading.active_count() == alone
 
@@ -307,7 +464,7 @@ def test_output_that_is_a_file_rather_than_a_console_still_gets_the_turns() -> N
     written = Screen(terminal=False)
 
     with line(written) as status:
-        status.state(State.THINKING)
+        status.state(State.USER_SPEAKING)
         status.turn(Turn(heard="saat kaç", said="Üç buçuk."))
 
     assert "saat kaç" in str(written)

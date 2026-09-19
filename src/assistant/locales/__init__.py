@@ -102,6 +102,17 @@ class Locale:
     # that asks it (`live/probe.py`), and `en.toml` carries none.
     probe_question: str = ""
 
+    # The two hints the live model needs, from `[live]` (plan.md D19,
+    # ADR-001 section 6): the BCP-47 code the session is opened with - for
+    # the recogniser behind the model and for its voice - and one sentence
+    # for the system prompt saying which language the user speaks. Measured
+    # 2026-09-18: without them a short or quiet Turkish sentence is heard as
+    # Hindi and answered in it. Identity, like the speech language: English
+    # lends neither, and a pack without them leaves the server and the
+    # prompt to their defaults.
+    language_code: str = ""
+    user_language_rule: str = ""
+
     def voice(self, engine: str) -> str | None:
         """The voice this locale prefers for `engine`, if it names one."""
         return self.voices.get(engine) or None
@@ -139,6 +150,8 @@ def load(code: str | None = None, *, directory: Path | None = None) -> Locale:
         fillers=_words(_table(pack, "speech"), "filler"),
         intents=_word_lists(_table(pack, "intents")),
         probe_question=_text(_table(pack, "probe"), "question").strip(),
+        language_code=_text(_table(pack, "live"), "language_code").strip(),
+        user_language_rule=_text(_table(pack, "live"), "user_language_rule").strip(),
     )
 
 

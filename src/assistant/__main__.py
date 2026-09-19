@@ -1,7 +1,8 @@
 """Command line entry point - and the composition root of the program.
 
 `setup` asks the questions of item 1.4, the microphone among them since
-2026-09-15; `mic` asks that one again on its own. `run` is item 1.11: it
+2026-09-15 and the live product's three (voice, who hears, who reads) since
+L1.6; `mic` asks the microphone again on its own. `run` is item 1.11: it
 puts the pieces together, hands them to the state machine, and shows the one
 line of terminal that is the entire interface until the tray icon of phase
 4.2. `cost` is 2.4: what the turns cost, read back from `usage_log`. `purge --all`
@@ -21,12 +22,14 @@ Three things about `run` are decisions rather than plumbing.
 vendor SDK to print four lines of help - and `run` should not load the
 wizard's prompt library it will never show.
 
-**`run` does not run yet** (plan.md section 7, L0). The composition root of
-the old pipeline - `_talk`, which built the recogniser, the loop and the
-state machine - is gone with them; the live one arrives in L1.6 and is
-wired from the same helpers below (`_gate`, `_model_checked`, `_finished`,
-`_mailbox_of`, `_each`, `_stopper`), which stay. Until then `run` says so
-in one sentence and exits 2.
+**`run` wires the live loop of plan.md section 4.1.** The model speaks for
+itself over one session at a time (`app.py`), so what `_talk` builds is the
+doorman and the microphone stream (`audio/capture.py`), the tool round
+(`agent/core.py`) behind the one gate, the local recogniser and voice that
+serve the gate window and the reminders (D3, D4, D10), and what a session is
+opened with - the prompt with the pack's language rule, the user's facts and
+the time, the tools, the pack's language code, the `[live]` knobs - read
+afresh at every open, since the facts and the time move.
 
 **Starting up fails in sentences.** A machine nobody has run setup on, a key
 that has since been deleted from the Credential Manager, a voice that is not
@@ -57,6 +60,7 @@ from typing import TYPE_CHECKING
 from assistant import __version__, locales
 from assistant.config import (
     Settings,
+    config_dir,
     config_path,
     is_configured,
     load_api_key,
@@ -69,20 +73,20 @@ if TYPE_CHECKING:
     from assistant.agent.core import Confirm, Dispatch
     from assistant.agent.limits import Limits
     from assistant.app import Turn
-    from assistant.live.base import LLMProvider, ToolCall
+    from assistant.audio.capture import LiveCapture
+    from assistant.live.base import LiveProvider, ToolCall
     from assistant.locales import Locale
+    from assistant.store.memory import UserMemory
     from assistant.store.repos import AuditRepo, ModelUsage, SettingsRepo
     from assistant.tools.mail import Mailbox
     from assistant.tools.registry import ToolRegistry
     from assistant.ui.status import StatusLine
+    from assistant.ui.tray import Tray
 
 __all__ = ["BUILTIN_TOOLS", "DOCTOR_TEXT", "TEXT", "build_parser", "main", "use_utf8"]
 
 _OK = 0
 _GAVE_UP = 1
-# `run` before the live loop exists (plan.md L0): not "not set up", which is
-# the user's to fix, but "not built yet", which is not.
-_NOT_WIRED = 2
 
 # The last link of the chain of section 3.12, as in every other module that
 # says something: the pack answers first, and these are what is left if none
@@ -91,12 +95,6 @@ TEXT: dict[str, str] = {
     "not_set_up": "Nothing is set up yet. Run 'live-assistant setup' first.",
     "cannot_start": "The assistant cannot start: {problem}",
     "stopped": "Stopped.",
-    # Until the live loop is wired (plan.md L1.6): what `run` says instead
-    # of listening. Every other command works.
-    "run_not_wired": (
-        "The live loop is not wired yet: this build does not talk. "
-        "setup, doctor, cost, purge and autostart work."
-    ),
     # The probe of 2.6, run again at startup when its verdict is a week
     # old: a model that fails is warned about and used anyway, because the
     # user may have chosen it knowing (section 3.2).
@@ -803,18 +801,23 @@ def _autostart(action: str) -> int:
 
 
 def _run(*, device: str | None = None, tray: bool = False) -> int:
-    """Says why the assistant cannot start - and, in this build, that it
-    cannot yet (plan.md L0).
+    """Starts the assistant, or says why it cannot.
 
-    What is checked is what was always checked first: has setup run. After
-    that the old pipeline built its pieces and handed them to the state
-    machine; the live loop that replaces it is task L1.6, and until then
-    this is one sentence and exit code 2 - distinct from the 1 of "not set
-    up", which is the user's to fix. `device` and `tray` are the flags the
-    loop will take; they are accepted so that the command line does not
-    change under the tests and the autostart entry.
+    `device` is the `--device` flag: a microphone by index or by words from its
+    name, outranking the settings for this one run. `tray` is `--tray`: the
+    icon of 4.3 beside the terminal, whose "quit" ends the run the way Ctrl+C
+    does.
     """
     from rich.console import Console
+
+    from assistant.app import NoVoiceError
+    from assistant.audio.capture import MicrophoneUnavailableError, device_choice
+    from assistant.live.registry import RegistryError
+    from assistant.logs import setup_logging
+    from assistant.messaging.contacts import ContactsFileError
+    from assistant.store.memory import MemoryFileError
+    from assistant.stt.local_whisper import ModelUnavailableError
+    from assistant.tools.messaging import BadDefaultAppError
 
     settings = load_settings()
     ready = is_configured()
@@ -825,16 +828,481 @@ def _run(*, device: str | None = None, tray: bool = False) -> int:
     console = Console()
     said = {key: pack.say(key, default) for key, default in TEXT.items()}
 
+    def say(key: str, **fields: object) -> None:
+        # Without markup: the text of an exception is formatted into one of
+        # these, and a square bracket in it is not a colour.
+        console.print(said[key].format(**fields), markup=False, highlight=False)
+
     if not ready:
-        console.print(said["not_set_up"], markup=False, highlight=False)
+        say("not_set_up")
         return _GAVE_UP
 
-    console.print(said["run_not_wired"], markup=False, highlight=False)
-    return _NOT_WIRED
+    setup_logging()
+    # What the user can fix and the program cannot: a key that is gone, a
+    # voice that is not installed, weights that could not be fetched, a
+    # microphone that would not open, a memory file edited into something
+    # that does not parse. Each is one sentence and exit code 1. Anything
+    # else is a bug in this project and keeps its traceback.
+    fixable = (
+        RegistryError,
+        NoVoiceError,
+        ModelUnavailableError,
+        MicrophoneUnavailableError,
+        MemoryFileError,
+        ContactsFileError,
+        BadDefaultAppError,
+    )
+    # The flag for one evening with a headset; the settings for every other
+    # day; the system default when neither says anything.
+    microphone = device_choice(device if device is not None else settings.audio.input_device)
+    try:
+        asyncio.run(_talk(settings, pack, device=microphone, tray=tray))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # Ctrl+C, or "quit" on the tray's menu, which cancels the run from
+        # its own thread (4.3): an ending rather than a crash - and the
+        # microphone and the keyboard hook are already closed by the time
+        # this is printed (`app.run`).
+        say("stopped")
+    except fixable as problem:
+        say("cannot_start", problem=problem)
+        return _GAVE_UP
+
+    return _OK
+
+
+async def _talk(
+    settings: Settings, pack: Locale, *, device: int | str | None = None, tray: bool = False
+) -> None:
+    """Builds the pieces and lets the state machine drive them (plan.md 4.1)."""
+    from loguru import logger
+
+    from assistant.agent.core import ToolRunner
+    from assistant.agent.limits import Limits
+    from assistant.announce.queue import AnnounceQueue
+    from assistant.app import LiveAssistant
+    from assistant.audio.capture import LiveCapture, SystemMicrophone
+    from assistant.audio.player import SystemSpeaker
+    from assistant.audio.vad import Endpoint, SileroVAD
+    from assistant.live.base import SessionConfig
+    from assistant.live.registry import MissingAPIKeyError, create_provider
+    from assistant.machine import Win32Machine
+    from assistant.media.player import Player
+    from assistant.messaging.contacts import AddressBook
+    from assistant.messaging.telegram import HASH_ENTRY, SESSION_ENTRY, Telegram, TelethonClient
+    from assistant.messaging.whatsapp import WhatsApp
+    from assistant.scheduler import runner as scheduler_runner
+    from assistant.store.db import open_database
+    from assistant.store.memory import UserMemory
+    from assistant.store.repos import (
+        AuditRepo,
+        NotesRepo,
+        ReminderRepo,
+        SettingsRepo,
+        UsageRepo,
+    )
+    from assistant.store.retention import blank_old_audit_summaries
+    from assistant.stt.gemini_stt import GeminiSTT
+    from assistant.stt.local_whisper import LocalWhisper
+    from assistant.tools import mail as mail_tools
+    from assistant.tools import memory as memory_tools
+    from assistant.tools import messaging as messaging_tools
+    from assistant.tools import notes as notes_tools
+    from assistant.tools import reminders as reminder_tools
+    from assistant.tools import store as store_tools
+    from assistant.tools import system as system_tools
+    from assistant.tools import weather as weather_tools
+    from assistant.tools.local import load_local_tools
+    from assistant.tools.media import (
+        media_control,
+        open_media_for,
+        play_music_for,
+        play_video_for,
+    )
+    from assistant.tools.registry import ToolRegistry
+    from assistant.tools.status import system_status_for
+    from assistant.tools.system import (
+        PROMPT_NAMES,
+        AppCatalog,
+        get_current_time,
+        open_app_for,
+        open_settings,
+        open_url,
+    )
+    from assistant.tools.web import fetch_page_for, read_clipboard_for, search_web_for
+    from assistant.tts.gemini_tts import GeminiTTS
+    from assistant.tts.sapi import SapiTTS
+    from assistant.ui import tray as tray_ui
+    from assistant.ui.status import StatusLine
+    from assistant.usage.tracker import Pricing, UsageTracker
+    from assistant.web.page import PageReader
+
+    # First, and before anything slow: a provider that cannot be built is the
+    # likeliest thing to be wrong, and the cheapest to find out about. The
+    # database is next for the same reason - cheap, and a disk that refuses
+    # is better found out about before Whisper has been loaded.
+    live = settings.live
+    provider = create_provider(live.provider, base_url=live.base_url or None)
+    # What the user asked to be kept, and the assistant's name (section
+    # 3.7, 2.10): read once here, written by the two tools below, and read
+    # into the prompt at every session open. Before the database for the
+    # same reason as the provider - a file edited into nonsense is a sentence.
+    memory = UserMemory.load()
+    # The people the user can message (`messaging/contacts.py`), read here
+    # for the same reason: a `contacts.toml` edited into nonsense - or into
+    # two people who answer to one name - is a sentence before anything slow.
+    book = AddressBook.load()
+    database = open_database()
+    # What the audit rows still say (section 3.7, 4.6): a summary older
+    # than the user's `[retention] audit_days` is blanked here, once per
+    # start and before anything reads the table. The rows themselves stay.
+    blanked = blank_old_audit_summaries(database, days=settings.retention.audit_days)
+    if blanked:
+        logger.info("retention: {count} audit summaries blanked", count=blanked)
+    # The table of section 3.11, once, for everyone who reads a row of it:
+    # the tool round, the gate and the tracker.
+    limits = Limits.from_settings(settings.limits)
+    # Where music comes from (section 3.6). Built before the try, because it
+    # holds a connection open between searches and the `finally` below is what
+    # gives it back; three tools and `open_app` share the one player.
+    player = Player(settings=settings.media)
+    # The weather, from Open-Meteo over one kept connection (15 Sep 2026);
+    # built beside the player for the same reason, and given back in the
+    # same `finally`.
+    weather = weather_tools.OpenMeteo()
+    # Pages the user asks about (17 Sep 2026), over a kept connection like
+    # the weather; how long one may take is the user's `[web]` setting.
+    reader = PageReader(seconds=settings.web.timeout_seconds)
+    # The two ways of sending a message (spec of 2026-09-15). WhatsApp is
+    # the installed application, asked for at every send; Telegram is the
+    # user's own account, logged in once with `live-assistant telegram login` -
+    # without the three things that produces, the channel says so instead
+    # of connecting. Closed in the `finally` like the player.
+    whatsapp = WhatsApp()
+    api_hash = load_api_key(HASH_ENTRY)
+    session = load_api_key(SESSION_ENTRY)
+    telegram = Telegram(
+        book,
+        client=TelethonClient(settings.telegram.api_id, api_hash, session)
+        if settings.telegram.api_id and api_hash and session
+        else None,
+    )
+    try:
+        detector = SileroVAD()
+
+        with StatusLine(pack) as screen:
+            # Setup's verdict on the model, refreshed when it is a week old
+            # (section 3.2, 2.6). Before the speech model: one session on
+            # the network, and worth knowing about before two seconds of
+            # loading are spent.
+            await _model_checked(provider, settings, SettingsRepo(database), pack, screen)
+            screen.starting()
+            # The apps this machine can open, read once: a few seconds of
+            # files and a PowerShell process, on a thread (2.2). Before the
+            # speech model, because the model is told the names it will hear.
+            catalog = await AppCatalog.load()
+            # The names this user has asked to open before lead the list;
+            # the window holds few (`stt/local_whisper.py`).
+            asked = AuditRepo(database).names_asked("open_app", limit=PROMPT_NAMES)
+            # People first (spec A6): their names are the shortest, most
+            # ambiguous words the recogniser hears, and there are few of them.
+            names = [*book.names(), *catalog.spoken_names(first=asked)]
+            # The recogniser hears the yes or no of the gate window and
+            # nothing else (D3, D10); the vocabulary is the old one, and
+            # harmless there.
+            whisper = LocalWhisper(vocabulary=names, prompt=pack.stt_prompt)
+            speech: LocalWhisper | GeminiSTT = whisper
+            if settings.stt.provider == "gemini":
+                # Google first, Whisper loaded behind it for the free tier's
+                # three requests a minute and for the network. The key is
+                # the entry the live model uses when it is Gemini; missing,
+                # it is a sentence before anything slow is loaded.
+                key = load_api_key("gemini")
+                if not key:
+                    raise MissingAPIKeyError(
+                        "no API key stored for 'gemini', which [stt] provider names - "
+                        "run 'live-assistant setup' to add one, or set provider = \"local\""
+                    )
+                speech = GeminiSTT(
+                    key, model=settings.stt.model, vocabulary=names, fallback=whisper
+                )
+            # The local voice (D3, D4, D10): Windows' own, or Google's with
+            # Windows behind it for the sentence Google refuses. It reads
+            # the gate's questions, the reminders and the three failure
+            # sentences; the model speaks for itself. The same key as the
+            # recogniser; missing, a sentence before anything slow is loaded.
+            voice: SapiTTS | GeminiTTS = SapiTTS()
+            if settings.tts.provider == "gemini":
+                key = load_api_key("gemini")
+                if not key:
+                    raise MissingAPIKeyError(
+                        "no API key stored for 'gemini', which [tts] provider names - "
+                        "run 'live-assistant setup' to add one, or set provider = \"sapi\""
+                    )
+                voice = GeminiTTS(
+                    key,
+                    model=settings.tts.model,
+                    fallback=voice,
+                    fallback_language=pack.code,
+                    fallback_preference=pack.voice("sapi"),
+                )
+            # The Microsoft Store, asked last by `open_app` and installed from
+            # by `install_app` - the one tool that changes what is on the
+            # machine, and asks first (2026-09-13).
+            store = store_tools.WingetStore()
+            notes = NotesRepo(database)
+            reminders = ReminderRepo(database)
+            # The user's mailbox (3.3, 17 Sep 2026), opened afresh for each
+            # question by the two tools below - or not set up, in which
+            # case the tools say so and what to run.
+            mailbox = _mailbox_of(settings, load_api_key(mail_tools.MAIL_ENTRY))
+            # The tools on offer, by name, in one place. Every one of them
+            # runs through the gate below and nowhere else (section 3.9).
+            # `forget` and `install_app` are declared with the questions they
+            # ask, in the pack's words.
+            tools = ToolRegistry(
+                [
+                    get_current_time,
+                    # The machine's own state and the weather (15 Sep 2026):
+                    # the two questions about the world that need no
+                    # application opened.
+                    system_status_for(Win32Machine()),
+                    weather_tools.get_weather_for(weather),
+                    # The catalogue answers first, the player second and the
+                    # Store last, so an installed application always wins
+                    # its own name.
+                    open_app_for(
+                        catalog,
+                        media=player.open_named,
+                        store=store,
+                        unknown_publisher=pack.say(
+                            "unknown_publisher", system_tools.TEXT["unknown_publisher"]
+                        ),
+                    ),
+                    open_url,
+                    # The engine is the user's (`[web] search_url`).
+                    search_web_for(settings.web.search_url),
+                    # What was copied, and what a page says: both come back
+                    # inside the `<untrusted>` block the prompt explains.
+                    read_clipboard_for(),
+                    fetch_page_for(reader),
+                    # The user's mail, read and never written, inside the
+                    # same block.
+                    mail_tools.read_latest_emails_for(mailbox),
+                    mail_tools.search_emails_for(mailbox),
+                    open_settings,
+                    media_control,
+                    play_music_for(player),
+                    play_video_for(player),
+                    open_media_for(player),
+                    # The user's notes (4.1, 17 Sep 2026): kept as said,
+                    # found in any spelling, deleted only after the user has
+                    # heard which.
+                    notes_tools.add_note_for(notes),
+                    notes_tools.search_notes_for(notes),
+                    notes_tools.delete_note_for(
+                        notes,
+                        confirm_prompt=pack.say(
+                            "note_delete_confirm", notes_tools.TEXT["note_delete_confirm"]
+                        ),
+                    ),
+                    # Reminders (4.2): the row here, the saying by the
+                    # scheduler below, between turns.
+                    reminder_tools.create_reminder_for(reminders),
+                    reminder_tools.list_reminders_for(reminders),
+                    reminder_tools.cancel_reminder_for(
+                        reminders,
+                        confirm_prompt=pack.say(
+                            "reminder_cancel_confirm",
+                            reminder_tools.TEXT["reminder_cancel_confirm"],
+                        ),
+                    ),
+                    memory_tools.remember_for(memory),
+                    memory_tools.forget_for(
+                        memory,
+                        confirm_prompt=pack.say(
+                            "forget_confirm", memory_tools.TEXT["forget_confirm"]
+                        ),
+                    ),
+                    store_tools.install_app_for(
+                        catalog,
+                        store,
+                        confirm_prompt=pack.say(
+                            "store_install_confirm", store_tools.TEXT["store_install_confirm"]
+                        ),
+                    ),
+                    # One tool for both messaging apps; it asks first, in the
+                    # pack's words, and hears the contact, the app and the text.
+                    messaging_tools.send_message_for(
+                        {
+                            "whatsapp": messaging_tools.WhatsAppChannel(whatsapp, book),
+                            "telegram": telegram,
+                        },
+                        default_app=settings.messaging.default_app,
+                        confirm_prompt=pack.say(
+                            "send_message_confirm",
+                            messaging_tools.TEXT["send_message_confirm"],
+                        ),
+                    ),
+                    # The owner's own, from %APPDATA%\live-assistant\tools:
+                    # read here, through the same gate, never in the repository.
+                    *load_local_tools(),
+                ]
+            )
+            # Loading Whisper takes seconds of four cores. Doing it now rather
+            # than at the first question keeps the first yes or no from
+            # waiting for it (item 1.6). The detector is a tenth of a second
+            # beside it, and is loaded here for the same reason rather than
+            # inside the first block of audio it is asked about - it is the
+            # doorman now (D5), asked about every block.
+            await speech.load()
+            await detector.load()
+
+            # The one gate, built once and handed to the one place a tool is
+            # run from: the tool round (plan.md 4.4 rule 3). A second gate
+            # would be a second way to run a tool, which is the thing
+            # section 3.9 forbids.
+            gate = _gate(settings, tools, AuditRepo(database), limits=limits, pack=pack)
+            runner = ToolRunner(tools, gate, limits)
+            # The one announce queue (invariant 5) and the loop that feeds it
+            # (invariant 7): the scheduler never sees the model, and the
+            # state machine reads the queue only between turns.
+            announcements = AnnounceQueue()
+            scheduler = scheduler_runner.Scheduler(
+                reminders,
+                announcements,
+                wording={
+                    key: pack.say(key, default) for key, default in scheduler_runner.TEXT.items()
+                },
+            )
+            # The doorman and the stream (plan.md 4.1, D5, D6): the local
+            # detector opens a session on speech, the microphone streams
+            # while one is open, full or half duplex by the path it was
+            # opened through (D18) - `barge_in = false` forces half.
+            capture = LiveCapture(
+                microphone=SystemMicrophone(device=device),
+                endpoint=Endpoint(detector),
+                barge_in=live.barge_in,
+            )
+            # The icon of 4.3, when asked for: a second surface over the
+            # same state, and a second hand on the same switch - its menu
+            # line is the key's `toggle`, its "quit" is this task's cancel,
+            # and both reach the loop through `call_soon_threadsafe`.
+            icon: tray_ui.Tray | None = None
+            if tray:
+                icon = tray_ui.Tray(
+                    pack,
+                    loop=asyncio.get_running_loop(),
+                    on_toggle=capture.toggle,
+                    on_quit=_stopper(),
+                    settings_folder=config_dir(),
+                )
+
+            def session_config() -> SessionConfig:
+                # Read at every open (plan.md 4.4): the prompt carries the
+                # user's facts and the time, which move; the tools and the
+                # `[live]` knobs do not, but one place is one place.
+                return SessionConfig(
+                    model=live.model,
+                    voice=live.voice,
+                    system_prompt=_system_prompt(memory, pack),
+                    tools=runner.specs(),
+                    transcripts=live.transcripts,
+                    language_code=pack.language_code,
+                    end_sensitivity=live.end_sensitivity,
+                    silence_ms=live.silence_ms,
+                )
+
+            assistant = LiveAssistant(
+                capture=capture,
+                provider=provider,
+                session_config=session_config,
+                tool_runner=runner,
+                tts=voice,
+                stt=speech,
+                speaker=SystemSpeaker(),
+                locale=pack,
+                # Every turn's tokens, priced, to `usage_log`: what
+                # `live-assistant cost` reads and what the spending limits
+                # are checked against.
+                tracker=UsageTracker(
+                    UsageRepo(database),
+                    Pricing.load(),
+                    provider=live.provider,
+                    model=live.model,
+                    limits=limits,
+                ),
+                announcements=announcements,
+                idle_close_seconds=live.idle_close_seconds,
+                resume_minutes=live.resume_minutes,
+                on_state=screen.state if icon is None else _each(screen.state, icon.state),
+                on_turn=_finished(screen),
+                # The toggle's news goes to the state machine first - off is
+                # an interruption - and to the screen after it.
+                on_mode=screen.hands_free
+                if icon is None
+                else _each(screen.hands_free, icon.hands_free),
+                # The session's opening and closing: the meter on the line
+                # and the icon (plan.md 4.2), and at the close the level
+                # the server heard the microphone at (D18).
+                on_session=_session_told(screen, icon, capture),
+            )
+            if icon is not None:
+                icon.start()
+            ticking = asyncio.create_task(scheduler.run())
+            try:
+                await assistant.run()
+            finally:
+                ticking.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await ticking
+                if icon is not None:
+                    icon.stop()
+    finally:
+        await player.aclose()
+        await weather.aclose()
+        await reader.aclose()
+        await telegram.close()
+        database.close()
+
+
+def _system_prompt(memory: UserMemory, pack: Locale) -> str:
+    """What the model is told at every session open (plan.md 4.5).
+
+    The frozen rules first, byte for byte; then the pack's sentence naming
+    the language the user speaks (D19 - measured 2026-09-18: without it a
+    short "Saat kaç" is heard as Hindi), when the pack has one; then the
+    user's facts (section 3.7); the time last of all, so that "yarın" is a
+    date (4.2). `prompts.py` stays without an import, and no language is
+    named in the code.
+    """
+    from assistant.agent.prompts import SYSTEM_PROMPT
+    from assistant.tools.reminders import current_time_line
+
+    rules = SYSTEM_PROMPT
+    if pack.user_language_rule:
+        rules = f"{rules}\n\n{pack.user_language_rule}"
+    return f"{memory.prompt(rules)}\n\n{current_time_line()}"
+
+
+def _session_told(
+    screen: StatusLine, icon: Tray | None, capture: LiveCapture
+) -> Callable[[bool], None]:
+    """Who hears that a session opened or closed: the line's meter, the
+    icon's, and - at the close - the level the microphone sent (D18), so
+    that a quiet one is said on the screen once."""
+
+    def told(open: bool) -> None:
+        screen.session(open)
+        if icon is not None:
+            icon.session(open)
+        if not open:
+            screen.microphone_level(capture.level_dbfs)
+
+    return told
 
 
 async def _model_checked(
-    provider: LLMProvider,
+    provider: LiveProvider,
     settings: Settings,
     verdicts: SettingsRepo,
     pack: Locale,

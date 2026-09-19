@@ -2,20 +2,24 @@
 
 Every model can be asked a question; not every model can be asked to *do*
 something. A tool is offered to it as a schema, and a model that was never
-trained on that shape writes the answer in prose instead of calling the tool
-- and nothing complains. `ModelInfo.supports_tools` has said `None`, "nobody
-has tested this", since phase 1. The whole of the secretary depends on the
+trained on that shape answers in words instead of calling the tool - and
+nothing complains. `ModelInfo.supports_tools` has said `None`, "nobody has
+tested this", since phase 1. The whole of the secretary depends on the
 answer being yes, so the setup wizard does not take the user's choice of
-model until this file has asked it once, and `live-assistant run` asks again when
-the answer is a week old (the provider may have changed the model since).
+model until this file has asked it once, and `live-assistant run` asks
+again when the answer is a week old (the provider may have changed the
+model since).
 
-**One request, one tool, one question.** The tool is the canonical
+**One session, one tool, one question.** The tool is the canonical
 `get_current_time(city)` of section 3.2; the question is one that ought to
 make the model reach for it - "what time is it in Istanbul" cannot be
-answered from memory. A model that emits a call to that tool passes,
-whatever it says beside it; a model that only writes fails, with the reason
-written down. The time to the first token is measured on the way, because
-the request is being made anyway and section 3.3 wants the number.
+answered from memory - and it is sent as a text turn, so the probe needs no
+microphone. A model that emits a call to that tool passes, whatever it
+says beside it; a model that only talks fails, with the reason written
+down. The time to the model's first sign of life is measured on the way,
+because the session is open anyway and section 3.3 wants the number. The
+session is closed the moment the verdict is in: the call is never
+answered, and a spoken answer is not listened to.
 
 **The question comes from the locale pack.** Section 3.2 wanted it Turkish
 so that one request checks both tool calling and understanding the user's
@@ -33,18 +37,29 @@ cannot be read: a verdict of unknown age is no verdict.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
 from typing import Any
 
-from assistant.live.base import LLMProvider, Message, ToolSpec
+from assistant.live.base import (
+    AudioChunk,
+    Closed,
+    LiveProvider,
+    OutputText,
+    ProviderError,
+    SessionConfig,
+    ToolCallEvent,
+    ToolSpec,
+    TurnComplete,
+)
 from assistant.store.repos import SettingsRepo
 
 __all__ = [
     "CANONICAL_TOOL_TEST",
-    "MAX_TOKENS",
     "NO_TOOL_CALL",
+    "PROBE_SECONDS",
     "PROBE_TTL_SECONDS",
     "QUESTION",
     "ProbeResult",
@@ -73,9 +88,11 @@ CANONICAL_TOOL_TEST = ToolSpec(
 # that the only good answer is to call the tool.
 QUESTION = "What time is it in Istanbul?"
 
-# The model is asked for a tool call, not an essay; this is room for a call
-# and a sentence beside it, and a ceiling on what a chatty model can cost.
-MAX_TOKENS = 256
+# How long the verdict is waited for, from the open. A live model that is
+# going to call the tool does so within a second or two (measured 2026-09-18:
+# session open 0.6-0.8 s, text turn to the call about a second); past this
+# the provider is reported as not answering, which is its own sentence.
+PROBE_SECONDS = 10.0
 
 # How long a verdict is trusted (section 3.2). A provider may swap what is
 # behind a model name; a week is short enough to notice and long enough not
@@ -89,35 +106,54 @@ NO_TOOL_CALL = "no_tool_call_emitted"
 @dataclass(frozen=True, slots=True)
 class ProbeResult:
     """What one probe found: whether the model called the tool, why not if
-    it did not, and how long the first token took in milliseconds - `None`
-    when nothing at all arrived."""
+    it did not, and how long its first sign of life - a call, a word, a
+    sound - took in milliseconds from the session being asked for; `None`
+    when nothing at all arrived. The field keeps the name the `settings` rows were written with."""
 
     ok: bool
     reason: str | None = None
     first_token_ms: float | None = None
 
 
-async def probe_tool_support(provider: LLMProvider, model: str, *, question: str) -> ProbeResult:
-    """Asks `model` the question with the canonical tool on offer, and
-    reports whether it called it.
+async def probe_tool_support(provider: LiveProvider, model: str, *, question: str) -> ProbeResult:
+    """Opens a session on `model` with the canonical tool on offer, asks the
+    question as a text turn, and reports whether the model called the tool.
 
-    The stream is read to its end rather than left the moment the call
-    shows up: a model that calls the tool ends its answer right after, and
-    a generator abandoned halfway is a connection nobody closed. A refusal
-    by the provider comes out as the `ProviderError` the adapter raised -
-    the caller has a sentence for that, and it is not "cannot call tools".
+    The session is listened to until the verdict is in: the call, or the end
+    of the turn without one, or the server hanging up. A call to some other
+    tool is not a pass and not the end either - what the model says beside
+    the call does not count, and the turn ends on its own. A refusal by the
+    provider comes out as the `ProviderError` the adapter raised - the caller
+    has a sentence for that, and it is not "cannot call tools"; an answer
+    that does not come within `PROBE_SECONDS` is one too, in the same
+    currency, so the caller needs no second sentence.
     """
+    config = SessionConfig(model=model, tools=[CANONICAL_TOOL_TEST], transcripts=False)
     started = time.perf_counter()
     first_token_ms: float | None = None
     called = False
 
-    async for delta in provider.stream(
-        [Message.user(question)], [CANONICAL_TOOL_TEST], model=model, max_tokens=MAX_TOKENS
-    ):
-        if first_token_ms is None and (delta.text or delta.tool_call is not None):
-            first_token_ms = (time.perf_counter() - started) * 1000
-        if delta.tool_call is not None and delta.tool_call.name == CANONICAL_TOOL_TEST.name:
-            called = True
+    try:
+        async with asyncio.timeout(PROBE_SECONDS), provider.connect(config) as session:
+            await session.send_text(question)
+            async for event in session.events():
+                if first_token_ms is None and isinstance(
+                    event, ToolCallEvent | OutputText | AudioChunk
+                ):
+                    first_token_ms = (time.perf_counter() - started) * 1000
+                if isinstance(event, ToolCallEvent) and event.call.name == CANONICAL_TOOL_TEST.name:
+                    called = True
+                    break
+                if isinstance(event, TurnComplete):
+                    break
+                if isinstance(event, Closed):
+                    if event.error is not None:
+                        raise event.error
+                    break
+    except TimeoutError as waited:
+        raise ProviderError(
+            f"no answer from {model!r} within {PROBE_SECONDS:.0f} s", kind="timeout"
+        ) from waited
 
     if called:
         return ProbeResult(ok=True, first_token_ms=first_token_ms)

@@ -47,7 +47,7 @@ from assistant.store.repos import args_hash
 if TYPE_CHECKING:
     from assistant.config import LimitSettings
 
-__all__ = ["DUPLICATE_CALL", "TOOL_LIMIT_REACHED", "Limits", "TurnGuard"]
+__all__ = ["DUPLICATE_CALL", "TOOL_LIMIT_REACHED", "TOOL_TIMED_OUT", "Limits", "TurnGuard"]
 
 # What a call over the limit is answered with - as a tool result, in the
 # model's own channel, rather than as a user message it might argue with.
@@ -60,16 +60,24 @@ DUPLICATE_CALL = (
     "try a different approach."
 )
 
+# A tool that had not answered after `turn_seconds` was stopped (plan.md
+# D9). Said in the tool's channel like the two above: a model left waiting
+# for a result that is not coming waits in silence for ever.
+TOOL_TIMED_OUT = "The tool took longer than {seconds:g} seconds and was stopped."
+
 
 @dataclass(frozen=True, slots=True)
 class Limits:
     """The table of section 3.11, as numbers.
 
     `tool_calls_per_turn`, `duplicate_calls` and `output_tokens` are the
-    loop's (`TurnGuard`, `core.py`). `turn_seconds` is the `THINKING`
-    timeout of `app.py`. `daily_usd`, `monthly_usd` and `hard_stop` are read
-    by `usage/tracker.py`. `duplicate_window_sec` is the gate's, for the "you
-    already did this" sentence.
+    loop's (`TurnGuard`, `core.py`); `output_tokens` is unused on the live
+    path, where the answer is speech and no request carries a token limit.
+    `turn_seconds` was the `THINKING` timeout of the old `app.py` and is now
+    `ToolRunner`'s watchdog on one tool call (plan.md D9). `daily_usd`,
+    `monthly_usd` and `hard_stop` are read by `usage/tracker.py`.
+    `duplicate_window_sec` is the gate's, for the "you already did this"
+    sentence.
     """
 
     tool_calls_per_turn: int = 8

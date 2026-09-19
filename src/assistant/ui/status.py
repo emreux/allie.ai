@@ -18,10 +18,21 @@ event loop fifty milliseconds, and a status line is not what should spend them.
 constants below are the end of the chain (section 3.12), as everywhere else.
 A state is looked up by its own name, so a state added in a later phase needs
 a line in `TEXT` and nothing else.
+
+**The session and its minutes are on the line** (plan.md section 4.2). A live
+model bills by the minute while a session is open, silent or not (D5), so
+the line says whether one is open and how many whole minutes this run has
+had one open - cost awareness is a feature now, not a report. Counted here
+from the clock, since the usage rows do not carry minutes yet (L1.5).
+Whether the server hears the microphone loudly enough is said too (D18):
+a level under `QUIET_DBFS` is the first thing to check when the model
+answers in another language, and it is said once, on a line that stays.
 """
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from types import TracebackType
 
 from rich.console import Console
@@ -30,11 +41,11 @@ from rich.table import Table
 from rich.text import Text
 
 from assistant.app import State, Turn
-from assistant.audio.capture import DEFAULT_TOGGLE_HOTKEY
+from assistant.audio.capture import DEFAULT_TOGGLE_HOTKEY, QUIET_DBFS
 from assistant.live.base import Usage
 from assistant.locales import Locale
 
-__all__ = ["TEXT", "StatusLine", "label_key", "spell"]
+__all__ = ["TEXT", "SessionMinutes", "StatusLine", "label_key", "spell"]
 
 # The mark at the start of the line. A shape rather than a word, so it needs
 # no translation and no room.
@@ -58,29 +69,39 @@ TEXT: dict[str, str] = {
     ),
     "loading_speech": "Loading the speech model...",
     "checking_model": "Checking whether the model calls tools...",
+    "state_off": "off",
     "state_idle": "ready",
-    "state_listening": "listening",
-    "state_transcribing": "writing it down",
-    "state_thinking": "thinking",
+    "state_user_speaking": "hearing you",
     "state_confirming": "waiting for a yes or no",
     "state_speaking": "speaking",
     "state_announcing": "reminding",
+    "state_reconnecting": "reconnecting",
     "you_said": "you",
     "it_said": "assistant",
     "turn_cost": "{input} in, {output} out",
     "not_caught": "(not caught - confidence {confidence})",
+    # The session and the meter (plan.md 4.2): shown beside the state.
+    "session_open": "session open",
+    "session_closed": "session closed",
+    "session_minutes": "{minutes} min this run",
+    # Said once when the server heard the microphone too quietly (D18); the
+    # numbers are dBFS, written by the code.
+    "microphone_quiet": (
+        "The microphone is quiet: {level} dBFS reached the server, under {quiet} dBFS. "
+        "Raise its level or boost in Windows' sound settings."
+    ),
 }
 
 # Colour is the fastest way to read a line somebody is not looking at, and it
 # carries nothing that is not also written in words - a terminal without colour
 # loses no information. A state with no colour of its own is simply plain.
 _STYLES: dict[State, str] = {
+    State.OFF: "dim",
     State.IDLE: "dim",
-    State.LISTENING: "bold green",
-    State.TRANSCRIBING: "yellow",
-    State.THINKING: "cyan",
+    State.USER_SPEAKING: "bold green",
     State.CONFIRMING: "bold yellow",
     State.SPEAKING: "magenta",
+    State.RECONNECTING: "yellow",
 }
 
 
@@ -93,6 +114,40 @@ def spell(hotkey: str) -> str:
     return "+".join(part.strip("<>").capitalize() for part in hotkey.split("+"))
 
 
+class SessionMinutes:
+    """How long sessions have been open since the program started.
+
+    What a live model bills by (plan.md D5, D8): the time between open and
+    close, silent or not, whole minutes when shown. Told the same thing the
+    state machine tells everyone (`on_session`), and safe to be told it
+    twice - a reconnect may say "open" while open.
+    """
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._opened_at: float | None = None
+        self._before = 0.0
+
+    @property
+    def open(self) -> bool:
+        return self._opened_at is not None
+
+    @property
+    def minutes(self) -> float:
+        """Minutes so far, the session under way included."""
+        seconds = self._before
+        if self._opened_at is not None:
+            seconds += self._clock() - self._opened_at
+        return seconds / 60
+
+    def told(self, open: bool) -> None:
+        if open and self._opened_at is None:
+            self._opened_at = self._clock()
+        elif not open and self._opened_at is not None:
+            self._before += self._clock() - self._opened_at
+            self._opened_at = None
+
+
 class StatusLine:
     """One line of terminal, kept up to date with what the assistant is doing."""
 
@@ -102,9 +157,15 @@ class StatusLine:
         *,
         toggle: str = DEFAULT_TOGGLE_HOTKEY,
         console: Console | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._said = {key: locale.say(key, default) for key, default in TEXT.items()}
         self._console = console if console is not None else Console()
+        # The meter (plan.md 4.2): closed until the state machine opens one.
+        self._session = SessionMinutes(clock=clock)
+        # Whether the quiet-microphone line has been said for the current
+        # stretch of quiet; a level that is loud enough arms it again.
+        self._said_quiet = False
 
         keys = {"toggle": spell(toggle)}
         # Both are built up front; only which one is shown changes when the
@@ -157,8 +218,35 @@ class StatusLine:
         """
         self._console.print(Text(message, style="yellow"))
 
+    @property
+    def minutes(self) -> float:
+        """Minutes of open session this run, the one under way included."""
+        return self._session.minutes
+
     def state(self, state: State) -> None:
         self._show(self._said[label_key(state)], _STYLES.get(state, ""))
+
+    def session(self, open: bool) -> None:
+        """Says whether a session is open - the meter is running - and
+        redraws the line with the minutes so far."""
+        self._session.told(open)
+        message, style, hint = self._line
+        self._show(message, style, hint=hint)
+
+    def microphone_level(self, dbfs: float | None) -> None:
+        """What the server heard, in dBFS, when a stream closed (D18): a
+        quiet microphone is said once, on a line that stays, and said again
+        only after it was heard loudly enough in between. `None` - nothing
+        was sent - says nothing."""
+        if dbfs is None:
+            return
+        if dbfs >= QUIET_DBFS:
+            self._said_quiet = False
+            return
+        if self._said_quiet:
+            return
+        self._said_quiet = True
+        self.notice(self._said["microphone_quiet"].format(level=round(dbfs), quiet=int(QUIET_DBFS)))
 
     def hands_free(self, listening: bool) -> None:
         """Says whether the microphone is live.
@@ -211,9 +299,16 @@ class StatusLine:
 
         line = Text()
         line.append(f"{BULLET} {message}", style=style or None)
+        line.append(f"  {self._meter()}", style="dim")
         if hint:
             line.append(f"    {self._hint}", style="dim")
         self._live.update(line, refresh=True)
+
+    def _meter(self) -> str:
+        """`session open · 3 min this run` - whole minutes, never rounded up."""
+        which = self._said["session_open" if self._session.open else "session_closed"]
+        minutes = self._said["session_minutes"].format(minutes=int(self._session.minutes))
+        return f"{which} · {minutes}"
 
     def _spent(self, usage: Usage) -> str:
         """What the turn cost, or nothing at all for a turn that failed.

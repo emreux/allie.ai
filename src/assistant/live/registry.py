@@ -10,10 +10,9 @@ The key is fetched from the Windows Credential Manager at the last moment and
 handed straight to the adapter. It is never stored on the entry, never logged,
 and never written back to disk.
 
-No adapter is registered yet: the Gemini Live adapter is task L1.1 and the
-OpenAI one is L2.1 (plan.md section 7), and each arrives with its line in
-`ADAPTERS`. Until then every catalogue entry names an adapter this build
-does not have, and is refused in the sentence written for that.
+One adapter is registered: Gemini Live (plan.md D1, L1.1). The OpenAI one
+arrives with its line in `ADAPTERS` in L2.1; until then a catalogue entry
+naming it is refused in the sentence written for that.
 """
 
 from __future__ import annotations
@@ -25,7 +24,8 @@ from importlib import resources
 from pathlib import Path
 
 from assistant.config import load_api_key
-from assistant.live.base import LLMProvider
+from assistant.live.base import LiveProvider
+from assistant.live.gemini_live import GeminiLive
 
 __all__ = [
     "ADAPTERS",
@@ -80,12 +80,12 @@ class ProviderEntry:
 # An adapter takes its entry as well as the key: an adapter that speaks to
 # an address reads `base_url` from it. Passing the whole row keeps that from
 # becoming a signature change.
-AdapterBuilder = Callable[[ProviderEntry, str], LLMProvider]
+AdapterBuilder = Callable[[ProviderEntry, str], LiveProvider]
 
-# Filled by L1.1 (`gemini_live`) and L2.1 (the OpenAI adapter). Empty, every
-# entry of the catalogue is `UnsupportedAdapterError` and the wizard offers
-# nothing - which is the truth about this build.
-ADAPTERS: dict[str, AdapterBuilder] = {}
+# What this build can construct. L2.1 adds the OpenAI adapter's line.
+ADAPTERS: dict[str, AdapterBuilder] = {
+    "gemini_live": lambda entry, key: GeminiLive(api_key=key),
+}
 
 # The adapters that speak to an address rather than to one vendor. An entry
 # of one of these with no `base_url` in the catalogue has to be asked for
@@ -121,7 +121,7 @@ def create_provider(
     api_key: str | None = None,
     catalog: Mapping[str, ProviderEntry] | None = None,
     base_url: str | None = None,
-) -> LLMProvider:
+) -> LiveProvider:
     """Builds the adapter for `provider_id`.
 
     `api_key` is for the setup command, which has to validate a key before it

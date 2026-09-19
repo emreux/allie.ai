@@ -212,6 +212,40 @@ def test_the_live_table_defaults_to_the_session_policy_of_the_plan(config_home: 
     ) == ("", True, 60.0, 10.0, True)
 
 
+def test_the_server_s_turn_detection_is_left_to_the_server_by_default(config_home: Path) -> None:
+    """ADR-001: the fast setting clips a paused sentence, so the two knobs
+    ship empty - the owner tunes them in the real run."""
+    live = load_settings().live
+
+    assert (live.end_sensitivity, live.silence_ms) == ("", 0)
+
+
+def test_the_two_turn_detection_knobs_round_trip_through_the_file(config_home: Path) -> None:
+    save_settings(Settings(live=LiveSettings(end_sensitivity="HIGH", silence_ms=300)))
+
+    live = load_settings().live
+
+    assert (live.end_sensitivity, live.silence_ms) == ("HIGH", 300)
+
+
+def test_the_sensitivity_is_read_in_any_letter_case_and_kept_in_capitals() -> None:
+    """The adapter builds the SDK's constant name from it; `high` typed by
+    hand is the same setting."""
+    assert LiveSettings(end_sensitivity="low").end_sensitivity == "LOW"
+    assert LiveSettings(end_sensitivity=" High ").end_sensitivity == "HIGH"
+    assert LiveSettings(end_sensitivity="").end_sensitivity == ""
+
+
+def test_a_sensitivity_the_server_does_not_have_is_refused() -> None:
+    with pytest.raises(ValueError, match="HIGH, LOW"):
+        LiveSettings(end_sensitivity="medium")
+
+
+def test_a_negative_silence_is_refused() -> None:
+    with pytest.raises(ValueError, match="0 or more"):
+        LiveSettings(silence_ms=-1)
+
+
 def test_the_live_table_round_trips_through_the_file(config_home: Path) -> None:
     chosen = LiveSettings(
         primary="gemini:gemini-3.8-live",
@@ -220,6 +254,8 @@ def test_the_live_table_round_trips_through_the_file(config_home: Path) -> None:
         idle_close_seconds=30.0,
         resume_minutes=5.0,
         transcripts=False,
+        end_sensitivity="LOW",
+        silence_ms=300,
     )
     save_settings(Settings(live=chosen))
 

@@ -6,20 +6,21 @@ and an adapter comes back. What it must never do is fail vaguely - "KeyError:
 'gemini'" tells the owner nothing, while "no API key stored, run live-assistant
 setup" tells them exactly what to do next.
 
-No adapter is registered in this build (plan.md L0): the tests that build
-one build it through an adapter registered here, and the claim that every
-shipped entry can be built returns with the Gemini Live adapter (L1.1).
+One adapter is registered (plan.md L1.1, Gemini Live), so every entry the
+catalogue offers can be built for real - only the network is never touched.
+The tests about key handling build through an inert adapter registered
+here, so that they say nothing about any vendor.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 
 from assistant.config import store_api_key
-from assistant.live.base import Delta, LLMProvider, Message, ModelInfo, ToolSpec
+from assistant.live.base import LiveProvider, ModelInfo
+from assistant.live.gemini_live import GeminiLive
 from assistant.live.registry import (
     ADAPTERS,
     MissingAPIKeyError,
@@ -32,30 +33,16 @@ from assistant.live.registry import (
     needs_base_url,
 )
 from tests.conftest import MemoryKeyring
+from tests.live_contract import FakeLiveProvider
 
 
-class Inert:
+class Inert(FakeLiveProvider):
     """A provider that satisfies the protocol and reaches nothing."""
 
     id = "inert"
 
-    async def validate_credentials(self) -> bool:
-        return True
-
     async def list_models(self) -> list[ModelInfo]:
         return []
-
-    async def stream(
-        self,
-        messages: list[Message],
-        tools: list[ToolSpec],
-        *,
-        model: str,
-        temperature: float | None = None,
-        max_tokens: int = 4096,
-    ) -> AsyncIterator[Delta]:
-        return
-        yield
 
 
 @pytest.fixture
@@ -64,7 +51,7 @@ def keys_handed_over(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     paths that are about key handling can be exercised without a vendor."""
     seen: list[str] = []
 
-    def build(entry: ProviderEntry, api_key: str) -> LLMProvider:
+    def build(entry: ProviderEntry, api_key: str) -> LiveProvider:
         seen.append(api_key)
         return Inert()
 
@@ -92,6 +79,21 @@ def test_the_shipped_catalogue_offers_gemini_live() -> None:
     assert entry.adapter == "gemini_live"
     assert entry.requires_key is True
     assert entry.key_url is not None
+
+
+def test_every_provider_offered_can_actually_be_built() -> None:
+    """A catalogue entry naming an adapter from a later phase is a dead end
+    the user only discovers after typing their key in."""
+    for provider_id, entry in load_catalog().items():
+        assert entry.adapter in ADAPTERS, f"{provider_id} names a missing adapter"
+
+
+def test_every_shipped_entry_builds_with_a_key(vault: MemoryKeyring) -> None:
+    """Built for real, adapter and all - only the network is never touched."""
+    for provider_id in load_catalog():
+        provider = create_provider(provider_id, api_key="k")
+
+        assert isinstance(provider, LiveProvider), provider_id
 
 
 def test_every_paid_provider_says_where_its_key_comes_from() -> None:
@@ -134,6 +136,15 @@ def test_a_field_from_a_later_version_does_not_break_the_catalogue(tmp_path: Pat
 # --------------------------------------------------------------------------
 # Building an adapter
 # --------------------------------------------------------------------------
+
+
+def test_the_gemini_entry_builds_the_gemini_live_adapter() -> None:
+    """Plan.md D1: the first adapter, from the packaged catalogue, under the
+    vendor's own id."""
+    provider = create_provider("gemini", api_key="AIza-not-a-real-key")
+
+    assert isinstance(provider, GeminiLive)
+    assert provider.id == "gemini"
 
 
 def test_the_key_comes_from_the_credential_manager(
@@ -182,14 +193,11 @@ def test_an_unknown_provider_names_the_ones_that_exist() -> None:
 
 def test_a_provider_whose_adapter_is_not_written_yet_says_so() -> None:
     """A catalogue entry naming an adapter this build does not have must
-    fail clearly, not after the user has typed their key in. In this build
-    that is every shipped entry (plan.md L0): the adapter is L1.1."""
+    fail clearly, not after the user has typed their key in."""
     catalog = {"proxy": ProviderEntry(id="proxy", adapter="litellm", display_name="Proxy")}
 
     with pytest.raises(UnsupportedAdapterError, match="litellm"):
         create_provider("proxy", api_key="test-key", catalog=catalog)
-    with pytest.raises(UnsupportedAdapterError, match="gemini_live"):
-        create_provider("gemini", api_key="test-key")
 
 
 def test_an_empty_address_from_the_caller_is_no_address(
@@ -198,7 +206,7 @@ def test_an_empty_address_from_the_caller_is_no_address(
     """An addressed adapter given an empty address refuses in a sentence
     that names the fix, as a missing key does."""
 
-    def build(entry: ProviderEntry, api_key: str) -> LLMProvider:
+    def build(entry: ProviderEntry, api_key: str) -> LiveProvider:
         if not entry.base_url:
             raise MissingBaseURLError(f"no server address stored for {entry.id!r}")
         return Inert()
