@@ -23,6 +23,7 @@ from assistant import shell
 from assistant.messaging.whatsapp import (
     APP_HOME,
     IMAGE,
+    IMAGES,
     SCHEME,
     VK_RETURN,
     WhatsApp,
@@ -39,6 +40,9 @@ class FakeScreen:
         self, *, windows: set[int] | None = None, foreground: Sequence[str | None] = ()
     ) -> None:
         self.windows: set[int] = set(windows or ())
+        # What the process owning `windows` is called: `WhatsApp.exe` unless
+        # a test says it is the Store's newer name.
+        self.image = IMAGE
         # Consumed one per check; the last answer repeats.
         self.foreground: list[str | None] = list(foreground)
         self.pressed: list[int] = []
@@ -53,7 +57,8 @@ class FakeScreen:
         self.polls += 1
         if self.appears_after is not None and self.polls > self.appears_after:
             self.windows.add(7)
-        return set(self.windows) if image.casefold() == IMAGE.casefold() else set()
+        # The windows belong to one process, called `self.image`.
+        return set(self.windows) if image.casefold() == self.image.casefold() else set()
 
     def foreground_image(self) -> str | None:
         self.threads.append(threading.current_thread())
@@ -226,6 +231,42 @@ async def test_a_foreground_that_comes_to_whatsapp_late_is_waited_for() -> None:
     )
 
     assert await late.send(PHONE, "hi") == "pressed"
+
+
+# --------------------------------------------------------------------------
+# The application's two names
+# --------------------------------------------------------------------------
+
+
+def test_the_store_application_of_december_2025_is_known_by_its_newer_name() -> None:
+    """Measured on the owner's machine, 2026-09-19: the Store's WhatsApp
+    runs as `WhatsApp.Root.exe`, and a send that waited for `WhatsApp.exe`
+    saw no window in 10 s while the window was open on the screen."""
+    assert IMAGES == ("WhatsApp.exe", "WhatsApp.Root.exe")
+    assert IMAGES[0] == IMAGE
+
+
+async def test_a_running_app_under_the_newer_name_is_handed_the_link_at_once(
+    launched: list[str],
+) -> None:
+    screen = FakeScreen(windows={1}, foreground=["WhatsApp.Root.exe"])
+    screen.image = "WhatsApp.Root.exe"
+
+    outcome = await whatsapp(screen).send(PHONE, "hi")
+
+    assert outcome == "pressed"
+    assert launched == [send_link(PHONE, "hi")]
+    assert screen.pressed == [VK_RETURN]
+
+
+async def test_enter_goes_to_the_newer_name_in_front_too(launched: list[str]) -> None:
+    """Both checks before the key accept either name; a stranger in front
+    still keeps the key."""
+    screen = FakeScreen(windows={1}, foreground=["WhatsApp.Root.exe", "Code.exe"])
+    screen.image = "WhatsApp.Root.exe"
+
+    assert await whatsapp(screen).send(PHONE, "hi") == "placed"
+    assert screen.pressed == []
 
 
 # --------------------------------------------------------------------------

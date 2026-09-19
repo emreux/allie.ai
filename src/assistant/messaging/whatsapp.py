@@ -58,6 +58,7 @@ __all__ = [
     "COMPOSE_SECONDS",
     "FRONT_SECONDS",
     "IMAGE",
+    "IMAGES",
     "MAX_TEXT_CHARS",
     "POLL_SECONDS",
     "SCHEME",
@@ -74,8 +75,13 @@ SCHEME = "whatsapp"
 APP_HOME = "whatsapp:"
 SEND_LINK = "whatsapp://send?phone={phone}&text={text}"
 
-# What the application's process is called, from the Store.
-IMAGE = "WhatsApp.exe"
+# What the application's process is called. The Store's WhatsApp of
+# December 2025 runs as `WhatsApp.Root.exe` (measured on the owner's
+# machine, 2026-09-19: a send that waited for `WhatsApp.exe` saw no window
+# in 10 s while the window was open on the screen); older builds, and the
+# one the docstrings name, are `WhatsApp.exe`. Either is the application.
+IMAGES = ("WhatsApp.exe", "WhatsApp.Root.exe")
+IMAGE = IMAGES[0]
 
 # A cold WebView2 host showing its window; then web.whatsapp.com loading
 # inside it before it will take a link; then the send link bringing the
@@ -88,6 +94,7 @@ COMPOSE_SECONDS = 1.5
 POLL_SECONDS = 0.1
 
 VK_RETURN = 0x0D
+_NAMES = frozenset(image.casefold() for image in IMAGES)
 
 # Longer than this and the confirm question, which reads the text out loud
 # before anything is sent, would take a minute to ask. A constant rather
@@ -186,7 +193,10 @@ class WhatsApp:
         return "pressed"
 
     async def _running(self) -> bool:
-        return bool(await asyncio.to_thread(self._screen.windows_named, IMAGE))
+        return await asyncio.to_thread(self._has_window)
+
+    def _has_window(self) -> bool:
+        return any(self._screen.windows_named(image) for image in IMAGES)
 
     async def _appeared(self) -> bool:
         return await self._within(self._wake_seconds, self._running)
@@ -196,7 +206,7 @@ class WhatsApp:
 
     async def _in_front(self) -> bool:
         image = await asyncio.to_thread(self._screen.foreground_image)
-        return image is not None and Path(image).name.casefold() == IMAGE.casefold()
+        return image is not None and Path(image).name.casefold() in _NAMES
 
     async def _within(self, seconds: float, condition: Callable[[], Awaitable[bool]]) -> bool:
         """Whether `condition` comes true within `seconds`, asked every poll."""
