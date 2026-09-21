@@ -818,6 +818,7 @@ dependencies = [
     { name = "httpx" },
     { name = "httpx2" },
     { name = "keyring" },
+    { name = "livekit-wakeword" },
     { name = "loguru" },
     { name = "numpy" },
     { name = "pillow" },
@@ -857,6 +858,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx2", specifier = ">=2.12.0" },
     { name = "keyring", specifier = ">=25.7.0" },
+    { name = "livekit-wakeword", specifier = ">=0.2.1" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "numpy", specifier = ">=2.5.2" },
     { name = "pillow", specifier = ">=12.3.0" },
@@ -885,6 +887,19 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "ruff", specifier = ">=0.16.4" },
     { name = "types-python-dateutil", specifier = ">=2.9.0.20260807" },
+]
+
+[[package]]
+name = "livekit-wakeword"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "onnxruntime" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/34/29/30cadc7d03635f76dfe7aeb0359cd0e2fdccaf08ed101936dac0c26dc6f7/livekit_wakeword-0.2.1.tar.gz", hash = "sha256:cf2d9cf4867812c06788f64c15e49abd909d9d6291f0a13f1c3f9cb649fa6127", size = 1891150, upload-time = "2026-05-20T22:47:23.94Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/ee/47127a539b73361e141d578ab0e3afdeae16918048359f378cf1c7116a2e/livekit_wakeword-0.2.1-py3-none-any.whl", hash = "sha256:9576e103b6777619342ef9cce1d47727c39f1d6b7b564238f3467ace4d10a99a", size = 1911465, upload-time = "2026-05-20T22:47:21.824Z" },
 ]
 
 [[package]]
