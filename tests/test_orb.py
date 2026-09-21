@@ -41,6 +41,10 @@ def test_idle_is_blue_hearing_green_speaking_purple_confirming_yellow() -> None:
     assert COLOURS[State.SPEAKING] == COLOURS[State.ANNOUNCING] == (155, 89, 182)
     assert COLOURS[State.CONFIRMING] == (241, 196, 15)
     assert COLOURS[State.RECONNECTING] == (243, 156, 18)
+    # Asleep (D21): the idle blue at a third, and slower than off - a
+    # breath, not a mechanism.
+    assert COLOURS[State.SLEEPING] == (40, 90, 150)
+    assert SPEED[State.SLEEPING] < SPEED[State.OFF]
     assert COLOURS[State.OFF] == (110, 110, 110)
 
 

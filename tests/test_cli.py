@@ -39,6 +39,7 @@ from assistant.agent.policy import NO_SUCH_TOOL
 from assistant.agent.prompts import SEARCH_RULE, SYSTEM_PROMPT
 from assistant.app import State, Turn
 from assistant.audio import capture
+from assistant.audio import wake as wake_module
 from assistant.config import (
     KEYRING_SERVICE,
     AudioSettings,
@@ -50,6 +51,7 @@ from assistant.config import (
     Settings,
     STTSettings,
     TTSSettings,
+    WakeSettings,
     config_path,
     load_settings,
     save_settings,
@@ -271,17 +273,46 @@ class FakeLiveCapture:
     with, the switch the tray is handed, and the level it reports."""
 
     def __init__(
-        self, *, microphone: Any, endpoint: Any, barge_in: bool, on_level: Any = None
+        self,
+        *,
+        microphone: Any,
+        endpoint: Any,
+        barge_in: bool,
+        on_level: Any = None,
+        wake: Any = None,
+        on_wake: Any = None,
     ) -> None:
         self.microphone = microphone
         self.endpoint = endpoint
         self.barge_in = barge_in
         self.on_level = on_level
+        self.wake = wake
+        self.on_wake = on_wake
         self.level_dbfs: float | None = None
         self.toggles = 0
 
     def toggle(self) -> None:
         self.toggles += 1
+
+
+class FakeWakeWord:
+    """Stands in for `audio/wake.py`'s `LiveKitWakeWord`: what it was built with."""
+
+    built: ClassVar[list[tuple[Path, float]]] = []
+
+    def __init__(self, model_path: Path, *, threshold: float) -> None:
+        self.name = model_path.stem
+        self.loaded = False
+        FakeWakeWord.built.append((model_path, threshold))
+
+    async def load(self) -> None:
+        self.loaded = True
+
+    def feed(self, chunk: Any) -> bool:
+        return False
+
+    def reset(self) -> None:
+        return
 
 
 @pytest.fixture
@@ -373,6 +404,8 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
     monkeypatch.setattr(system.AppCatalog, "load", catalogue_here)
     monkeypatch.setattr(capture, "SystemMicrophone", FakeMicrophone)
     monkeypatch.setattr(capture, "LiveCapture", capture_here)
+    FakeWakeWord.built.clear()
+    monkeypatch.setattr(wake_module, "LiveKitWakeWord", FakeWakeWord)
     monkeypatch.setattr(core, "ToolRunner", runner_here)
     monkeypatch.setattr(app, "LiveAssistant", FakeAssistant)
     monkeypatch.setattr(db, "database_path", lambda: tmp_path / "data" / "assistant.db")
@@ -586,6 +619,49 @@ def test_the_two_session_switches_can_be_flipped(configured: Path, wiring: Wirin
 
     config = session_of(wiring)
     assert (config.affective_dialog, config.compress_context) == (True, False)
+
+
+def test_the_wake_word_is_built_from_the_wake_table_and_handed_to_the_capture(
+    configured: Path, wiring: Wiring, tmp_path: Path
+) -> None:
+    """`[wake]` on: the detector is built from the table - the model file,
+    the threshold - loaded, and handed to the capture; the greeting reaches
+    the state machine."""
+    model = tmp_path / "hey_friday.onnx"
+    model.write_bytes(b"\x00")
+    configured_with(wake=WakeSettings(enabled=True, model=str(model), threshold=0.61))
+
+    main(["run", "--terminal"])
+
+    [capture] = wiring.captures
+    assert isinstance(capture.wake, FakeWakeWord)
+    assert capture.wake.loaded
+    assert FakeWakeWord.built == [(model, 0.61)]
+    [parts] = wiring.built
+    assert parts["greeting"] == "chime"
+
+
+def test_with_the_wake_word_off_the_capture_has_no_detector(
+    configured: Path, wiring: Wiring
+) -> None:
+    """The default until the model ships (2026-09-21): today's product."""
+    main(["run", "--terminal"])
+
+    [capture] = wiring.captures
+    assert capture.wake is None
+    assert FakeWakeWord.built == []
+
+
+def test_a_wake_model_that_is_not_there_is_a_sentence(
+    configured: Path, wiring: Wiring, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    configured_with(wake=WakeSettings(enabled=True, model=str(tmp_path / "nope.onnx")))
+
+    assert main(["run", "--terminal"]) == 1
+
+    out = capsys.readouterr().out
+    assert "nope.onnx" in out
+    assert wiring.captures == []
 
 
 def test_web_search_off_leaves_the_prompt_as_it_was(configured: Path, wiring: Wiring) -> None:

@@ -74,6 +74,7 @@ TEXT: dict[str, str] = {
     "checking_model": "Checking whether the model calls tools...",
     "state_off": "off",
     "state_idle": "ready",
+    "state_sleeping": "asleep",
     "state_user_speaking": "hearing you",
     "state_confirming": "waiting for a yes or no",
     "state_speaking": "speaking",
@@ -101,6 +102,7 @@ TEXT: dict[str, str] = {
 _STYLES: dict[State, str] = {
     State.OFF: "dim",
     State.IDLE: "dim",
+    State.SLEEPING: "dim",
     State.USER_SPEAKING: "bold green",
     State.CONFIRMING: "bold yellow",
     State.SPEAKING: "magenta",

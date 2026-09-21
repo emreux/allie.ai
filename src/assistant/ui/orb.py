@@ -90,6 +90,8 @@ CAPS: tuple[tuple[int, int], ...] = ((3, 0), (3, 1), (2, 0))
 COLOURS: dict[State, RGB] = {
     State.IDLE: (58, 160, 255),
     State.OFF: (110, 110, 110),
+    # Asleep: the idle blue at a third (D21).
+    State.SLEEPING: (40, 90, 150),
     State.USER_SPEAKING: (46, 204, 113),
     State.SPEAKING: (155, 89, 182),
     State.ANNOUNCING: (155, 89, 182),
@@ -102,6 +104,7 @@ COLOURS: dict[State, RGB] = {
 SPEED: dict[State, float] = {
     State.IDLE: 1.0,
     State.OFF: 0.3,
+    State.SLEEPING: 0.15,
     State.USER_SPEAKING: 1.6,
     State.SPEAKING: 2.5,
     State.ANNOUNCING: 2.5,

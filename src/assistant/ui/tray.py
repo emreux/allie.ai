@@ -70,6 +70,7 @@ _GREY = (140, 140, 140)
 _COLOURS: dict[State, tuple[int, int, int]] = {
     State.OFF: _GREY,
     State.IDLE: _GREY,
+    State.SLEEPING: (70, 90, 120),
     State.USER_SPEAKING: (46, 204, 113),
     State.RECONNECTING: (241, 196, 15),
     State.CONFIRMING: (243, 156, 18),

@@ -270,3 +270,24 @@ async def test_without_a_queue_nothing_changes() -> None:
         await stopped(task)
 
     assert not capture.started
+
+
+async def test_a_reminder_is_said_while_asleep_and_it_sleeps_on() -> None:
+    """The dentist does not wait for the wake word (D21): said in the local
+    voice between turns as ever, and the machine goes back to sleep."""
+    queue = AnnounceQueue()
+    capture = FakeCapture(asleep=True)
+    speaker = FakeSpeaker()
+    assistant = assistant_with(capture=capture, speaker=speaker, announcements=queue)
+
+    task = await started(assistant, capture)
+    try:
+        assert assistant.state is State.SLEEPING
+        queue.put(Announcement(text="Diş hekimi yarın onda.", reminder_id=1))
+        await until(lambda: speaker.heard == "Diş hekimi yarın onda.")
+        await until(lambda: assistant.state is State.SLEEPING)
+    finally:
+        await stopped(task)
+
+    assert capture.sleeps == 0
+    assert capture.asleep

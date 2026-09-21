@@ -29,7 +29,7 @@ import contextlib
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import keyring
 import platformdirs
@@ -64,6 +64,7 @@ __all__ = [
     "Settings",
     "TTSSettings",
     "ToolSettings",
+    "WakeSettings",
     "config_dir",
     "config_path",
     "data_dir",
@@ -233,6 +234,37 @@ class LiveSettings(BaseModel):
         are real model names, and splitting on every colon would truncate them.
         """
         return self.primary.partition(":")[2]
+
+
+class WakeSettings(BaseModel):
+    """The `[wake]` table (plan.md D21): the phrase the assistant sleeps
+    behind. `model` is the stem of a classifier this program ships
+    (`assistant/wake/<model>.onnx`) or an absolute path to one of the
+    user's own; `threshold` is the score that counts as the phrase, set
+    from the owner's own recordings (`scripts/wake_eval.py`); `greeting`
+    is what is done when it wakes - the chime, the pack's sentence in the
+    local voice, or nothing. `enabled = false` is the product as it was:
+    the doorman opens a session on any voice.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    # Off until the trained classifier ships (F6a, the owner's Colab run,
+    # 2026-09-21): on, the default would name a file that is not there and
+    # every run would stop at the door. Flip to `True` with the model.
+    enabled: bool = False
+    model: str = "hey_friday"
+    # A placeholder until the eval and the owner's clips say otherwise
+    # (F6a step 7).
+    threshold: float = 0.5
+    greeting: Literal["chime", "sentence", "none"] = "chime"
+
+    @field_validator("threshold")
+    @classmethod
+    def _must_be_a_score(cls, value: float) -> float:
+        if not 0 < value < 1:
+            raise ValueError(f"expected a score between 0 and 1, got {value}")
+        return value
 
 
 class LocaleSettings(BaseModel):
@@ -486,6 +518,7 @@ class Settings(BaseSettings):
     )
 
     live: LiveSettings = LiveSettings()
+    wake: WakeSettings = WakeSettings()
     locale: LocaleSettings = LocaleSettings()
     audio: AudioSettings = AudioSettings()
     stt: STTSettings = STTSettings()

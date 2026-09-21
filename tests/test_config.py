@@ -30,6 +30,7 @@ from assistant.config import (
     STTSettings,
     TelegramSettings,
     ToolSettings,
+    WakeSettings,
     WebSettings,
     config_dir,
     config_path,
@@ -464,3 +465,39 @@ def test_the_recogniser_defaults_to_local(config_home: Path) -> None:
 def test_an_unknown_recogniser_is_refused() -> None:
     with pytest.raises(ValueError, match="local, gemini"):
         STTSettings(provider="azure")
+
+
+# --------------------------------------------------------------------------
+# [wake] (plan.md D21)
+# --------------------------------------------------------------------------
+
+
+def test_the_wake_table_has_the_owner_s_defaults(config_home: Path) -> None:
+    """Off until the trained model ships (F6a, the owner's Colab run,
+    2026-09-21): a default that names a file that is not there would stop
+    every run. The rest is the owner's choice: the chime, `hey_friday`."""
+    wake = load_settings().wake
+
+    assert (wake.enabled, wake.model, wake.greeting) == (False, "hey_friday", "chime")
+    assert 0 < wake.threshold < 1
+
+
+def test_the_wake_table_round_trips_through_the_file(config_home: Path) -> None:
+    chosen = WakeSettings(
+        enabled=True, model=r"C:\models\mine.onnx", threshold=0.62, greeting="sentence"
+    )
+    save_settings(Settings(wake=chosen))
+
+    assert load_settings().wake == chosen
+
+
+def test_a_threshold_outside_the_unit_interval_is_refused() -> None:
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        WakeSettings(threshold=1.5)
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        WakeSettings(threshold=0)
+
+
+def test_a_greeting_the_program_does_not_have_is_refused() -> None:
+    with pytest.raises(ValueError):
+        WakeSettings(greeting="bell")  # type: ignore[arg-type]

@@ -98,6 +98,8 @@ confirm_again = "Anlayamadım. Evet mi, hayır mı?"
 daily_over = "Bugünkü harcama sınırını aştın."
 monthly_over = "Bu ayki harcama sınırını aştın."
 spend_stopped = "Harcama sınırı aşıldı, bu yüzden modele sormuyorum."
+# Uyandırma kelimesinden sonra, yerel sesle ([wake] greeting = "sentence").
+wake_greeting = "Sizi dinliyorum efendim."
 # Asked before a remembered fact is removed (2.10); {fact} is the fact as
 # the model named it. The hint on how to answer is added after it.
 forget_confirm = "'{fact}' kaydı unutulacak."
@@ -143,6 +145,7 @@ loading_speech = "Konuşma modeli yükleniyor..."
 checking_model = "Modelin araç çağırıp çağıramadığı sınanıyor..."
 state_off = "kapalı"
 state_idle = "hazır"
+state_sleeping = "uyuyor"
 state_user_speaking = "seni duyuyor"
 state_confirming = "onay bekliyor"
 state_speaking = "konuşuyor"

@@ -142,6 +142,8 @@ confirm_again = "I did not catch that. Yes, or no?"
 daily_over = "You have gone over today's spending limit."
 monthly_over = "You have gone over this month's spending limit."
 spend_stopped = "The spending limit has been passed, so I am not asking the model."
+# Said in the local voice at the wake word when [wake] greeting = "sentence".
+wake_greeting = "I am listening."
 # Asked before something the user asked to be remembered is forgotten again;
 # {fact} is the fact itself. "Say yes or no." is added after it.
 forget_confirm = "'{fact}' will be forgotten."
@@ -193,6 +195,8 @@ loading_speech = "Loading the speech model..."
 checking_model = "Checking whether the model calls tools..."
 state_off = "off"
 state_idle = "ready"
+# Behind the wake word (D21): only the phrase is listened for.
+state_sleeping = "asleep"
 state_user_speaking = "hearing you"
 state_confirming = "waiting for a yes or no"
 state_speaking = "speaking"

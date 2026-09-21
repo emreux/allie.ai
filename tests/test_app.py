@@ -50,6 +50,7 @@ from assistant.app import (
     IDLE_CLOSE_SECONDS,
     MAX_OPEN_FAILURES,
     RESUME_MINUTES,
+    Greeting,
     LiveAssistant,
     NoVoiceError,
     State,
@@ -57,6 +58,7 @@ from assistant.app import (
     read_answer,
 )
 from assistant.audio.player import PlaybackError
+from assistant.audio.wake import CHIME_RATE, chime
 from assistant.live.base import (
     AudioChunk,
     AuthenticationError,
@@ -102,6 +104,7 @@ TURKISH = Locale(
         "daily_over": "Bugünkü harcama sınırını aştın.",
         "monthly_over": "Bu ayki harcama sınırını aştın.",
         "spend_stopped": "Harcama sınırı aşıldı, bu yüzden modele sormuyorum.",
+        "wake_greeting": "Sizi dinliyorum efendim.",
     },
     yes_words=("evet", "tamam"),
     no_words=("hayır", "iptal"),
@@ -152,12 +155,20 @@ class FakeCapture:
         answers: Sequence[Audio | None] = (),
         listening: bool = True,
         hold: float = 0.0,
+        asleep: bool = False,
     ) -> None:
         self.on_speech: Callable[[bool], None] | None = None
         self.on_mode: Callable[[bool], None] | None = None
         self.started = False
         self.listening = listening
         self.taking = False
+        # The wake word (D21): a capture built asleep has a detector, and
+        # the state machine's hook for the phrase; how often it was put
+        # back to sleep.
+        self.on_wake: Callable[[], None] | None = None
+        self.asleep = asleep
+        self.wake_word = asleep
+        self.sleeps = 0
         # Whether the state machine has told it to stop listening, and how many
         # times it has been told either thing.
         self.deaf = False
@@ -180,6 +191,9 @@ class FakeCapture:
 
     def start(self) -> None:
         self.started = True
+        # As `LiveCapture` does: asleep only with the switch on (D21).
+        if not self.listening:
+            self.asleep = False
         if self.on_mode is not None:
             self.on_mode(self.listening)
 
@@ -190,6 +204,8 @@ class FakeCapture:
         self.listening = not self.listening
         if not self.listening:
             self._end()
+        else:
+            self.asleep = False
         if self.on_mode is not None:
             self.on_mode(self.listening)
 
@@ -212,6 +228,23 @@ class FakeCapture:
     def close(self) -> None:
         self.closed += 1
         self._end()
+
+    def sleep(self) -> None:
+        self.sleeps += 1
+        self.asleep = True
+        self._end()
+
+    def wake(self) -> None:
+        self.asleep = False
+        if self._stream is None:
+            self._stream = asyncio.Queue()
+            self.taking = True
+
+    def call_wake(self) -> None:
+        """The room said the phrase: the stream opens, the loop is told."""
+        self.wake()
+        if self.on_wake is not None:
+            self.on_wake()
 
     def _end(self) -> None:
         stream, self._stream = self._stream, None
@@ -466,6 +499,7 @@ def assistant_with(
     on_mode: Callable[[bool], None] | None = None,
     on_session: Callable[[bool], None] | None = None,
     config: Callable[[], SessionConfig] | None = None,
+    greeting: Greeting = "chime",
 ) -> LiveAssistant:
     """An assistant over fakes. `events` scripts the one session the plain
     provider opens: the model answers with them and hangs up politely."""
@@ -490,6 +524,7 @@ def assistant_with(
         on_turn=on_turn,
         on_mode=on_mode,
         on_session=on_session,
+        greeting=greeting,
     )
 
 
@@ -1923,3 +1958,142 @@ async def test_a_machine_with_no_voice_at_all_says_so_before_it_listens() -> Non
         await assistant_with(capture=capture, tts=FakeTTS(installed=[])).begin()
 
     assert not capture.started
+
+
+# --------------------------------------------------------------------------
+# Asleep behind the wake word (D21)
+# --------------------------------------------------------------------------
+
+
+async def test_a_sleeping_capture_starts_the_machine_asleep() -> None:
+    capture = FakeCapture(asleep=True)
+    seen: list[State] = []
+    assistant = assistant_with(capture=capture, on_state=seen.append)
+
+    await assistant.begin()
+
+    assert assistant.state is State.SLEEPING
+    assert seen[-1] is State.SLEEPING
+    assert capture.on_wake is not None
+
+
+async def test_the_wake_word_chimes_and_opens_a_session_at_once() -> None:
+    """ "Hey Friday" is the moment the assistant really listens: the chime
+    says so, and the session is opened now rather than at the first
+    sentence, so that "hey Friday, saat kaç" is not answered a socket late."""
+    capture = FakeCapture(asleep=True)
+    speaker = FakeSpeaker()
+    assistant = assistant_with(capture=capture, speaker=speaker, provider=Provider(Room()))
+    await assistant.begin()
+
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    assert speaker.rates == [CHIME_RATE]
+    assert b"".join(speaker.played) == chime()
+    assert capture.switches == [True, False]  # deaf for the chime, then listening
+    assert assistant.state is State.IDLE
+    assert not capture.asleep
+
+
+async def test_the_greeting_can_be_a_sentence_in_the_local_voice() -> None:
+    capture = FakeCapture(asleep=True)
+    speaker = FakeSpeaker()
+    assistant = assistant_with(
+        capture=capture, speaker=speaker, provider=Provider(Room()), greeting="sentence"
+    )
+    await assistant.begin()
+
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    assert speaker.heard == TURKISH.ui["wake_greeting"]
+    assert assistant.state is State.IDLE
+
+
+async def test_the_greeting_can_be_nothing() -> None:
+    capture = FakeCapture(asleep=True)
+    speaker = FakeSpeaker()
+    assistant = assistant_with(
+        capture=capture, speaker=speaker, provider=Provider(Room()), greeting="none"
+    )
+    await assistant.begin()
+
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    assert speaker.played == []
+
+
+async def test_silence_after_waking_puts_it_back_to_sleep() -> None:
+    capture = FakeCapture(asleep=True)
+    seen: list[State] = []
+    assistant = assistant_with(
+        capture=capture, provider=Provider(Room()), idle_close_seconds=0.03, on_state=seen.append
+    )
+    await assistant.begin()
+
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+    await until(lambda: not assistant.session_open)
+    await assistant.settled()
+
+    assert capture.sleeps == 1
+    assert capture.asleep
+    assert assistant.state is State.SLEEPING
+    assert seen[-1] is State.SLEEPING
+
+
+async def test_switching_on_from_off_wakes_it() -> None:
+    capture = FakeCapture(asleep=True, listening=False)
+    assistant = assistant_with(capture=capture)
+    await assistant.begin()
+    assert assistant.state is State.OFF
+
+    capture.toggle()
+
+    assert assistant.state is State.IDLE
+    assert not capture.asleep
+
+
+async def test_switching_off_while_asleep_is_off_and_on_again_is_awake() -> None:
+    capture = FakeCapture(asleep=True)
+    assistant = assistant_with(capture=capture)
+    await assistant.begin()
+
+    capture.toggle()
+    assert assistant.state is State.OFF
+    capture.toggle()
+    assert assistant.state is State.IDLE
+
+
+async def test_the_wake_word_is_ignored_unless_asleep() -> None:
+    """A detection that arrives after the key already woke it changes nothing."""
+    capture = FakeCapture(asleep=True)
+    speaker = FakeSpeaker()
+    assistant = assistant_with(capture=capture, speaker=speaker)
+    await assistant.begin()
+    capture.toggle()
+    capture.toggle()
+    assert assistant.state is State.IDLE
+
+    capture.call_wake()
+    await assistant.settled()
+
+    assert speaker.played == []
+
+
+async def test_without_a_wake_word_the_idle_close_does_not_sleep() -> None:
+    """Today's product, unchanged: the session closes and the door stays open."""
+    capture = FakeCapture()
+    assistant = assistant_with(capture=capture, provider=Provider(Room()), idle_close_seconds=0.03)
+    await assistant.begin()
+
+    capture.speak()
+    capture.quiet()
+    await until(lambda: assistant.session_open)
+    await until(lambda: not assistant.session_open)
+    await assistant.settled()
+
+    assert capture.sleeps == 0
+    assert assistant.state is State.IDLE

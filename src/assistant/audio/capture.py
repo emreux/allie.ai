@@ -58,6 +58,7 @@ from loguru import logger
 
 from assistant.audio.resample import Resampler
 from assistant.audio.vad import PREROLL_SECONDS, Endpoint, Segmenter
+from assistant.audio.wake import WakeDetector
 from assistant.stt.base import SAMPLE_RATE, Audio, dbfs, to_pcm16
 
 __all__ = [
@@ -455,6 +456,13 @@ class LiveCapture(HandsFree):
     the model hears another language (ADR-001 section 5). The level of every
     block sent is also handed to `on_level` as it goes, for the window's orb
     (plan.md D20).
+
+    **Asleep, only the wake word is heard** (D21). With a detector, the
+    capture starts asleep: every block goes to it and to nothing else - no
+    doorman, no pre-roll, no stream - until it hears the phrase; then the
+    stream opens and `on_wake` is told, and the doorman is back at the
+    door. `sleep()` is the state machine's call at the idle close; the key
+    from off wakes it.
     """
 
     def __init__(
@@ -468,6 +476,8 @@ class LiveCapture(HandsFree):
         on_level: OnLevel | None = None,
         listening: bool = True,
         barge_in: bool = True,
+        wake: WakeDetector | None = None,
+        on_wake: OnEvent | None = None,
     ) -> None:
         super().__init__(
             microphone=microphone,
@@ -487,6 +497,14 @@ class LiveCapture(HandsFree):
         # Not called at the door or while paused - what is not sent is not
         # heard, and the picture should say so.
         self.on_level = on_level
+
+        # The wake word (D21): while asleep, blocks go to this detector and
+        # nowhere else; when it hears the phrase, `on_wake` is called on the
+        # event loop, after the stream has been opened. `None` is today's
+        # product: never asleep, the doorman at the door.
+        self._wake = wake
+        self.on_wake = on_wake
+        self._asleep = False
 
         self._barge_in = barge_in
         # Which of the two rules applies: known once the microphone is open,
@@ -527,6 +545,16 @@ class LiveCapture(HandsFree):
             return None
         return 20 * math.log10(math.sqrt(self._level_squares / self._level_samples))
 
+    @property
+    def asleep(self) -> bool:
+        """Whether only the wake word is listened for."""
+        return self._asleep
+
+    @property
+    def wake_word(self) -> bool:
+        """Whether there is a wake word to sleep behind at all."""
+        return self._wake is not None
+
     def start(self) -> None:
         """Opens the microphone, learns which way it was opened, starts
         watching the key, and says which mode it is in - in that order, so
@@ -542,6 +570,11 @@ class LiveCapture(HandsFree):
         )
         self._toggle.watch(on_press=self.toggle, on_release=_nothing)
         self._switched(self._on.is_set())
+        # Asleep from the start, when there is a phrase to wake on and the
+        # switch is on (D21); the key from off, later, wakes it (`_switched`).
+        if self._wake is not None and self._on.is_set():
+            self._asleep = True
+            self._wake.reset()
 
     def mute(self) -> None:
         """Deaf while the assistant speaks - in half duplex. In full duplex
@@ -560,6 +593,29 @@ class LiveCapture(HandsFree):
 
     def resume(self) -> None:
         self._paused = False
+
+    def sleep(self) -> None:
+        """Back behind the wake word: the stream ends, the pre-roll and the
+        doorman are dropped, the detector starts afresh. Nothing without a
+        detector."""
+        if self._wake is None:
+            return
+        self.close()
+        self._recent.clear()
+        self._recent_samples = 0
+        self._speaking = False
+        self._endpoint.reset()
+        self._wake.reset()
+        self._asleep = True
+
+    def wake(self) -> None:
+        """Awake: the stream opens now - whoever hears `on_wake` opens a
+        session and reads it - and the doorman starts from silence."""
+        if not self._asleep:
+            return
+        self._asleep = False
+        self._endpoint.reset()
+        self._open()
 
     def close(self) -> None:
         """Ends the stream. The session closed on silence or was hung up;
@@ -587,6 +643,10 @@ class LiveCapture(HandsFree):
     # ----------------------------------------------------------------------
 
     def _switched(self, listening: bool) -> None:
+        if listening:
+            # The key from off means the user is about to talk: awake, not
+            # asleep (D21).
+            self._asleep = False
         if not listening:
             # Off is a hang-up (section 4.4 rule 4): the half sentence in the
             # queue is not the opening of the next session, and the blocks
@@ -602,6 +662,19 @@ class LiveCapture(HandsFree):
         pre-roll, and the onset reported."""
         if self._deaf_samples > 0:
             self._deaf_samples -= len(chunk)
+            return
+
+        if self._asleep and self._wake is not None:
+            # Asleep: the detector alone hears the room (D21). Nothing is
+            # queued and nothing remembered - a room that is not listened to.
+            if self._wake.feed(chunk):
+                logger.info(
+                    "woken by the wake word ({score:.2f})",
+                    score=getattr(self._wake, "score", 0.0),
+                )
+                self.wake()
+                if self.on_wake is not None:
+                    self.on_wake()
             return
 
         finished = self._endpoint.feed(chunk)

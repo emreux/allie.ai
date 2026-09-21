@@ -1728,3 +1728,110 @@ async def test_without_a_hook_the_stream_is_what_it_was() -> None:
     with talk:
         await heard_by_loop(microphone, block(0.9))
         assert await taken(talk) == pcm(0.9)
+
+
+# --------------------------------------------------------------------------
+# Asleep behind the wake word (plan.md D21)
+# --------------------------------------------------------------------------
+
+
+class FakeWake:
+    """A detector that wakes on the block the test names."""
+
+    name = "hey_friday"
+
+    def __init__(self, wake_on: int | None = None) -> None:
+        self.heard: list[Audio] = []
+        self.resets = 0
+        self.wake_on = wake_on
+
+    async def load(self) -> None:
+        return
+
+    def feed(self, chunk: Audio) -> bool:
+        self.heard.append(chunk)
+        return self.wake_on is not None and len(self.heard) == self.wake_on
+
+    def reset(self) -> None:
+        self.resets += 1
+
+
+async def test_with_a_detector_the_capture_starts_asleep_and_feeds_only_it() -> None:
+    """Asleep: the detector hears every block, the doorman none, nothing
+    is queued and no pre-roll is kept - a room that is not listened to."""
+    wake = FakeWake()
+    talk, _, microphone, endpoint = live(wake=wake)
+
+    with talk:
+        assert talk.asleep
+        assert talk.wake_word
+        await heard_by_loop(microphone, block(0.5), block(0.5))
+
+        assert len(wake.heard) == 2
+        assert endpoint.heard == []
+        assert not talk.taking
+
+
+async def test_the_phrase_wakes_it_opens_the_stream_and_tells_the_loop() -> None:
+    wake = FakeWake(wake_on=2)
+    woken: list[bool] = []
+    talk, _, microphone, endpoint = live(wake=wake, on_wake=lambda: woken.append(True))
+
+    with talk:
+        await heard_by_loop(microphone, block(0.5), block(0.5))
+
+        assert woken == [True]
+        assert not talk.asleep
+        assert talk.taking
+        assert endpoint.resets >= 1
+
+        await heard_by_loop(microphone, block(0.5))
+        assert len(endpoint.heard) == 1  # awake: the doorman hears now
+        assert len(wake.heard) == 2  # and the detector no longer does
+
+
+async def test_sleep_closes_the_stream_and_forgets_what_was_heard() -> None:
+    wake = FakeWake(wake_on=1)
+    talk, _, microphone, _ = live(wake=wake)
+
+    with talk:
+        await heard_by_loop(microphone, block(0.5), block(0.5))
+        assert talk.taking
+
+        talk.sleep()
+
+        assert talk.asleep
+        assert not talk.taking
+        assert wake.resets >= 1
+        assert [chunk async for chunk in talk.chunks()] == []
+
+
+async def test_the_key_wakes_it_and_off_is_still_off() -> None:
+    """Pressed on from off, the user is about to talk: awake, not asleep."""
+    talk, toggle, microphone, endpoint = live(wake=FakeWake())
+
+    with talk:
+        toggle.press()
+        await asyncio.sleep(0)
+        assert not talk.listening
+        await heard_by_loop(microphone, block(0.5))
+        assert endpoint.heard == []
+
+        toggle.press()
+        await asyncio.sleep(0)
+        assert talk.listening
+        assert not talk.asleep
+        await heard_by_loop(microphone, block(0.5))
+        assert len(endpoint.heard) == 1
+
+
+async def test_without_a_detector_nothing_sleeps() -> None:
+    talk, _, microphone, endpoint = live()
+
+    with talk:
+        assert not talk.asleep
+        assert not talk.wake_word
+        talk.sleep()
+        assert not talk.asleep
+        await heard_by_loop(microphone, block(0.5))
+        assert len(endpoint.heard) == 1

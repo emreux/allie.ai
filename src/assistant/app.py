@@ -59,6 +59,13 @@ one line goes to the session so the model knows what was said. Listening
 switched off does not silence it: the assistant was asked not to listen,
 not to forget the dentist. A voice that starts cuts it off like an answer.
 
+**Asleep, only the wake word is heard** (D21, 2026-09-21). With a wake word
+configured the machine starts `SLEEPING`: the capture feeds the detector
+and nothing else, no session can open. The phrase wakes it - a chime or a
+sentence, then a session at once - and the idle close puts it back to
+sleep. The key still switches it off and on; on from off is awake. A
+reminder is said asleep as it is said off.
+
 **What a turn cost is written down** (rule 6) when the model is done with
 it: what the user said and the model answered, the audio minutes both ways,
 the tokens when the provider reports them, priced by the tracker. A turn is
@@ -98,7 +105,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from loguru import logger
 
@@ -106,6 +113,7 @@ from assistant.agent.core import ToolRunner
 from assistant.agent.prompts import ANNOUNCED_PREFIX
 from assistant.announce.queue import Announcement, AnnounceQueue
 from assistant.audio.player import LivePlayback, PlaybackError, Speaker
+from assistant.audio.wake import CHIME_RATE, chime
 from assistant.config import LiveSettings
 from assistant.live.base import (
     AudioChunk,
@@ -171,10 +179,12 @@ class State(StrEnum):
     The set of plan.md section 4.2. `USER_SPEAKING` is the local detector's
     opinion and nothing else - the server decides where a turn ends - and is
     there for the screen. `OFF` is a state rather than a mode, because a
-    session is something the switch closes.
+    session is something the switch closes. `SLEEPING` is behind the wake
+    word (D21): the microphone open, only the phrase listened for.
     """
 
     OFF = "off"
+    SLEEPING = "sleeping"
     IDLE = "idle"
     USER_SPEAKING = "user_speaking"
     SPEAKING = "speaking"
@@ -220,6 +230,10 @@ FILLERS = ("One moment, let me check...",)
 # product: a filler said at 300 ms held a ready answer back for two seconds.
 FILLER_DELAY_SECONDS = 1.0
 
+# What is done at the wake word (D21): the chime, a sentence in the local
+# voice, or nothing. The config validates the word; this is its type.
+Greeting = Literal["chime", "sentence", "none"]
+
 # The last link of the chain of section 3.12: what is said when no locale pack
 # offers a translation. Keys are unique across the whole project - the pack has
 # one table of sentences, and `test_locales.py` checks that no two modules
@@ -240,6 +254,9 @@ TEXT: dict[str, str] = {
     "daily_over": "You have gone over today's spending limit.",
     "monthly_over": "You have gone over this month's spending limit.",
     "spend_stopped": "The spending limit has been passed, so I am not asking the model.",
+    # Said in the local voice at the wake word when `[wake] greeting =
+    # "sentence"` (D21); the chime is the default.
+    "wake_greeting": "I am listening.",
 }
 
 
@@ -369,8 +386,28 @@ class Capture(Protocol):
     # once at `start`, with the mode it began in. Off is a hang-up.
     on_mode: Callable[[bool], None] | None
 
+    # Called on the event loop when the wake word was heard (D21), after
+    # the stream has been opened. `None` where there is no wake word.
+    on_wake: Callable[[], None] | None
+
     @property
     def listening(self) -> bool: ...
+
+    @property
+    def asleep(self) -> bool:
+        """Whether only the wake word is listened for."""
+        ...
+
+    @property
+    def wake_word(self) -> bool:
+        """Whether there is a wake word to sleep behind."""
+        ...
+
+    def sleep(self) -> None:
+        """Back behind the wake word: the stream ends; nothing without one."""
+        ...
+
+    def wake(self) -> None: ...
 
     @property
     def taking(self) -> bool: ...
@@ -433,6 +470,7 @@ class LiveAssistant:
         idle_close_seconds: float = IDLE_CLOSE_SECONDS,
         resume_minutes: float = RESUME_MINUTES,
         filler_delay: float = FILLER_DELAY_SECONDS,
+        greeting: Greeting = "chime",
         on_state: Callable[[State], None] | None = None,
         on_turn: Callable[[Turn], None] | None = None,
         on_mode: Callable[[bool], None] | None = None,
@@ -440,6 +478,8 @@ class LiveAssistant:
     ) -> None:
         self._capture = capture
         self._provider = provider
+        # What is done at the wake word (D21).
+        self._greeting = greeting
         # What a session is opened with, read at every open: the prompt
         # carries the user's facts and the time, and both move.
         self._session_config = session_config
@@ -525,6 +565,7 @@ class LiveAssistant:
         self._voice = await self._pick_voice()
         self._capture.on_speech = self._speech
         self._capture.on_mode = self._mode_changed
+        self._capture.on_wake = self._woken
 
         # Said out loud to whoever is watching, rather than merely being true:
         # the status line went on showing the last thing it was told until
@@ -532,6 +573,10 @@ class LiveAssistant:
         # starting is one nobody speaks to.
         self._enter(State.IDLE if self._capture.listening else State.OFF)
         self._capture.start()
+        if self._capture.asleep:
+            # Behind the wake word (D21): the door is not watched until the
+            # phrase is heard.
+            self._enter(State.SLEEPING)
 
     async def run(self) -> None:
         """Opens the door and keeps it, until something stops the program.
@@ -626,6 +671,34 @@ class LiveAssistant:
         on its own, and closes the stream the doorman opened with it."""
         if self._conversation is not None:
             self._conversation.cancel()
+
+    def _woken(self) -> None:
+        """The wake word was heard (D21): awake, greeted, and listening for
+        real - the session opens now, not at the first sentence, so that
+        "hey Friday, saat kaç" is not answered a socket late. A detection
+        that arrives while awake changes nothing."""
+        if self._state is not State.SLEEPING:
+            return
+        self._active()
+        self._enter(State.IDLE)
+        self._spawn(self._greet_and_listen())
+
+    async def _greet_and_listen(self) -> None:
+        if self._greeting == "sentence":
+            await self._speak(self._said["wake_greeting"])
+            self._rest()
+        elif self._greeting == "chime":
+            await self._sound(chime(), CHIME_RATE)
+        if self._conversation is None and self._capture.listening and not self._capture.asleep:
+            self._conversation = self._spawn(self._converse())
+
+    def _doze(self) -> None:
+        """Back to sleep, when there is a wake word to sleep behind (D21):
+        the idle close of D5 is where the day's conversations end."""
+        if not self._capture.wake_word or self._state is State.OFF:
+            return
+        self._capture.sleep()
+        self._enter(State.SLEEPING)
 
     # ----------------------------------------------------------------------
     # One session, from the onset that opened it to its close
@@ -845,6 +918,7 @@ class LiveAssistant:
                     "session closed after {seconds:g} s of silence", seconds=self._idle_close
                 )
                 self._hang_up()
+                self._doze()
                 return
             self._active()
 
@@ -1068,9 +1142,10 @@ class LiveAssistant:
     def _free(self) -> bool:
         """Between turns: no voice, no answer owed or being given, no tool,
         no sound. Off counts - the assistant was asked not to listen, not
-        to forget the dentist."""
+        to forget the dentist. Asleep counts too: the wake word does not
+        gate the dentist."""
         return (
-            self._state in (State.IDLE, State.OFF)
+            self._state in (State.IDLE, State.OFF, State.SLEEPING)
             and not self._turn.open
             and self._runner.pending == 0
             and not self._playback.playing
@@ -1140,6 +1215,21 @@ class LiveAssistant:
             if self._playing == 0:
                 self._capture.unmute()
 
+    async def _sound(self, pcm16: bytes, sample_rate: int) -> None:
+        """A sound of the assistant's own - the chime - through the same
+        bracket as a sentence: deaf for it on a microphone that needs it."""
+        if self._playing == 0:
+            self._capture.mute()
+        self._playing += 1
+        try:
+            await self._speaker.play(_one_buffer(pcm16), sample_rate=sample_rate)
+        except PlaybackError as failure:
+            logger.warning("playback failed: {problem}", problem=failure)
+        finally:
+            self._playing -= 1
+            if self._playing == 0:
+                self._capture.unmute()
+
     def _start_answer(self) -> None:
         """The model's voice - or the filler in its place - is about to play:
         deaf for it on a microphone that needs it (D18), and `SPEAKING`."""
@@ -1173,10 +1263,14 @@ class LiveAssistant:
 
     def _rest(self) -> None:
         """Back to the door: `IDLE`, or `USER_SPEAKING` when the doorman is
-        still hearing a voice. Off stays off."""
+        still hearing a voice; `SLEEPING` while the capture is asleep (D21).
+        Off stays off."""
         if self._state is State.OFF:
             return
-        resting = State.USER_SPEAKING if self._user_speaking else State.IDLE
+        if self._capture.asleep:
+            resting = State.SLEEPING
+        else:
+            resting = State.USER_SPEAKING if self._user_speaking else State.IDLE
         if self._state is not resting:
             self._enter(resting)
 
@@ -1313,3 +1407,8 @@ async def _one(said: str) -> AsyncIterator[str]:
     """A sentence of the assistant's own - a question, a reminder, a failure
     - as a stream of one."""
     yield said
+
+
+async def _one_buffer(pcm16: bytes) -> AsyncIterator[bytes]:
+    """A sound of the assistant's own - the chime - as a stream of one."""
+    yield pcm16

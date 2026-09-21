@@ -821,6 +821,7 @@ def _run(*, device: str | None = None, tray: bool = False, terminal: bool = Fals
 
     from assistant.app import NoVoiceError
     from assistant.audio.capture import MicrophoneUnavailableError, device_choice
+    from assistant.audio.wake import WakeModelMissingError
     from assistant.live.registry import RegistryError
     from assistant.logs import setup_logging
     from assistant.messaging.contacts import ContactsFileError
@@ -850,10 +851,12 @@ def _run(*, device: str | None = None, tray: bool = False, terminal: bool = Fals
     # What the user can fix and the program cannot: a key that is gone, a
     # voice that is not installed, weights that could not be fetched, a
     # microphone that would not open, a memory file edited into something
-    # that does not parse. Each is one sentence and exit code 1. Anything
-    # else is a bug in this project and keeps its traceback.
+    # that does not parse, a wake-word model that is not where the
+    # settings say. Each is one sentence and exit code 1. Anything else is
+    # a bug in this project and keeps its traceback.
     fixable = (
         RegistryError,
+        WakeModelMissingError,
         NoVoiceError,
         ModelUnavailableError,
         MicrophoneUnavailableError,
@@ -1050,6 +1053,7 @@ async def _talk(
     from assistant.audio.player import SystemSpeaker
     from assistant.audio.vad import Endpoint, SileroVAD
     from assistant.audio.volume import SystemVolume
+    from assistant.audio.wake import LiveKitWakeWord, wake_model_path
     from assistant.live.base import SessionConfig
     from assistant.live.registry import MissingAPIKeyError, create_provider
     from assistant.machine import Win32Machine
@@ -1109,6 +1113,13 @@ async def _talk(
     # is better found out about before Whisper has been loaded.
     live = settings.live
     provider = create_provider(live.provider, base_url=live.base_url or None)
+    # The wake word (D21), resolved before anything slow is loaded: a model
+    # that is not there is a sentence now, not after Whisper.
+    wake_word: LiveKitWakeWord | None = None
+    if settings.wake.enabled:
+        wake_word = LiveKitWakeWord(
+            wake_model_path(settings.wake.model), threshold=settings.wake.threshold
+        )
     # What the user asked to be kept, and the assistant's name (section
     # 3.7, 2.10): read once here, written by the two tools below, and read
     # into the prompt at every session open. Before the database for the
@@ -1320,6 +1331,8 @@ async def _talk(
         # doorman now (D5), asked about every block.
         await speech.load()
         await detector.load()
+        if wake_word is not None:
+            await wake_word.load()
 
         # The one gate, built once and handed to the one place a tool is
         # run from: the tool round (plan.md 4.4 rule 3). A second gate
@@ -1345,6 +1358,8 @@ async def _talk(
             endpoint=Endpoint(detector),
             barge_in=live.barge_in,
             on_level=screen.level,
+            # Asleep behind the wake word until the phrase is heard (D21).
+            wake=wake_word,
         )
         # The window's listen button is this switch (D20).
         if switch is not None:
@@ -1405,6 +1420,7 @@ async def _talk(
             announcements=announcements,
             idle_close_seconds=live.idle_close_seconds,
             resume_minutes=live.resume_minutes,
+            greeting=settings.wake.greeting,
             on_state=screen.state if icon is None else _each(screen.state, icon.state),
             on_turn=_finished(screen),
             # The toggle's news goes to the state machine first - off is

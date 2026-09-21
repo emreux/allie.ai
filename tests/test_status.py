@@ -109,6 +109,7 @@ def test_every_state_the_machine_can_be_in_has_something_to_show() -> None:
     line that says nothing while the assistant does something."""
     for state in State:
         assert label_key(state) in TEXT, state
+    assert TEXT["state_sleeping"] == "asleep"
 
 
 def test_the_line_says_what_the_assistant_is_doing(screen: Screen) -> None:
