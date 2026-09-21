@@ -160,6 +160,7 @@ BUILTIN_TOOLS: tuple[str, ...] = (
     "search_emails",
     "open_settings",
     "media_control",
+    "set_volume",
     "play_music",
     "play_video",
     "open_media",
@@ -1048,6 +1049,7 @@ async def _talk(
     from assistant.audio.capture import LiveCapture, SystemMicrophone
     from assistant.audio.player import SystemSpeaker
     from assistant.audio.vad import Endpoint, SileroVAD
+    from assistant.audio.volume import SystemVolume
     from assistant.live.base import SessionConfig
     from assistant.live.registry import MissingAPIKeyError, create_provider
     from assistant.machine import Win32Machine
@@ -1082,6 +1084,7 @@ async def _talk(
         open_media_for,
         play_music_for,
         play_video_for,
+        set_volume_for,
     )
     from assistant.tools.registry import ToolRegistry
     from assistant.tools.status import system_status_for
@@ -1252,6 +1255,8 @@ async def _talk(
                 mail_tools.search_emails_for(mailbox),
                 open_settings,
                 media_control,
+                # The volume as a number (D24): the keys above step it.
+                set_volume_for(SystemVolume()),
                 play_music_for(player),
                 play_video_for(player),
                 open_media_for(player),

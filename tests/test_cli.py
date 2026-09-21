@@ -697,6 +697,7 @@ def test_every_tool_of_phase_two_is_on_offer(configured: Path, wiring: Wiring) -
         "search_emails",
         "open_settings",
         "media_control",
+        "set_volume",
         "play_music",
         "play_video",
         "open_media",

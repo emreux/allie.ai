@@ -7,11 +7,12 @@ and looks at which key would have been pressed.
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 
 from assistant.tools import media
-from assistant.tools.media import KEYS, media_control
+from assistant.tools.media import KEYS, media_control, set_volume_for
 
 
 @pytest.fixture
@@ -100,3 +101,64 @@ def test_the_description_says_what_stops_the_music() -> None:
 
     assert "play_pause" in said
     assert "stop" in said
+
+
+# --------------------------------------------------------------------------
+# The volume as a number (plan.md D24)
+# --------------------------------------------------------------------------
+
+
+class FakeVolume:
+    """A `Volume` that remembers what it was set to and the thread it was asked on."""
+
+    def __init__(self, level: int = 65) -> None:
+        self._level = level
+        self.set: list[int] = []
+        self.threads: set[int] = set()
+
+    def level(self) -> int:
+        self.threads.add(threading.get_ident())
+        return self._level
+
+    def set_level(self, percent: int) -> None:
+        self.threads.add(threading.get_ident())
+        self.set.append(percent)
+        self._level = percent
+
+
+async def test_set_volume_sets_the_number_and_says_what_it_was() -> None:
+    volume = FakeVolume(65)
+
+    said = await set_volume_for(volume).run(percent=30)
+
+    assert volume.set == [30]
+    assert said == "Volume set to 30 % (was 65 %)."
+
+
+async def test_a_number_past_the_ends_is_clamped() -> None:
+    volume = FakeVolume()
+
+    assert (await set_volume_for(volume).run(percent=140)).startswith("Volume set to 100 %")
+    assert (await set_volume_for(volume).run(percent=-3)).startswith("Volume set to 0 %")
+    assert volume.set == [100, 0]
+
+
+async def test_set_volume_asks_windows_off_the_loop() -> None:
+    """COM is initialised per call on a worker thread (section 3.1 rule 4)."""
+    volume = FakeVolume()
+
+    await set_volume_for(volume).run(percent=10)
+
+    assert volume.threads
+    assert threading.get_ident() not in volume.threads
+
+
+def test_set_volume_is_safe_and_sends_steps_to_media_control() -> None:
+    """Two ways to change the volume, told apart in the description: a
+    step is `media_control`, a number is this."""
+    chosen = set_volume_for(FakeVolume())
+
+    assert chosen.risk == "safe"
+    assert chosen.spec.parameters["required"] == ["percent"]
+    assert chosen.spec.parameters["properties"]["percent"]["type"] == "integer"
+    assert "media_control" in chosen.spec.description

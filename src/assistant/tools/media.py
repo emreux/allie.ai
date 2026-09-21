@@ -19,6 +19,10 @@ one case this gets wrong is a request made inside the first seconds of a
 song, which then goes back two tracks; a spoken turn takes longer than that
 to arrive, so it is rare enough not to be worth reading the player's position.
 
+**Setting the volume to a number** is `set_volume` (2026-09-21, D24), a
+closure over a `Volume` (`audio/volume.py`): the keys step, this one lands
+on the number the user said.
+
 **Starting something** is the other three, and they are closures over a
 `Player` (`media/player.py`) for the same reason `open_app` is a closure over
 the app catalogue: what the model sees is read off the function's signature,
@@ -38,6 +42,7 @@ import asyncio
 import ctypes
 from typing import Annotated, Literal
 
+from assistant.audio.volume import Volume
 from assistant.media.player import Player, service_keys
 from assistant.tools.registry import Tool, tool
 
@@ -49,6 +54,7 @@ __all__ = [
     "open_media_for",
     "play_music_for",
     "play_video_for",
+    "set_volume_for",
 ]
 
 Action = Literal["play_pause", "next", "previous", "volume_up", "volume_down", "mute"]
@@ -96,6 +102,32 @@ async def media_control(action: Action) -> str:
         _press(code)
         return "Pressed the previous key twice: once only restarts the current track."
     return f"Pressed the {action} key."
+
+
+def set_volume_for(volume: Volume) -> Tool:
+    """`set_volume`, bound to the endpoint that knows the level."""
+
+    @tool(risk="safe")
+    async def set_volume(
+        percent: Annotated[int, "The level to set, from 0 to 100."],
+    ) -> str:
+        """Sets the system volume to a number: "sesi yüzde otuza al" is 30,
+        "sesi yarıya indir" is 50. Use media_control's volume_up and
+        volume_down for one step up or down, and this when the user names a
+        level. A muted machine is unmuted. Answers with the level set and
+        the one before it."""
+        wanted = max(0, min(100, percent))
+
+        def change() -> int:
+            before = volume.level()
+            volume.set_level(wanted)
+            return before
+
+        # COM, on a worker thread, per call (section 3.1 rule 4).
+        before = await asyncio.to_thread(change)
+        return f"Volume set to {wanted} % (was {before} %)."
+
+    return set_volume
 
 
 def play_music_for(player: Player) -> Tool:
