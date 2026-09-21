@@ -13,6 +13,7 @@ over when a hand edit left it unreadable.
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,8 @@ from assistant.store.memory import (
     FACTS_PROMPT,
     MAX_FACT_CHARS,
     MAX_FACTS,
+    MAX_PERSONA_LINES,
+    PERSONA_PROMPT,
     MemoryFileError,
     UserMemory,
     memory_path,
@@ -238,7 +241,11 @@ def test_remember_is_safe_and_forget_asks(memory: UserMemory) -> None:
 
     assert remember.risk == "safe"
     assert remember.spec.parameters["required"] == ["fact"]
-    assert remember.spec.parameters["properties"]["kind"]["enum"] == ["fact", "assistant_name"]
+    assert remember.spec.parameters["properties"]["kind"]["enum"] == [
+        "fact",
+        "assistant_name",
+        "persona",
+    ]
     assert forget.risk == "confirm"
     assert forget.confirm_prompt == tools.TEXT["forget_confirm"]
 
@@ -353,3 +360,125 @@ async def test_forgetting_from_an_empty_memory_says_nothing_is_stored(memory: Us
     answer = await through_the_gate(registry, call("forget", fact=EMRE), confirm=says_yes)
 
     assert answer == tools.NOT_FOUND.format(fact=EMRE, facts=tools.NONE_STORED)
+
+
+# --------------------------------------------------------------------------
+# The persona (plan.md D23)
+# --------------------------------------------------------------------------
+
+MANNER = "Kısa ve net konuş."
+ADDRESS = "Bana efendim de."
+
+
+def test_persona_lines_survive_a_restart(path: Path) -> None:
+    memory = UserMemory(path=path)
+
+    assert memory.add_persona(MANNER)
+
+    assert UserMemory.load(path).persona == [MANNER]
+
+
+def test_the_file_writes_the_persona_under_assistant(path: Path) -> None:
+    """Beside the name, where the person editing the file expects the
+    assistant's own things; the facts stay under `[user]`."""
+    memory = UserMemory(path=path)
+    memory.add_persona(MANNER)
+
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+
+    assert data["assistant"]["persona"] == [MANNER]
+    assert "persona" not in data["user"]
+
+
+def test_the_block_is_name_then_facts_then_persona(memory: UserMemory) -> None:
+    """The rules come first in the prompt, the persona last (spec section
+    3): a manner cannot outrank a rule it is read after."""
+    memory.rename("Friday")
+    memory.remember(EMRE)
+    memory.add_persona(MANNER)
+
+    block = memory.block()
+
+    assert block.index("Friday") < block.index(EMRE) < block.index(PERSONA_PROMPT)
+    assert block.endswith(f"{PERSONA_PROMPT}\n- {MANNER}")
+    assert "rules above still hold" in PERSONA_PROMPT
+
+
+def test_without_a_persona_the_block_does_not_mention_one(memory: UserMemory) -> None:
+    memory.remember(EMRE)
+
+    assert PERSONA_PROMPT not in memory.block()
+    assert memory.prompt(BASE) == f"{BASE}\n\n{memory.block()}"
+
+
+def test_the_persona_has_a_ceiling_and_refuses_past_it(memory: UserMemory) -> None:
+    for index in range(MAX_PERSONA_LINES):
+        assert memory.add_persona(f"Kural {index}")
+
+    assert not memory.add_persona("Bir kural daha")
+    assert len(memory.persona) == MAX_PERSONA_LINES
+
+
+def test_a_persona_line_said_twice_is_kept_once(memory: UserMemory) -> None:
+    memory.add_persona(MANNER)
+
+    assert memory.add_persona("kısa ve net konuş")
+
+    assert memory.persona == [MANNER]
+
+
+def test_forget_reaches_the_persona_lines_too(memory: UserMemory) -> None:
+    memory.remember(EMRE)
+    memory.add_persona(ADDRESS)
+
+    assert memory.forget("bana efendim de") == ADDRESS
+    assert memory.persona == []
+    assert memory.facts == [EMRE]
+
+
+def test_a_file_from_before_the_persona_still_loads(path: Path) -> None:
+    path.write_text('[assistant]\nname = "Friday"\n\n[user]\nfacts = ["x"]\n', encoding="utf-8")
+
+    loaded = UserMemory.load(path)
+
+    assert (loaded.name, loaded.facts, loaded.persona) == ("Friday", ["x"], [])
+
+
+def test_a_persona_that_is_not_a_list_of_strings_is_refused(path: Path) -> None:
+    path.write_text('[assistant]\npersona = "tek satır"\n\n[user]\nfacts = []\n', encoding="utf-8")
+
+    with pytest.raises(MemoryFileError, match="persona"):
+        UserMemory.load(path)
+
+
+async def test_remember_as_persona_keeps_a_line_of_manner(memory: UserMemory) -> None:
+    said = await remember_for(memory).run(fact=MANNER, kind="persona")
+
+    assert memory.persona == [MANNER]
+    assert said == tools.PERSONA_KEPT.format(count=1, limit=MAX_PERSONA_LINES)
+
+
+async def test_a_full_persona_is_refused_with_advice(memory: UserMemory) -> None:
+    for index in range(MAX_PERSONA_LINES):
+        memory.add_persona(f"Kural {index}")
+
+    said = await remember_for(memory).run(fact="Bir daha", kind="persona")
+
+    assert said == tools.PERSONA_FULL.format(limit=MAX_PERSONA_LINES)
+    assert len(memory.persona) == MAX_PERSONA_LINES
+
+
+def test_the_model_is_told_what_persona_means(memory: UserMemory) -> None:
+    kind = remember_for(memory).spec.parameters["properties"]["kind"]
+
+    assert kind["enum"] == ["fact", "assistant_name", "persona"]
+    assert "speak" in kind["description"]
+
+
+async def test_not_found_lists_the_persona_lines_too(memory: UserMemory) -> None:
+    memory.add_persona(ADDRESS)
+    forget = forget_for(memory)
+
+    said = await forget.run(fact="kahve")
+
+    assert said == tools.NOT_FOUND.format(fact="kahve", facts=ADDRESS)

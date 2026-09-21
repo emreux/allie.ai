@@ -14,6 +14,9 @@ one sentence addressed to the user, the question `forget` asks, comes from
 the locale pack with `TEXT` below as the end of the chain (section 3.12),
 handed in by the composition root because a tool is declared together with
 its question.
+
+Since 2026-09-21 `remember` also keeps the persona (`kind="persona"`, D23)
+and `forget` reaches its lines.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated, Literal
 
-from assistant.store.memory import MAX_FACT_CHARS, MAX_FACTS, UserMemory
+from assistant.store.memory import MAX_FACT_CHARS, MAX_FACTS, MAX_PERSONA_LINES, UserMemory
 from assistant.tools.registry import Tool, tool
 
 __all__ = ["TEXT", "forget_for", "remember_for"]
@@ -45,8 +48,13 @@ EMPTY = "Nothing to keep: the fact was empty."
 FORGOTTEN = "Forgotten: {fact!r}. {count} facts remain."
 NOT_FOUND = "No stored fact reads like {fact!r}. Stored: {facts}."
 NONE_STORED = "nothing"
+PERSONA_KEPT = "Kept as your manner. {count} of {limit} persona lines are stored."
+PERSONA_FULL = (
+    "The persona is full: {limit} lines are stored and nothing was written. Ask the user "
+    "which line to drop, call forget with it, then keep this one again."
+)
 
-Kind = Literal["fact", "assistant_name"]
+Kind = Literal["fact", "assistant_name", "persona"]
 
 
 def remember_for(memory: UserMemory) -> Tool:
@@ -60,14 +68,18 @@ def remember_for(memory: UserMemory) -> Tool:
             "a standing instruction - or the name they gave you.",
         ],
         kind: Annotated[
-            Kind, "'assistant_name' when the user is naming you; 'fact' for everything else."
+            Kind,
+            "'assistant_name' when the user is naming you; 'persona' when they tell you "
+            "how to speak or behave from now on (tone, length, how to address them, "
+            "humour); 'fact' for everything else.",
         ] = "fact",
     ) -> str:
         """Keeps something the user explicitly asked you to remember across
         restarts: how to address them, a preference, a standing instruction,
-        or the name they gave you. Call it only when the user asks for
-        something to be remembered or names you, never for what you merely
-        found interesting. What is kept is read to you with every request."""
+        the name they gave you, or how they want you to speak from now on.
+        Call it only when the user asks for something to be remembered, names
+        you or tells you how to speak, never for what you merely found
+        interesting. What is kept is read to you with every request."""
         text = " ".join(fact.split())
         if not text:
             return EMPTY
@@ -79,6 +91,10 @@ def remember_for(memory: UserMemory) -> Tool:
         if kind == "assistant_name":
             await asyncio.to_thread(memory.rename, text)
             return NAMED.format(name=text)
+        if kind == "persona":
+            if not await asyncio.to_thread(memory.add_persona, text):
+                return PERSONA_FULL.format(limit=MAX_PERSONA_LINES)
+            return PERSONA_KEPT.format(count=len(memory.persona), limit=MAX_PERSONA_LINES)
         if not await asyncio.to_thread(memory.remember, text):
             return FULL.format(limit=MAX_FACTS)
         return KEPT.format(count=len(memory.facts), limit=MAX_FACTS)
@@ -99,7 +115,8 @@ def forget_for(memory: UserMemory, *, confirm_prompt: str = TEXT["forget_confirm
         to drop."""
         removed = await asyncio.to_thread(memory.forget, fact)
         if removed is None:
-            return NOT_FOUND.format(fact=fact, facts="; ".join(memory.facts) or NONE_STORED)
+            stored = "; ".join([*memory.facts, *memory.persona]) or NONE_STORED
+            return NOT_FOUND.format(fact=fact, facts=stored)
         return FORGOTTEN.format(fact=removed, count=len(memory.facts))
 
     return forget
