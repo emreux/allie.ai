@@ -42,7 +42,7 @@ from assistant.audio.capture import (
     duplex_for,
 )
 from assistant.audio.vad import PREROLL_SECONDS
-from assistant.stt.base import SAMPLE_RATE, Audio, to_pcm16
+from assistant.stt.base import LEVEL_FLOOR_DBFS, SAMPLE_RATE, Audio, to_pcm16
 
 CTRL, ALT, SPACE, SHIFT = "ctrl", "alt", "space", "shift"
 
@@ -1669,3 +1669,62 @@ def test_the_real_microphone_reports_its_host_api_once_opened(
     microphone.open(lambda chunk: None)
 
     assert microphone.host_api == "Windows WDM-KS"
+
+
+# --------------------------------------------------------------------------
+# The level hook (plan.md D20: the orb swells with the microphone)
+# --------------------------------------------------------------------------
+
+
+async def test_every_block_sent_is_reported_to_the_level_hook_in_dbfs() -> None:
+    """The window's orb hears the same blocks the server does, one number
+    each, on the loop - never a block that was not sent."""
+    levels: list[float] = []
+    talk, _, microphone, _ = live(on_level=levels.append)
+
+    with talk:
+        await heard_by_loop(microphone, block(0.5), block(0.1))
+
+    assert levels == pytest.approx([20 * np.log10(0.5), 20 * np.log10(0.1)], abs=0.01)
+
+
+async def test_a_block_of_silence_is_reported_as_the_floor() -> None:
+    levels: list[float] = []
+    talk, _, microphone, _ = live(on_level=levels.append)
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9), block(0.0))
+
+    assert levels[-1] == LEVEL_FLOOR_DBFS
+
+
+async def test_paused_input_reaches_neither_the_server_nor_the_hook() -> None:
+    levels: list[float] = []
+    talk, _, microphone, _ = live(on_level=levels.append)
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+        talk.pause()
+        await heard_by_loop(microphone, block(0.8))
+        talk.resume()
+
+    assert len(levels) == 1
+
+
+async def test_at_the_door_nothing_is_reported() -> None:
+    """A quiet room while no stream is open is the pre-roll's business."""
+    levels: list[float] = []
+    talk, _, microphone, _ = live(on_level=levels.append)
+
+    with talk:
+        await heard_by_loop(microphone, block(0.1), block(0.1))
+
+    assert levels == []
+
+
+async def test_without_a_hook_the_stream_is_what_it_was() -> None:
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.9))
+        assert await taken(talk) == pcm(0.9)

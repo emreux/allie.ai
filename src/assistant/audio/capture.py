@@ -58,7 +58,7 @@ from loguru import logger
 
 from assistant.audio.resample import Resampler
 from assistant.audio.vad import PREROLL_SECONDS, Endpoint, Segmenter
-from assistant.stt.base import SAMPLE_RATE, Audio, to_pcm16
+from assistant.stt.base import SAMPLE_RATE, Audio, dbfs, to_pcm16
 
 __all__ = [
     "CHUNK_FRAMES",
@@ -73,6 +73,7 @@ __all__ = [
     "LiveCapture",
     "Microphone",
     "MicrophoneUnavailableError",
+    "OnLevel",
     "SystemHotkey",
     "SystemMicrophone",
     "device_choice",
@@ -122,6 +123,7 @@ Duplex = Literal["full", "half"]
 
 OnChunk = Callable[[Audio], None]
 OnEvent = Callable[[], None]
+OnLevel = Callable[[float], None]
 OnMode = Callable[[bool], None]
 OnSpeech = Callable[[bool], None]
 
@@ -450,7 +452,9 @@ class LiveCapture(HandsFree):
 
     The level of what was sent is kept (`level_dbfs`) and written down when
     the stream closes: a quiet microphone is the first thing to check when
-    the model hears another language (ADR-001 section 5).
+    the model hears another language (ADR-001 section 5). The level of every
+    block sent is also handed to `on_level` as it goes, for the window's orb
+    (plan.md D20).
     """
 
     def __init__(
@@ -461,6 +465,7 @@ class LiveCapture(HandsFree):
         endpoint: Segmenter | None = None,
         on_speech: OnSpeech | None = None,
         on_mode: OnMode | None = None,
+        on_level: OnLevel | None = None,
         listening: bool = True,
         barge_in: bool = True,
     ) -> None:
@@ -477,6 +482,11 @@ class LiveCapture(HandsFree):
         # screen, and at the door the reason to open a session. Not called
         # for what is said inside a confirmation window.
         self.on_speech = on_speech
+        # Called on the event loop with the level, in dBFS, of every block
+        # that went to the server (plan.md D20): the orb swells with it.
+        # Not called at the door or while paused - what is not sent is not
+        # heard, and the picture should say so.
+        self.on_level = on_level
 
         self._barge_in = barge_in
         # Which of the two rules applies: known once the microphone is open,
@@ -648,6 +658,8 @@ class LiveCapture(HandsFree):
         if squares > _SILENCE_RMS * _SILENCE_RMS * len(chunk):
             self._level_squares += squares
             self._level_samples += len(chunk)
+        if self.on_level is not None:
+            self.on_level(dbfs(chunk))
         self._queue.put_nowait(to_pcm16(chunk))
 
     def _report_level(self) -> None:

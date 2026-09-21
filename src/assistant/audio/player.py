@@ -10,7 +10,9 @@ Two things shape it.
 **Writing audio blocks for as long as the audio lasts.** PortAudio's `write`
 returns when the sound card has room, which for a five second answer means five
 seconds. Rule 4 of section 3.1 gives anything awaited in `app.py` fifty
-milliseconds, so all of it happens in a worker thread.
+milliseconds, so all of it happens in a worker thread. Every block's level
+goes to `on_level` beside the write, from that thread (plan.md D20): the
+window's orb swells with what is heard, when it is heard.
 
 **Speech has to stop the instant the user presses the key.** That is why the
 audio goes out in blocks rather than in one write, and why an interrupted
@@ -44,6 +46,8 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol, runtime_checkable
 
 from loguru import logger
+
+from assistant.stt.base import LEVEL_FLOOR_DBFS, dbfs, from_pcm16
 
 __all__ = [
     "BLOCK_FRAMES",
@@ -107,13 +111,26 @@ class Speaker(Protocol):
 class SystemSpeaker:
     """The real sound card, through `sounddevice`."""
 
-    def __init__(self, *, open_stream: StreamFactory | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        open_stream: StreamFactory | None = None,
+        on_level: Callable[[float], None] | None = None,
+    ) -> None:
         self._open = open_stream if open_stream is not None else _open_output
+        # Told the level, in dBFS, of every block as it goes to the device,
+        # and the floor once the answer is over (plan.md D20) - from the
+        # worker thread, so whoever listens must not touch the loop.
+        self._on_level = on_level
 
         # Written from the event loop, read in the worker thread between
         # blocks. A plain event rather than an asyncio one for exactly that
         # reason: the thread cannot wait on the loop's.
         self._stopped = threading.Event()
+
+    @property
+    def on_level(self) -> Callable[[float], None] | None:
+        return self._on_level
 
     async def play(self, buffers: AsyncIterator[bytes], *, sample_rate: int) -> None:
         # An interruption belongs to the answer it cut short. Left set, it
@@ -160,7 +177,10 @@ class SystemSpeaker:
             for start in range(0, len(buffer), block):
                 if self._stopped.is_set():
                     return
-                stream.write(buffer[start : start + block])
+                piece = buffer[start : start + block]
+                if self._on_level is not None:
+                    self._on_level(dbfs(from_pcm16(piece)))
+                stream.write(piece)
         except Exception as failure:
             raise PlaybackError(f"the sound device failed while playing: {failure}") from failure
 
@@ -168,6 +188,8 @@ class SystemSpeaker:
         # Whatever happens, the handle goes back; whatever was raised, it was
         # the device's. Interrupted answers are aborted rather than drained -
         # see the module docstring.
+        if self._on_level is not None:
+            self._on_level(LEVEL_FLOOR_DBFS)
         try:
             try:
                 if self._stopped.is_set():

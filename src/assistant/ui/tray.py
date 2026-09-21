@@ -24,7 +24,8 @@ tray is built, so that a change of state costs a lookup and not a picture.
 
 **No sentence is written here.** The menu's labels come from the pack, and
 the state's name is the status line's own label under the same key, so a
-pack that translated the terminal has translated the tray.
+pack that translated the terminal has translated the tray. "Show the
+window" appears only when `run` gave the tray a window to show (D20).
 
 **The tooltip is the state, the session and the minutes** (plan.md section
 4.2): a live model bills by the minute while a session is open, and the
@@ -56,6 +57,7 @@ TEXT: dict[str, str] = {
     "tray_stop_listening": "Stop listening",
     "tray_start_listening": "Start listening",
     "tray_open_settings": "Open the settings folder",
+    "tray_show_window": "Show the window",
     "tray_quit": "Quit",
 }
 
@@ -153,6 +155,7 @@ class Tray:
         loop: asyncio.AbstractEventLoop,
         on_toggle: Callable[[], None],
         on_quit: Callable[[], None],
+        on_show: Callable[[], None] | None = None,
         settings_folder: Path,
         icon: IconFactory = system_icon,
         open: Callable[[Path], None] = open_folder,
@@ -173,6 +176,7 @@ class Tray:
         self._loop = loop
         self._on_toggle = on_toggle
         self._on_quit = on_quit
+        self._on_show = on_show
         self._folder = settings_folder
         self._open = open
 
@@ -188,13 +192,17 @@ class Tray:
         self._icon = icon(name, self._images[(State.IDLE, True)], self._title(), self.entries())
 
     def entries(self) -> list[MenuEntry]:
-        """The menu, top to bottom: the state, the switch, the folder, the end."""
-        return [
+        """The menu, top to bottom: the state, the switch, the folder, the
+        window when there is one to bring back (D20), the end."""
+        lines = [
             MenuEntry(self._title),
             MenuEntry(self._toggle_label, self._toggle),
             MenuEntry(lambda: self._said["tray_open_settings"], self._open_settings),
-            MenuEntry(lambda: self._said["tray_quit"], self._quit),
         ]
+        if self._on_show is not None:
+            lines.append(MenuEntry(lambda: self._said["tray_show_window"], self._show))
+        lines.append(MenuEntry(lambda: self._said["tray_quit"], self._quit))
+        return lines
 
     def start(self) -> None:
         """Puts the icon up, on a thread of its own."""
@@ -254,6 +262,10 @@ class Tray:
 
     def _quit(self) -> None:
         self._loop.call_soon_threadsafe(self._on_quit)
+
+    def _show(self) -> None:
+        if self._on_show is not None:
+            self._loop.call_soon_threadsafe(self._on_show)
 
     def _open_settings(self) -> None:
         # Blocking, and on the tray's thread rather than the loop's, which

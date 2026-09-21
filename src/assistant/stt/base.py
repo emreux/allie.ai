@@ -16,6 +16,7 @@ collect the utterance, return one final result. The call sites written in phase
 
 from __future__ import annotations
 
+import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
@@ -24,12 +25,15 @@ import numpy as np
 from numpy.typing import NDArray
 
 __all__ = [
+    "LEVEL_FLOOR_DBFS",
     "NO_SPEECH_CEILING",
     "SAMPLE_RATE",
     "Audio",
     "STTProvider",
     "Transcript",
     "buffered_stream",
+    "dbfs",
+    "from_pcm16",
     "to_pcm16",
 ]
 
@@ -57,6 +61,32 @@ def to_pcm16(pcm: Audio) -> bytes:
     (`audio/capture.py`) sends the same bytes.
     """
     return (np.clip(pcm, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
+def from_pcm16(data: bytes) -> Audio:
+    """The other way: sixteen bit little-endian bytes as float samples in
+    [-1, 1] - what the player measures before a block goes to the device."""
+    return np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+
+
+# What a block of nothing measures as: under the floor of `ui/orb.py`'s
+# scale, and a real number rather than the -inf of log10(0).
+LEVEL_FLOOR_DBFS = -90.0
+
+
+def dbfs(audio: Audio) -> float:
+    """The RMS level of `audio` in dBFS, floored at `LEVEL_FLOOR_DBFS`.
+
+    One number per block for whoever draws the sound (`ui/window.py`);
+    the capture's own `level_dbfs` averages over a stream and skips
+    silence, which is the other question.
+    """
+    if not len(audio):
+        return LEVEL_FLOOR_DBFS
+    rms = math.sqrt(float(np.dot(audio, audio)) / len(audio))
+    if rms <= 0.0:
+        return LEVEL_FLOOR_DBFS
+    return max(LEVEL_FLOOR_DBFS, 20 * math.log10(rms))
 
 
 @dataclass(frozen=True, slots=True)

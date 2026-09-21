@@ -30,11 +30,12 @@ has no echo cancellation, and the assistant hears itself.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 import questionary
@@ -1233,3 +1234,118 @@ async def test_a_key_can_be_typed_from_inside_the_event_loop() -> None:
 
     with typed("a-key\r"):
         assert await prompter.secret("api_key") == "a-key"
+
+
+# --------------------------------------------------------------------------
+# The wizard on the window (plan.md D20): the same questions, a page each
+# --------------------------------------------------------------------------
+
+
+class PageAnswers:
+    """A Tk half without Tk: answers each question from a script by key,
+    the way a person would from the page, and records the pages."""
+
+    def __init__(self, view: Any, window: Any, answers: dict[str, str | None]) -> None:
+        self.view = view
+        self.window = window
+        self.answers = answers
+        self.pages: list[tuple[str, str]] = []
+        self.quit = False
+
+    def run(self) -> None:
+        import time
+
+        while not self.quit:
+            for message in self.window.drain():
+                if message == ("quit",):
+                    self.quit = True
+                    return
+                self.view.apply(message)
+            page = self.view.wizard
+            if page is not None and page.open:
+                self.pages.append((page.kind, page.question))
+                key = next(key for key, text in TEXT.items() if text == page.question)
+                self.window.answer(self.view.take_answer(), self.answers[key])
+            time.sleep(0.005)
+
+
+async def test_the_wizard_runs_through_the_window_and_leaves_the_same_settings(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    from assistant.ui.window import Window, WindowPrompter
+
+    answers: dict[str, str | None] = {
+        "locale": "tr",
+        "api_key": GOOD_KEY,
+        "model": "smart",
+        "voice": "",
+        "hears": "local",
+        "reads": "sapi",
+        "microphone": "",
+    }
+    pages: list[PageAnswers] = []
+
+    def panel(view: Any, window: Any) -> PageAnswers:
+        pages.append(PageAnswers(view, window, answers))
+        return pages[-1]
+
+    window = Window(
+        locales.load("en"),
+        loop=asyncio.get_running_loop(),
+        on_toggle=lambda: None,
+        on_quit=lambda: None,
+        on_settings=lambda: None,
+        tray=False,
+        panel=panel,
+    )
+    window.start()
+    try:
+        window.wizard(True)
+        exit_code = await run_setup(WindowPrompter(window, text=TEXT), catalog=fake_catalog())
+    finally:
+        window.stop()
+
+    [page] = pages
+    assert exit_code == 0
+    assert load_settings().live.primary == "gemini:smart"
+    assert vault.vault == {(KEYRING_SERVICE, "gemini"): GOOD_KEY}
+    assert [kind for kind, _ in page.pages] == [
+        "choose",
+        "secret",
+        "choose",
+        "ask",
+        "choose",
+        "choose",
+        "choose",
+    ]
+    assert page.view.wizard is not None
+    assert TEXT["welcome"] in page.view.wizard.lines
+
+
+async def test_walking_away_from_the_window_s_page_is_the_wizard_s_cancel(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    from assistant.ui.window import Window, WindowPrompter
+
+    def panel(view: Any, window: Any) -> PageAnswers:
+        return PageAnswers(view, window, {"locale": None})
+
+    window = Window(
+        locales.load("en"),
+        loop=asyncio.get_running_loop(),
+        on_toggle=lambda: None,
+        on_quit=lambda: None,
+        on_settings=lambda: None,
+        tray=False,
+        panel=panel,
+    )
+    window.start()
+    try:
+        window.wizard(True)
+        exit_code = await run_setup(WindowPrompter(window, text=TEXT), catalog=fake_catalog())
+    finally:
+        window.stop()
+
+    assert exit_code == 1
+    assert not config_path().is_file()
+    assert vault.vault == {}

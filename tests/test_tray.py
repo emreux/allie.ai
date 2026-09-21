@@ -332,3 +332,43 @@ def test_pystray_is_handed_the_labels_the_actions_and_a_greyed_state_line() -> N
     items[1](icon)
     assert clicked == ["switch"]
     assert icon.title == "ready"
+
+
+# --------------------------------------------------------------------------
+# The window's line (plan.md D20)
+# --------------------------------------------------------------------------
+
+
+async def test_with_a_window_the_menu_offers_to_show_it_and_the_click_reaches_the_loop() -> None:
+    shown: list[int] = []
+    icons: list[FakeIcon] = []
+
+    def icon(name: str, image: Image.Image, title: str, entries: list[MenuEntry]) -> FakeIcon:
+        icons.append(FakeIcon(name, image, title, entries))
+        return icons[-1]
+
+    Tray(
+        locales.load("tr"),
+        loop=asyncio.get_running_loop(),
+        on_toggle=lambda: None,
+        on_quit=lambda: None,
+        on_show=lambda: shown.append(threading.get_ident()),
+        settings_folder=FOLDER,
+        icon=icon,
+        open=lambda _: None,
+    )
+    [built] = icons
+
+    assert [entry.label() for entry in built.entries][3] == turkish("tray_show_window")
+    assert len(built.entries) == 5
+    show = built.entries[3].action
+    assert show is not None
+    await asyncio.to_thread(show)
+    await asyncio.sleep(0)
+
+    assert shown == [threading.get_ident()]
+
+
+def test_without_a_window_the_menu_is_the_four_lines_it_was(built: Built) -> None:
+    assert len(built.icon.entries) == 4
+    assert turkish("tray_show_window") not in built.labels

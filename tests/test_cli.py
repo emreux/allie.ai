@@ -132,9 +132,12 @@ def test_the_command_names_are_declared(command: str) -> None:
 
 
 def test_run_can_be_asked_for_the_tray() -> None:
-    """`run --tray` (4.3); without the flag there is only the terminal."""
+    """`run --tray` (4.3); `run --terminal` keeps the line instead of the
+    window (D20). Without the flags: the window, no tray."""
     assert build_parser().parse_args(["run", "--tray"]).tray is True
     assert build_parser().parse_args(["run"]).tray is False
+    assert build_parser().parse_args(["run", "--terminal"]).terminal is True
+    assert build_parser().parse_args(["run"]).terminal is False
 
 
 def test_telegram_login_is_a_command_of_its_own() -> None:
@@ -266,10 +269,13 @@ class FakeLiveCapture:
     """Stands in for `audio/capture.py`'s `LiveCapture`: what it was built
     with, the switch the tray is handed, and the level it reports."""
 
-    def __init__(self, *, microphone: Any, endpoint: Any, barge_in: bool) -> None:
+    def __init__(
+        self, *, microphone: Any, endpoint: Any, barge_in: bool, on_level: Any = None
+    ) -> None:
         self.microphone = microphone
         self.endpoint = endpoint
         self.barge_in = barge_in
+        self.on_level = on_level
         self.level_dbfs: float | None = None
         self.toggles = 0
 
@@ -426,7 +432,7 @@ def session_of(wiring: Wiring) -> SessionConfig:
 def test_a_machine_that_was_never_set_up_is_told_to_run_setup(
     config_home: Path, wiring: Wiring, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(["run"]) == 1
+    assert main(["run", "--terminal"]) == 1
     assert said("not_set_up", locales.system_code()) in capsys.readouterr().out
 
 
@@ -435,7 +441,7 @@ def test_nothing_is_loaded_before_it_is_known_there_is_anything_to_run(
 ) -> None:
     """Whisper is two seconds and a gigabyte. Neither is spent finding out that
     the user has not run setup."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.happened == []
 
@@ -447,7 +453,7 @@ def test_a_key_that_is_gone_is_a_sentence_rather_than_a_traceback(
     because that is what tells the user which key to put back."""
     vault.vault.clear()
 
-    assert main(["run"]) == 1
+    assert main(["run", "--terminal"]) == 1
 
     printed = capsys.readouterr().out
     assert "gemini" in printed
@@ -471,7 +477,7 @@ def test_what_the_user_can_fix_is_a_sentence_rather_than_a_traceback(
     tells them nothing about how."""
     wiring.stop = problem
 
-    assert main(["run"]) == 1
+    assert main(["run", "--terminal"]) == 1
 
     printed = capsys.readouterr().out
     assert str(problem) in printed
@@ -488,7 +494,7 @@ def test_the_model_that_answers_is_the_one_that_was_configured(
 ) -> None:
     """The provider from the catalogue entry `[live] primary` names, and
     the model in what every session is opened with."""
-    assert main(["run"]) == 0
+    assert main(["run", "--terminal"]) == 0
 
     [parts] = wiring.built
     assert parts["provider"].id == "gemini"
@@ -500,7 +506,7 @@ def test_the_language_that_was_chosen_is_the_one_it_speaks(
 ) -> None:
     """`config.toml` says `tr`, so the pack the state machine gets says `tr` -
     the yes and no words, the fillers and the sentences (section 3.12)."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.built[0]["locale"].code == "tr"
 
@@ -508,7 +514,7 @@ def test_the_language_that_was_chosen_is_the_one_it_speaks(
 def test_the_pack_s_language_code_reaches_the_session(configured: Path, wiring: Wiring) -> None:
     """ADR-001 section 6: the BCP-47 hint for the recogniser behind the
     model and for its voice - from the pack, never from the code."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert session_of(wiring).language_code == locales.load("tr").language_code == "tr-TR"
 
@@ -518,7 +524,7 @@ def test_the_voice_and_the_transcripts_in_the_settings_reach_the_session(
 ) -> None:
     configured_with(live=LiveSettings(primary=f"gemini:{MODEL}", voice="Kore", transcripts=False))
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     config = session_of(wiring)
     assert (config.voice, config.transcripts) == ("Kore", False)
@@ -526,7 +532,7 @@ def test_the_voice_and_the_transcripts_in_the_settings_reach_the_session(
 
 def test_by_default_the_voice_is_the_model_s_own(configured: Path, wiring: Wiring) -> None:
     """D19: the owner's ear preferred it."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert session_of(wiring).voice == ""
 
@@ -540,7 +546,7 @@ def test_the_two_turn_detection_knobs_in_the_settings_reach_the_session(
         live=LiveSettings(primary=f"gemini:{MODEL}", end_sensitivity="HIGH", silence_ms=300)
     )
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     config = session_of(wiring)
     assert (config.end_sensitivity, config.silence_ms) == ("HIGH", 300)
@@ -551,7 +557,7 @@ def test_the_tools_the_session_is_opened_with_are_the_runner_s(
 ) -> None:
     """One list: what the model is told it can call is what the round can
     run (plan.md 4.4 rule 3)."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     [runner] = wiring.runners
     assert [spec.name for spec in session_of(wiring).tools] == runner.tools
@@ -564,7 +570,7 @@ def test_the_session_config_is_read_afresh_at_every_open(
     both move between one session and the next."""
     from assistant.tools import reminders
 
-    main(["run"])
+    main(["run", "--terminal"])
     [parts] = wiring.built
     first = parts["session_config"]().system_prompt
     monkeypatch.setattr(reminders, "current_time_line", lambda: "The current local date is later.")
@@ -586,7 +592,7 @@ def test_the_session_policy_in_the_settings_is_the_one_the_state_machine_gets(
         )
     )
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     [parts] = wiring.built
     assert (parts["idle_close_seconds"], parts["resume_minutes"]) == (30.0, 5.0)
@@ -596,7 +602,7 @@ def test_the_session_policy_in_the_settings_is_the_one_the_state_machine_gets(
 
 
 def test_by_default_barge_in_is_on(configured: Path, wiring: Wiring) -> None:
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.captures[0].barge_in is True
 
@@ -607,7 +613,7 @@ def test_the_microphone_in_the_settings_is_the_one_opened(configured: Path, wiri
     connects."""
     configured_with(audio=AudioSettings(input_device="Microphone Array WASAPI"))
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.microphones == ["Microphone Array WASAPI"]
     assert wiring.captures[0].microphone.device == "Microphone Array WASAPI"
@@ -616,14 +622,14 @@ def test_the_microphone_in_the_settings_is_the_one_opened(configured: Path, wiri
 def test_no_microphone_in_the_settings_means_the_system_default(
     configured: Path, wiring: Wiring
 ) -> None:
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.microphones == [None]
 
 
 def test_the_device_flag_outranks_the_settings(configured: Path, wiring: Wiring) -> None:
     """One evening with a headset should not need the settings file edited."""
-    main(["run", "--device", "9"])
+    main(["run", "--terminal", "--device", "9"])
 
     assert wiring.microphones == [9]
 
@@ -637,7 +643,7 @@ def test_the_speech_model_is_ready_before_the_assistant_is(
     The probe of 2.6 comes next, for the same reason: one session on the
     network, and worth knowing about before the load. The app catalogue
     comes before the speech model, which is told its names."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.happened == ["database", "probe", "app catalogue", "speech model", "assistant"]
 
@@ -648,7 +654,7 @@ def test_the_speech_model_is_ready_before_the_assistant_is(
 
 
 def test_every_tool_of_phase_two_is_on_offer(configured: Path, wiring: Wiring) -> None:
-    main(["run"])
+    main(["run", "--terminal"])
 
     [runner] = wiring.runners
     assert runner.tools == [
@@ -696,7 +702,7 @@ def test_a_tool_file_beside_the_settings_is_on_offer(configured: Path, wiring: W
         encoding="utf-8",
     )
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     [runner] = wiring.runners
     assert runner.tools[-1] == "start_my_project"
@@ -709,7 +715,7 @@ def test_the_speech_model_is_told_the_locales_sentence_and_the_apps_names(
     """Section 3.4: the pack's `[stt] prompt` with the catalogue's names as
     people say them (2026-09-13). It hears two words now (D3), and the old
     vocabulary is harmless there."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.vocabularies == [["Spotify", "Google Chrome"]]
     assert wiring.prompts_for_speech == [locales.load("tr").stt_prompt]
@@ -725,7 +731,7 @@ def test_the_people_in_the_address_book_lead_the_recognisers_names(
         encoding="utf-8",
     )
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.vocabularies == [["Ahmet Yılmaz", "abi", "Spotify", "Google Chrome"]]
 
@@ -735,7 +741,7 @@ def test_send_message_asks_its_question_in_the_language_of_the_pack(
 ) -> None:
     from assistant.tools import messaging as messaging_tools
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     [runner] = wiring.runners
     send_message = runner.registry.get("send_message")
@@ -756,7 +762,7 @@ def test_a_contacts_file_that_names_one_person_twice_is_a_sentence_before_anythi
         '[[contact]]\nname = "Ahmet"\n\n[[contact]]\nname = "ahmet"\n', encoding="utf-8"
     )
 
-    assert main(["run"]) == 1
+    assert main(["run", "--terminal"]) == 1
 
     assert "speech model" not in wiring.happened
     out = capsys.readouterr().out
@@ -769,13 +775,13 @@ def test_a_default_messaging_app_that_is_not_one_is_a_sentence(
 ) -> None:
     configured_with(messaging=MessagingSettings(default_app="Signal"))
 
-    assert main(["run"]) == 1
+    assert main(["run", "--terminal"]) == 1
     assert "Signal" in capsys.readouterr().out
 
 
 def test_by_default_the_recogniser_is_whisper_alone(configured: Path, wiring: Wiring) -> None:
     """D10: local, no key, the two words stay; `[stt]` left out means that."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.recognisers == []
     assert "gemini" not in wiring.happened
@@ -790,7 +796,7 @@ def test_with_the_setting_the_recogniser_is_gemini_with_whisper_behind_it(
     model uses."""
     configured_with(stt=STTSettings(provider="gemini", model="gemini-3.5-transcribe-live"))
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     (built,) = wiring.recognisers
     assert built["api_key"] == "AIza-not-a-real-key"
@@ -820,7 +826,7 @@ def test_gemini_as_recogniser_without_a_gemini_key_is_one_sentence(
     vault.vault.clear()
     store_api_key("other", "sk-not-a-real-key")
 
-    assert main(["run"]) == 1
+    assert main(["run", "--terminal"]) == 1
 
     printed = capsys.readouterr().out
     assert "gemini" in printed and "live-assistant setup" in printed
@@ -841,7 +847,7 @@ def test_with_the_setting_the_voice_is_gemini_with_windows_behind_it(
 
     configured_with(tts=TTSSettings(provider="gemini", model="gemini-3.1-flash-tts-preview"))
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     voice = wiring.built[-1]["tts"]
     assert isinstance(voice, GeminiTTS)
@@ -867,7 +873,7 @@ def test_gemini_as_voice_without_a_gemini_key_is_one_sentence(
     vault.vault.clear()
     store_api_key("other", "sk-not-a-real-key")
 
-    assert main(["run"]) == 1
+    assert main(["run", "--terminal"]) == 1
 
     printed = capsys.readouterr().out
     assert "gemini" in printed and "[tts]" in printed and "live-assistant setup" in printed
@@ -877,7 +883,7 @@ def test_gemini_as_voice_without_a_gemini_key_is_one_sentence(
 def test_without_the_setting_the_voice_is_windows(configured: Path, wiring: Wiring) -> None:
     from assistant.tts.sapi import SapiTTS
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert isinstance(wiring.built[-1]["tts"], SapiTTS)
 
@@ -887,7 +893,7 @@ def test_the_gate_the_tool_round_is_handed_is_the_permission_gate(
 ) -> None:
     """Not any callable: the one that refuses what it was not offered, which
     is the one thing a fake gate would not do."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     [runner] = wiring.runners
     made_up = ToolCall(id="c1", name="format_disk", arguments={})
@@ -915,7 +921,7 @@ def test_who_answers_a_tool_s_question_comes_with_the_turn_and_reaches_the_gate(
         return "recorded"
 
     monkeypatch.setattr(policy, "dispatch", recording)
-    main(["run"])
+    main(["run", "--terminal"])
     [runner] = wiring.runners
     order = ToolCall(id="c1", name="get_current_time", arguments={})
 
@@ -932,7 +938,7 @@ def test_the_tool_round_the_state_machine_is_handed_is_the_one_behind_the_gate(
     """One round, one gate, one caller (plan.md 4.4 rule 3): a second round
     would be a second way to run a tool, which is the thing section 3.9
     forbids."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     [runner] = wiring.runners
     assert wiring.built[-1]["tool_runner"] is runner
@@ -960,7 +966,7 @@ def test_what_the_user_asked_to_be_kept_is_in_front_of_every_session(
         configured, '[assistant]\nname = "Ada"\n\n[user]\nfacts = ["Bana Emre de."]\n'
     )
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     prompt = session_of(wiring).system_prompt
     assert prompt.startswith(SYSTEM_PROMPT)
@@ -978,7 +984,7 @@ def test_the_prompt_is_the_frozen_rules_the_pack_s_language_rule_and_the_time(
     from assistant.agent.prompts import SYSTEM_PROMPT
     from assistant.tools.reminders import NOW_LINE
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     prompt = session_of(wiring).system_prompt
     rule = locales.load("tr").user_language_rule
@@ -994,7 +1000,7 @@ def test_a_pack_without_a_language_rule_adds_no_line(configured: Path, wiring: W
 
     configured_with(locale=LocaleSettings(code="en"))
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     prompt = session_of(wiring).system_prompt
     assert prompt.startswith(SYSTEM_PROMPT + "\n\n")
@@ -1008,7 +1014,7 @@ def test_a_memory_file_that_does_not_parse_is_a_sentence_rather_than_a_traceback
     write an empty file over it, and must not load a speech model first."""
     path = remembered_by_hand(configured, "[user]\nfacts = [oops\n")
 
-    assert main(["run"]) == 1
+    assert main(["run", "--terminal"]) == 1
 
     assert "speech model" not in wiring.happened
     assert path.read_text(encoding="utf-8") == "[user]\nfacts = [oops\n"
@@ -1021,7 +1027,7 @@ def test_forget_asks_its_question_in_the_language_of_the_pack(
     """The first question of phase 2 a user actually hears (2.3, 2.10)."""
     from assistant.tools import memory as memory_tools
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     [runner] = wiring.runners
     forget = runner.registry.get("forget")
@@ -1044,15 +1050,15 @@ def test_a_model_nobody_has_tested_is_probed_at_startup_and_the_verdict_kept(
     """Setup wrote nothing - an older build, or a database that was deleted.
     The question is asked once and the answer kept, so that the next start
     does not ask again."""
-    assert main(["run"]) == 0
-    assert main(["run"]) == 0
+    assert main(["run", "--terminal"]) == 0
+    assert main(["run", "--terminal"]) == 0
 
     assert [(p, m) for p, m, _ in wiring.probes] == [("gemini", MODEL)]
     assert stored_verdict() == PASSED
 
 
 def test_the_probe_asks_in_the_language_of_the_pack(configured: Path, wiring: Wiring) -> None:
-    main(["run"])
+    main(["run", "--terminal"])
 
     [(_, _, question)] = wiring.probes
     assert question == locales.load("tr").probe_question
@@ -1063,7 +1069,7 @@ def test_the_model_is_checked_before_the_speech_model_is_loaded(
 ) -> None:
     """One session on the network, before two seconds of loading are spent
     on a model that may turn out not to call tools."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.happened.index("probe") < wiring.happened.index("speech model")
 
@@ -1071,7 +1077,7 @@ def test_the_model_is_checked_before_the_speech_model_is_loaded(
 def test_a_fresh_verdict_is_not_asked_again(configured: Path, wiring: Wiring) -> None:
     write_verdict(ProbeResult(ok=True, first_token_ms=800.0), age=3 * 86400)
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.probes == []
 
@@ -1080,7 +1086,7 @@ def test_a_verdict_a_week_old_is_asked_again(configured: Path, wiring: Wiring) -
     """Section 3.2: the provider may have changed what is behind the name."""
     write_verdict(ProbeResult(ok=True, first_token_ms=800.0), age=8 * 86400)
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert len(wiring.probes) == 1
     assert stored_verdict() == PASSED
@@ -1093,7 +1099,7 @@ def test_a_model_that_fails_the_probe_is_a_warning_and_not_a_refusal_to_start(
     they are told, in their language, on a line that stays."""
     wiring.verdict = ProbeResult(ok=False, reason="no_tool_call_emitted", first_token_ms=5.0)
 
-    assert main(["run"]) == 0
+    assert main(["run", "--terminal"]) == 0
 
     assert "assistant" in wiring.happened
     assert said("model_no_tools") in unwrapped(capsys.readouterr().out)
@@ -1104,7 +1110,7 @@ def test_a_kept_verdict_that_failed_is_warned_about_on_every_start(
 ) -> None:
     write_verdict(ProbeResult(ok=False, reason="no_tool_call_emitted"), age=60)
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.probes == []
     assert said("model_no_tools") in unwrapped(capsys.readouterr().out)
@@ -1118,7 +1124,7 @@ def test_a_provider_that_cannot_be_asked_at_startup_is_left_to_the_first_turn(
     words (`app.py`)."""
     wiring.probe_refusal = ProviderError("gemini could not be reached (ConnectError)")
 
-    assert main(["run"]) == 0
+    assert main(["run", "--terminal"]) == 0
 
     assert "assistant" in wiring.happened
     assert stored_verdict() is None
@@ -1131,7 +1137,7 @@ def test_a_provider_that_cannot_be_asked_at_startup_is_left_to_the_first_turn(
 
 
 def test_the_database_is_built_where_the_data_lives(configured: Path, wiring: Wiring) -> None:
-    main(["run"])
+    main(["run", "--terminal"])
 
     path = db.database_path()
     assert path.is_file()
@@ -1147,7 +1153,7 @@ def test_the_database_is_closed_when_the_assistant_stops(configured: Path, wirin
     """However it stops - here, the way Ctrl+C stops it."""
     wiring.stop = KeyboardInterrupt()
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     [connection] = wiring.databases
     with pytest.raises(sqlite3.ProgrammingError):
@@ -1156,7 +1162,7 @@ def test_the_database_is_closed_when_the_assistant_stops(configured: Path, wirin
 
 def test_a_finished_turn_is_written_to_the_log(configured: Path, wiring: Wiring) -> None:
     """Item 1.11's own sentence: the token count of every turn goes to the log."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert "300 in, 10 out" in logs.log_path().read_text(encoding="utf-8")
 
@@ -1164,7 +1170,7 @@ def test_a_finished_turn_is_written_to_the_log(configured: Path, wiring: Wiring)
 def test_a_finished_turn_is_shown_on_screen(
     configured: Path, wiring: Wiring, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert "saat kaç" in capsys.readouterr().out
 
@@ -1172,7 +1178,7 @@ def test_a_finished_turn_is_shown_on_screen(
 def test_what_the_assistant_is_doing_is_shown_on_screen(
     configured: Path, wiring: Wiring, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert said("state_user_speaking") in capsys.readouterr().out
 
@@ -1184,7 +1190,7 @@ def test_the_session_and_its_minutes_are_shown_on_screen(
     meter. Off a terminal the line is drawn once, at the end, so what is
     read here is the meter after the session closed; `test_status.py`
     has the rest."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     printed = capsys.readouterr().out
     assert said("session_closed") in printed
@@ -1199,7 +1205,7 @@ def test_a_quiet_microphone_is_said_on_screen_when_the_session_closes(
     2026-09-18: the owner's array sent -45."""
     wiring.level = -45.0
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     quiet = said("microphone_quiet").format(level=-45, quiet=-40)
     assert unwrapped(quiet) in unwrapped(capsys.readouterr().out)
@@ -1210,7 +1216,7 @@ def test_a_microphone_heard_well_enough_is_not_mentioned(
 ) -> None:
     wiring.level = -30.0
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert said("microphone_quiet").split("{")[0] not in unwrapped(capsys.readouterr().out)
 
@@ -1221,7 +1227,7 @@ def test_ctrl_c_is_how_it_is_meant_to_end(
     """A traceback would read as a crash."""
     wiring.stop = KeyboardInterrupt()
 
-    assert main(["run"]) == 0
+    assert main(["run", "--terminal"]) == 0
     assert said("stopped") in capsys.readouterr().out
 
 
@@ -1235,7 +1241,7 @@ def test_the_limits_in_the_settings_are_the_ones_the_tool_round_gets(
 ) -> None:
     configured_with(limits=LimitSettings(tool_calls_per_turn=3))
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     [runner] = wiring.runners
     assert runner.limits == Limits(tool_calls_per_turn=3)
@@ -1248,7 +1254,7 @@ def test_the_assistant_is_handed_a_tracker_over_the_usage_rows(
     before a session opens (D9)."""
     configured_with(limits=LimitSettings(daily_usd=1.0))
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     parts = wiring.built[0]
     assert isinstance(parts["tracker"], UsageTracker)
@@ -1291,7 +1297,7 @@ def test_run_blanks_the_old_audit_summaries_and_keeps_the_rows(
     old = audited(days_ago=40, summary="a page from last month")
     fresh = audited(days_ago=1, summary="a page from yesterday")
 
-    assert main(["run"]) == 0
+    assert main(["run", "--terminal"]) == 0
 
     assert summaries() == {old: None, fresh: "a page from yesterday"}
 
@@ -1300,7 +1306,7 @@ def test_a_retention_of_zero_days_keeps_every_summary(configured: Path, wiring: 
     configured_with(retention=RetentionSettings(audit_days=0))
     old = audited(days_ago=400, summary="a page from last year")
 
-    assert main(["run"]) == 0
+    assert main(["run", "--terminal"]) == 0
 
     assert summaries() == {old: "a page from last year"}
 
@@ -1353,7 +1359,7 @@ def trays(monkeypatch: pytest.MonkeyPatch) -> type[FakeTray]:
 def test_without_the_flag_there_is_no_tray(
     configured: Path, wiring: Wiring, trays: type[FakeTray]
 ) -> None:
-    assert main(["run"]) == 0
+    assert main(["run", "--terminal"]) == 0
 
     assert trays.built == []
     assert wiring.built[0]["on_state"] is not None
@@ -1366,7 +1372,7 @@ def test_with_the_flag_the_icon_is_up_while_it_runs_and_hears_what_the_screen_he
     state machine runs and stopped after; every state and every session
     the screen is told reaches it too, and its switch is the capture's own
     `toggle`."""
-    assert main(["run", "--tray"]) == 0
+    assert main(["run", "--tray", "--terminal"]) == 0
 
     [icon] = trays.built
     assert icon.code == "tr"
@@ -1397,11 +1403,271 @@ def test_quit_on_the_tray_ends_the_run_the_way_ctrl_c_does(
 
     wiring.during_run = quit_from_the_tray
 
-    assert main(["run", "--tray"]) == 0
+    assert main(["run", "--tray", "--terminal"]) == 0
 
     [icon] = trays.built
     assert icon.up == ["start", "stop"]
     assert said("stopped") in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# run: the window (plan.md D20)
+# --------------------------------------------------------------------------
+
+
+class FakeWindow:
+    """Stands in for `ui/window.py`'s `Window`: what it was built with, what
+    it was told, and what its buttons do."""
+
+    built: ClassVar[list[FakeWindow]] = []
+
+    def __init__(self, locale: locales.Locale, **parts: Any) -> None:
+        self.code = locale.code
+        self.parts = parts
+        self.told: list[tuple[str, Any]] = []
+        self.up: list[str] = []
+        self.questions: list[tuple[str, str]] = []
+        self.answers: list[str | None] = []
+        FakeWindow.built.append(self)
+
+    def start(self) -> None:
+        self.up.append("start")
+
+    def stop(self) -> None:
+        self.up.append("stop")
+
+    def starting(self) -> None:
+        self.told.append(("phase", "loading_speech"))
+
+    def checking_model(self) -> None:
+        self.told.append(("phase", "checking_model"))
+
+    def notice(self, message: str) -> None:
+        self.told.append(("notice", message))
+
+    def state(self, state: State) -> None:
+        self.told.append(("state", state))
+
+    def session(self, open: bool) -> None:
+        self.told.append(("session", open))
+
+    def microphone_level(self, dbfs: float | None) -> None:
+        self.told.append(("microphone_level", dbfs))
+
+    def hands_free(self, listening: bool) -> None:
+        self.told.append(("mode", listening))
+
+    def turn(self, finished: Turn) -> None:
+        self.told.append(("turn", finished.heard))
+
+    def level(self, dbfs: float) -> None:
+        self.told.append(("level", dbfs))
+
+    def loading(self) -> None:
+        self.told.append(("phase", "window_loading"))
+
+    def show(self) -> None:
+        self.told.append(("show", None))
+
+    def wizard(self, opened: bool) -> None:
+        self.told.append(("wizard", opened))
+
+    def say(self, text: str) -> None:
+        self.told.append(("say", text))
+
+    def ask(self, kind: str, text: str, options: Any) -> asyncio.Future[str | None]:
+        self.questions.append((kind, text))
+        answer: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
+        answer.set_result(self.answers.pop(0) if self.answers else None)
+        return answer
+
+
+@pytest.fixture
+def windows(monkeypatch: pytest.MonkeyPatch) -> type[FakeWindow]:
+    from assistant.ui import window
+
+    FakeWindow.built = []
+    monkeypatch.setattr(window, "Window", FakeWindow)
+    return FakeWindow
+
+
+def test_without_the_terminal_flag_the_window_is_the_screen(
+    configured: Path, wiring: Wiring, windows: type[FakeWindow], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Built with the pack, up before the pieces and down after; every
+    state, session and turn the line would have shown goes to it; the
+    switch it was handed is the capture's toggle; nothing is drawn on the
+    terminal but the last word."""
+    assert main(["run"]) == 0
+
+    [face] = windows.built
+    assert face.code == "tr"
+    assert face.up == ["start", "stop"]
+    assert face.parts["tray"] is False
+    assert ("phase", "window_loading") in face.told
+    assert ("state", State.USER_SPEAKING) in face.told
+    assert ("session", True) in face.told and ("session", False) in face.told
+    assert ("turn", "saat kaç") in face.told
+    [built] = wiring.captures
+    assert face.parts["on_toggle"].target == built.toggle
+    assert said("state_user_speaking") not in capsys.readouterr().out
+
+
+def test_the_window_hears_the_sound_both_ways(
+    configured: Path, wiring: Wiring, windows: type[FakeWindow]
+) -> None:
+    """The capture's and the speaker's level hooks are the window's `level`."""
+    main(["run"])
+
+    [face] = windows.built
+    [built] = wiring.captures
+    assert built.on_level == face.level
+    assert wiring.built[0]["speaker"].on_level == face.level
+
+
+def test_with_the_tray_the_icon_can_show_the_window(
+    configured: Path, wiring: Wiring, windows: type[FakeWindow], trays: type[FakeTray]
+) -> None:
+    main(["run", "--tray"])
+
+    [face] = windows.built
+    [icon] = trays.built
+    assert face.parts["tray"] is True
+    assert icon.parts["on_show"] == face.show
+
+
+def test_on_the_terminal_the_tray_has_no_window_to_show(
+    configured: Path, wiring: Wiring, trays: type[FakeTray]
+) -> None:
+    main(["run", "--tray", "--terminal"])
+
+    [icon] = trays.built
+    assert icon.parts["on_show"] is None
+
+
+def test_an_unconfigured_machine_runs_the_wizard_in_the_window_then_talks(
+    config_home: Path,
+    vault: MemoryKeyring,
+    wiring: Wiring,
+    windows: type[FakeWindow],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No settings: the page comes up, the wizard runs through the window's
+    prompter, and once it has written the settings the assistant starts."""
+    prompters: list[Any] = []
+
+    async def wizard(prompter: Any, **_: Any) -> int:
+        prompters.append(prompter)
+        configured_with()
+        store_api_key("gemini", "key")
+        return 0
+
+    monkeypatch.setattr(setup_wizard, "run_setup", wizard)
+
+    assert main(["run"]) == 0
+
+    [face] = windows.built
+    [prompter] = prompters
+    assert type(prompter).__name__ == "WindowPrompter"
+    assert face.told.index(("wizard", True)) < face.told.index(("wizard", False))
+    assert face.told.index(("wizard", False)) < face.told.index(("state", State.USER_SPEAKING))
+    assert len(wiring.built) == 1
+
+
+def test_a_wizard_walked_away_from_on_an_unconfigured_machine_ends_the_run(
+    config_home: Path,
+    vault: MemoryKeyring,
+    wiring: Wiring,
+    windows: type[FakeWindow],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def wizard(prompter: Any, **_: Any) -> int:
+        return 1
+
+    monkeypatch.setattr(setup_wizard, "run_setup", wizard)
+
+    assert main(["run"]) == 0
+
+    assert wiring.built == []
+    [face] = windows.built
+    assert face.up == ["start", "stop"]
+
+
+def test_the_settings_button_stops_the_assistant_runs_the_wizard_and_starts_it_again(
+    configured: Path, wiring: Wiring, windows: type[FakeWindow], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs: list[str] = []
+
+    async def wizard(prompter: Any, **_: Any) -> int:
+        runs.append("wizard")
+        return 0
+
+    async def press_settings_then_quit() -> None:
+        [face] = windows.built
+        loop = asyncio.get_running_loop()
+        if runs == []:
+            runs.append("talk")
+            await asyncio.to_thread(loop.call_soon_threadsafe, face.parts["on_settings"])
+        else:
+            runs.append("talk again")
+            await asyncio.to_thread(loop.call_soon_threadsafe, face.parts["on_quit"])
+        await asyncio.sleep(5)
+        raise AssertionError("the run was not cancelled")
+
+    monkeypatch.setattr(setup_wizard, "run_setup", wizard)
+    wiring.during_run = press_settings_then_quit
+
+    assert main(["run"]) == 0
+
+    assert runs == ["talk", "wizard", "talk again"]
+    assert len(wiring.built) == 2
+    [face] = windows.built
+    assert face.up == ["start", "stop"]
+
+
+def test_quit_on_the_window_ends_the_run_the_way_ctrl_c_does(
+    configured: Path, wiring: Wiring, windows: type[FakeWindow], capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def quit_from_the_window() -> None:
+        [face] = windows.built
+        loop = asyncio.get_running_loop()
+        await asyncio.to_thread(loop.call_soon_threadsafe, face.parts["on_quit"])
+        await asyncio.sleep(5)
+        raise AssertionError("the run was not cancelled")
+
+    wiring.during_run = quit_from_the_window
+
+    assert main(["run"]) == 0
+
+    [face] = windows.built
+    assert face.up == ["start", "stop"]
+    assert said("stopped") in capsys.readouterr().out
+
+
+def test_a_fixable_failure_is_a_notice_on_the_window_and_waits_for_a_button(
+    configured: Path, wiring: Wiring, windows: type[FakeWindow]
+) -> None:
+    """A key that is gone is a sentence on the window, not an exit: the
+    settings button is the way to fix it. Here the button pressed is quit."""
+    from assistant.live.registry import MissingAPIKeyError
+
+    wiring.stop = MissingAPIKeyError("no API key stored for 'gemini'")
+    pressed: list[str] = []
+
+    original_notice = FakeWindow.notice
+
+    def notice_then_quit(self: FakeWindow, message: str) -> None:
+        original_notice(self, message)
+        pressed.append(message)
+        asyncio.get_running_loop().call_soon(self.parts["on_quit"])
+
+    FakeWindow.notice = notice_then_quit  # type: ignore[method-assign]
+    try:
+        assert main(["run"]) == 0
+    finally:
+        FakeWindow.notice = original_notice  # type: ignore[method-assign]
+
+    assert pressed == [said("cannot_start").format(problem="no API key stored for 'gemini'")]
 
 
 # --------------------------------------------------------------------------
@@ -1417,7 +1683,7 @@ def test_without_a_mail_table_the_mail_tools_are_on_offer_but_not_set_up(
     nothing."""
     from assistant.tools.mail import NOT_SET_UP
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     latest = wiring.runners[0].registry.get("read_latest_emails")
     assert latest is not None
@@ -1443,7 +1709,7 @@ def test_with_a_mail_table_and_a_password_the_mailbox_is_the_one_named(
 
     monkeypatch.setattr(mail, "ImapMailbox", Recorded)
 
-    main(["run"])
+    main(["run", "--terminal"])
 
     latest = wiring.runners[0].registry.get("read_latest_emails")
     assert latest is not None
@@ -1454,7 +1720,7 @@ def test_with_a_mail_table_and_a_password_the_mailbox_is_the_one_named(
 def test_the_tools_run_offers_are_the_ones_doctor_counts(configured: Path, wiring: Wiring) -> None:
     """`BUILTIN_TOOLS` is what `doctor` reports without building anything;
     it has to be the registry `run` builds, in order."""
-    main(["run"])
+    main(["run", "--terminal"])
 
     assert wiring.runners[0].tools == list(BUILTIN_TOOLS)
 

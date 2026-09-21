@@ -198,6 +198,16 @@ tray_stop_listening = "Dinlemeyi durdur"
 tray_start_listening = "Dinlemeye başla"
 tray_open_settings = "Ayar klasörünü aç"
 tray_quit = "Çık"
+tray_show_window = "Pencereyi göster"
+
+# The window (`run` without `--terminal`, D20): what it says beside the
+# status line's and the tray's words, and the wizard's page on it.
+window_loading = "Başlıyor..."
+window_settings = "Ayarlar"
+window_setting_up = "Ayarlar değiştiriliyor; bitince asistan yeniden başlar."
+wizard_continue = "Devam"
+wizard_cancel = "Vazgeç"
+wizard_filter = "Süzmek için yaz"
 
 # `live-assistant autostart on | off | status`: the Run key of your own sign-in.
 autostart_on = "Asistan oturum açtığında başlayacak; komut: {command}"

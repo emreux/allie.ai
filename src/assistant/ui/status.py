@@ -27,6 +27,8 @@ from the clock, since the usage rows do not carry minutes yet (L1.5).
 Whether the server hears the microphone loudly enough is said too (D18):
 a level under `QUIET_DBFS` is the first thing to check when the model
 answers in another language, and it is said once, on a line that stays.
+The line and the window (D20) are both a `Screen`, which is all `run`
+knows of either.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from types import TracebackType
+from typing import Protocol, runtime_checkable
 
 from rich.console import Console
 from rich.live import Live
@@ -45,7 +48,7 @@ from assistant.audio.capture import DEFAULT_TOGGLE_HOTKEY, QUIET_DBFS
 from assistant.live.base import Usage
 from assistant.locales import Locale
 
-__all__ = ["TEXT", "SessionMinutes", "StatusLine", "label_key", "spell"]
+__all__ = ["TEXT", "Screen", "SessionMinutes", "StatusLine", "label_key", "spell"]
 
 # The mark at the start of the line. A shape rather than a word, so it needs
 # no translation and no room.
@@ -148,6 +151,32 @@ class SessionMinutes:
             self._opened_at = None
 
 
+@runtime_checkable
+class Screen(Protocol):
+    """What `run` shows the assistant on: the terminal's line, or the window
+    (`ui/window.py`, plan.md D20). Everything `__main__._talk` asks of one.
+    A method here is a queue put on the window, so a call may cost the
+    loop nothing more than that."""
+
+    def starting(self) -> None: ...
+
+    def checking_model(self) -> None: ...
+
+    def notice(self, message: str) -> None: ...
+
+    def state(self, state: State) -> None: ...
+
+    def session(self, open: bool) -> None: ...
+
+    def microphone_level(self, dbfs: float | None) -> None: ...
+
+    def hands_free(self, listening: bool) -> None: ...
+
+    def turn(self, finished: Turn) -> None: ...
+
+    def level(self, dbfs: float) -> None: ...
+
+
 class StatusLine:
     """One line of terminal, kept up to date with what the assistant is doing."""
 
@@ -247,6 +276,10 @@ class StatusLine:
             return
         self._said_quiet = True
         self.notice(self._said["microphone_quiet"].format(level=round(dbfs), quiet=int(QUIET_DBFS)))
+
+    def level(self, dbfs: float) -> None:
+        """The sound, block by block (plan.md D20). The line has no meter
+        for it and would not redraw fifty times a second if it had."""
 
     def hands_free(self, listening: bool) -> None:
         """Says whether the microphone is live.

@@ -21,6 +21,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Callable
 
+import numpy as np
 import pytest
 from loguru import logger
 
@@ -32,6 +33,7 @@ from assistant.audio.player import (
     Speaker,
     SystemSpeaker,
 )
+from assistant.stt.base import LEVEL_FLOOR_DBFS
 
 RATE = 16_000
 BLOCK = BLOCK_FRAMES * BYTES_PER_FRAME
@@ -310,6 +312,65 @@ async def test_a_failure_in_the_engine_is_not_dressed_up_as_the_device() -> None
         await speaker_on(device).play(breaks(), sample_rate=RATE)
 
     assert device.stream.closed
+
+
+# --------------------------------------------------------------------------
+# The level hook (plan.md D20: the orb swells with what is heard)
+# --------------------------------------------------------------------------
+
+
+def loud(blocks: float = 1) -> bytes:
+    """A buffer of full-scale sixteen bit samples, `blocks` blocks long."""
+    frames = int(BLOCK_FRAMES * blocks)
+    return np.full(frames, 32767, dtype="<i2").tobytes()
+
+
+async def test_every_block_written_is_reported_to_the_level_hook() -> None:
+    """One number per block, measured where the block goes to the device -
+    that is when it is heard, near enough; the chunks arrive faster."""
+    levels: list[float] = []
+    device = FakeDevice()
+
+    await SystemSpeaker(open_stream=device, on_level=levels.append).play(
+        spoken(loud(2)), sample_rate=RATE
+    )
+
+    assert len(levels) == 3
+    assert levels[0] == pytest.approx(0.0, abs=0.01)
+    assert levels[1] == pytest.approx(0.0, abs=0.01)
+    assert levels[2] == LEVEL_FLOOR_DBFS
+
+
+async def test_the_hook_hears_silence_at_the_floor_and_the_floor_again_when_done() -> None:
+    levels: list[float] = []
+    device = FakeDevice()
+
+    await SystemSpeaker(open_stream=device, on_level=levels.append).play(
+        spoken(silence()), sample_rate=RATE
+    )
+
+    assert levels == [LEVEL_FLOOR_DBFS, LEVEL_FLOOR_DBFS]
+
+
+async def test_the_hook_is_called_on_the_worker_thread_not_the_loop() -> None:
+    """Rule 4 of section 3.1: the measurement is beside the blocking write,
+    where blocking is allowed; whoever is hooked must not touch the loop."""
+    threads: set[int] = set()
+    device = FakeDevice()
+
+    await SystemSpeaker(
+        open_stream=device, on_level=lambda _: threads.add(threading.get_ident())
+    ).play(spoken(loud()), sample_rate=RATE)
+
+    assert threads and threading.get_ident() not in threads
+
+
+async def test_without_a_hook_nothing_changes() -> None:
+    device = FakeDevice()
+
+    await speaker_on(device).play(spoken(loud()), sample_rate=RATE)
+
+    assert device.stream.heard == loud()
 
 
 # --------------------------------------------------------------------------

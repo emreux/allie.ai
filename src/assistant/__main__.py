@@ -80,8 +80,9 @@ if TYPE_CHECKING:
     from assistant.store.repos import AuditRepo, ModelUsage, SettingsRepo
     from assistant.tools.mail import Mailbox
     from assistant.tools.registry import ToolRegistry
-    from assistant.ui.status import StatusLine
+    from assistant.ui.status import Screen
     from assistant.ui.tray import Tray
+    from assistant.ui.window import Switch
 
 __all__ = ["BUILTIN_TOOLS", "DOCTOR_TEXT", "TEXT", "build_parser", "main", "use_utf8"]
 
@@ -271,6 +272,11 @@ def build_parser() -> argparse.ArgumentParser:
             "listening, the settings folder, quit. The terminal stays."
         ),
     )
+    run.add_argument(
+        "--terminal",
+        action="store_true",
+        help="Keep the terminal status line instead of opening the window.",
+    )
     subparsers.add_parser("cost", help="Show what the assistant has spent, today and this month.")
     subparsers.add_parser(
         "doctor",
@@ -371,7 +377,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "telegram":
         return _telegram_login()
 
-    return _run(device=args.device, tray=args.tray)
+    return _run(device=args.device, tray=args.tray, terminal=args.terminal)
 
 
 def use_utf8(stream: object) -> None:
@@ -800,13 +806,15 @@ def _autostart(action: str) -> int:
     return _OK
 
 
-def _run(*, device: str | None = None, tray: bool = False) -> int:
+def _run(*, device: str | None = None, tray: bool = False, terminal: bool = False) -> int:
     """Starts the assistant, or says why it cannot.
 
     `device` is the `--device` flag: a microphone by index or by words from its
     name, outranking the settings for this one run. `tray` is `--tray`: the
-    icon of 4.3 beside the terminal, whose "quit" ends the run the way Ctrl+C
-    does.
+    icon of 4.3, whose "quit" ends the run the way Ctrl+C does. `terminal` is
+    `--terminal`: the status line on the terminal instead of the window
+    (plan.md D20) - the window is the face otherwise, and on a machine that
+    is not set up yet it opens on the wizard.
     """
     from rich.console import Console
 
@@ -833,7 +841,7 @@ def _run(*, device: str | None = None, tray: bool = False) -> int:
         # these, and a square bracket in it is not a colour.
         console.print(said[key].format(**fields), markup=False, highlight=False)
 
-    if not ready:
+    if not ready and terminal:
         say("not_set_up")
         return _GAVE_UP
 
@@ -856,7 +864,23 @@ def _run(*, device: str | None = None, tray: bool = False) -> int:
     # day; the system default when neither says anything.
     microphone = device_choice(device if device is not None else settings.audio.input_device)
     try:
-        asyncio.run(_talk(settings, pack, device=microphone, tray=tray))
+        if terminal:
+            asyncio.run(_terminal(settings, pack, device=microphone, tray=tray))
+        else:
+            # On the window a fixable failure is a sentence on the window and
+            # a wait for the settings button (`_session`); only the ending
+            # is said here.
+            asyncio.run(
+                _session(
+                    settings,
+                    pack,
+                    device=microphone,
+                    tray=tray,
+                    fixable=fixable,
+                    cannot_start=lambda problem: said["cannot_start"].format(problem=problem),
+                )
+            )
+            say("stopped")
     except (KeyboardInterrupt, asyncio.CancelledError):
         # Ctrl+C, or "quit" on the tray's menu, which cancels the run from
         # its own thread (4.3): an ending rather than a crash - and the
@@ -870,10 +894,151 @@ def _run(*, device: str | None = None, tray: bool = False) -> int:
     return _OK
 
 
-async def _talk(
-    settings: Settings, pack: Locale, *, device: int | str | None = None, tray: bool = False
+async def _terminal(
+    settings: Settings, pack: Locale, *, device: int | str | None, tray: bool
 ) -> None:
-    """Builds the pieces and lets the state machine drive them (plan.md 4.1)."""
+    """`run --terminal`: the line on the terminal is the screen, as it was
+    before the window (plan.md D20)."""
+    from assistant.ui.status import StatusLine
+
+    with StatusLine(pack) as screen:
+        await _talk(settings, pack, device=device, tray=tray, screen=screen)
+
+
+class _Wants:
+    """What the window's buttons asked of `_session` (plan.md D20): to stop
+    for the wizard, or to stop for good. The talk under way is a task the
+    buttons cancel; between two talks they wake the wait."""
+
+    def __init__(self) -> None:
+        self.task: asyncio.Task[None] | None = None
+        self.settings = False
+        # An event rather than a flag: it is read after an await, where a
+        # flag flipped by a button would be narrowed away by the checker.
+        self.quitting = asyncio.Event()
+        self._pressed = asyncio.Event()
+
+    def quit(self) -> None:
+        self.quitting.set()
+        self._interrupt()
+
+    def open_settings(self) -> None:
+        self.settings = True
+        self._interrupt()
+
+    async def pressed(self) -> None:
+        """Waits for either button."""
+        self._pressed.clear()
+        await self._pressed.wait()
+
+    def _interrupt(self) -> None:
+        self._pressed.set()
+        if self.task is not None:
+            self.task.cancel()
+
+
+async def _session(
+    settings: Settings,
+    pack: Locale,
+    *,
+    device: int | str | None,
+    tray: bool,
+    fixable: tuple[type[Exception], ...],
+    cannot_start: Callable[[BaseException], str],
+) -> None:
+    """The window's run (plan.md D20, spec section 1): the window up first,
+    the wizard on it when nothing is set up or the settings button asks,
+    then the assistant as a task the buttons can cancel - "settings" for
+    the wizard and another go, "quit" for the end. A failure the user can
+    fix is a sentence on the window and a wait for a button, since the
+    settings button is the way to fix it.
+
+    Ctrl+C on the terminal cancels this task; the talk under way is
+    cancelled with it and the cancellation is let through, so that `_run`
+    says the same "stopped" it always said.
+    """
+    from assistant import setup_wizard
+    from assistant.ui.window import Switch, Window, WindowPrompter
+
+    loop = asyncio.get_running_loop()
+    wants = _Wants()
+    switch = Switch()
+    window = Window(
+        pack,
+        loop=loop,
+        on_toggle=switch,
+        on_quit=wants.quit,
+        on_settings=wants.open_settings,
+        tray=tray,
+    )
+    window.start()
+    try:
+        while not wants.quitting.is_set():
+            if not is_configured() or wants.settings:
+                wants.settings = False
+                window.wizard(True)
+                try:
+                    # Looked up on the module, as `setup` does, so that the
+                    # tests can stand in for it.
+                    code = await setup_wizard.run_setup(WindowPrompter(window))
+                finally:
+                    window.wizard(False)
+                if wants.quitting.is_set() or (code != _OK and not is_configured()):
+                    return
+                settings = load_settings()
+                pack = locales.load(settings.locale.code)
+            window.loading()
+            wants.task = asyncio.create_task(
+                _talk(
+                    settings,
+                    pack,
+                    device=device,
+                    tray=tray,
+                    screen=window,
+                    switch=switch,
+                    show=window.show,
+                )
+            )
+            try:
+                await wants.task
+            except asyncio.CancelledError:
+                if not wants.task.done():
+                    # The cancellation is ours (Ctrl+C): take the talk down
+                    # with us and let it through.
+                    wants.task.cancel()
+                    await asyncio.gather(wants.task, return_exceptions=True)
+                    raise
+                if wants.settings:
+                    continue
+                return
+            except fixable as problem:
+                window.notice(cannot_start(problem))
+                await wants.pressed()
+                continue
+            finally:
+                wants.task = None
+            return
+    finally:
+        window.stop()
+
+
+async def _talk(
+    settings: Settings,
+    pack: Locale,
+    *,
+    device: int | str | None = None,
+    tray: bool = False,
+    screen: Screen,
+    switch: Switch | None = None,
+    show: Callable[[], None] | None = None,
+) -> None:
+    """Builds the pieces and lets the state machine drive them (plan.md 4.1).
+
+    `screen` is what it all shows on - the terminal's line or the window
+    (D20); `switch`, when there is one, is the window's listen button,
+    given the capture's `toggle` once there is a capture; `show` is what
+    the tray offers when there is a window to bring back.
+    """
     from loguru import logger
 
     from assistant.agent.core import ToolRunner
@@ -932,7 +1097,6 @@ async def _talk(
     from assistant.tts.gemini_tts import GeminiTTS
     from assistant.tts.sapi import SapiTTS
     from assistant.ui import tray as tray_ui
-    from assistant.ui.status import StatusLine
     from assistant.usage.tracker import Pricing, UsageTracker
     from assistant.web.page import PageReader
 
@@ -989,274 +1153,273 @@ async def _talk(
     try:
         detector = SileroVAD()
 
-        with StatusLine(pack) as screen:
-            # Setup's verdict on the model, refreshed when it is a week old
-            # (section 3.2, 2.6). Before the speech model: one session on
-            # the network, and worth knowing about before two seconds of
-            # loading are spent.
-            await _model_checked(provider, settings, SettingsRepo(database), pack, screen)
-            screen.starting()
-            # The apps this machine can open, read once: a few seconds of
-            # files and a PowerShell process, on a thread (2.2). Before the
-            # speech model, because the model is told the names it will hear.
-            catalog = await AppCatalog.load()
-            # The names this user has asked to open before lead the list;
-            # the window holds few (`stt/local_whisper.py`).
-            asked = AuditRepo(database).names_asked("open_app", limit=PROMPT_NAMES)
-            # People first (spec A6): their names are the shortest, most
-            # ambiguous words the recogniser hears, and there are few of them.
-            names = [*book.names(), *catalog.spoken_names(first=asked)]
-            # The recogniser hears the yes or no of the gate window and
-            # nothing else (D3, D10); the vocabulary is the old one, and
-            # harmless there.
-            whisper = LocalWhisper(vocabulary=names, prompt=pack.stt_prompt)
-            speech: LocalWhisper | GeminiSTT = whisper
-            if settings.stt.provider == "gemini":
-                # Google first, Whisper loaded behind it for the free tier's
-                # three requests a minute and for the network. The key is
-                # the entry the live model uses when it is Gemini; missing,
-                # it is a sentence before anything slow is loaded.
-                key = load_api_key("gemini")
-                if not key:
-                    raise MissingAPIKeyError(
-                        "no API key stored for 'gemini', which [stt] provider names - "
-                        "run 'live-assistant setup' to add one, or set provider = \"local\""
-                    )
-                speech = GeminiSTT(
-                    key, model=settings.stt.model, vocabulary=names, fallback=whisper
+        # Setup's verdict on the model, refreshed when it is a week old
+        # (section 3.2, 2.6). Before the speech model: one session on
+        # the network, and worth knowing about before two seconds of
+        # loading are spent.
+        await _model_checked(provider, settings, SettingsRepo(database), pack, screen)
+        screen.starting()
+        # The apps this machine can open, read once: a few seconds of
+        # files and a PowerShell process, on a thread (2.2). Before the
+        # speech model, because the model is told the names it will hear.
+        catalog = await AppCatalog.load()
+        # The names this user has asked to open before lead the list;
+        # the window holds few (`stt/local_whisper.py`).
+        asked = AuditRepo(database).names_asked("open_app", limit=PROMPT_NAMES)
+        # People first (spec A6): their names are the shortest, most
+        # ambiguous words the recogniser hears, and there are few of them.
+        names = [*book.names(), *catalog.spoken_names(first=asked)]
+        # The recogniser hears the yes or no of the gate window and
+        # nothing else (D3, D10); the vocabulary is the old one, and
+        # harmless there.
+        whisper = LocalWhisper(vocabulary=names, prompt=pack.stt_prompt)
+        speech: LocalWhisper | GeminiSTT = whisper
+        if settings.stt.provider == "gemini":
+            # Google first, Whisper loaded behind it for the free tier's
+            # three requests a minute and for the network. The key is
+            # the entry the live model uses when it is Gemini; missing,
+            # it is a sentence before anything slow is loaded.
+            key = load_api_key("gemini")
+            if not key:
+                raise MissingAPIKeyError(
+                    "no API key stored for 'gemini', which [stt] provider names - "
+                    "run 'live-assistant setup' to add one, or set provider = \"local\""
                 )
-            # The local voice (D3, D4, D10): Windows' own, or Google's with
-            # Windows behind it for the sentence Google refuses. It reads
-            # the gate's questions, the reminders and the three failure
-            # sentences; the model speaks for itself. The same key as the
-            # recogniser; missing, a sentence before anything slow is loaded.
-            voice: SapiTTS | GeminiTTS = SapiTTS()
-            if settings.tts.provider == "gemini":
-                key = load_api_key("gemini")
-                if not key:
-                    raise MissingAPIKeyError(
-                        "no API key stored for 'gemini', which [tts] provider names - "
-                        "run 'live-assistant setup' to add one, or set provider = \"sapi\""
-                    )
-                voice = GeminiTTS(
-                    key,
-                    model=settings.tts.model,
-                    fallback=voice,
-                    fallback_language=pack.code,
-                    fallback_preference=pack.voice("sapi"),
+            speech = GeminiSTT(key, model=settings.stt.model, vocabulary=names, fallback=whisper)
+        # The local voice (D3, D4, D10): Windows' own, or Google's with
+        # Windows behind it for the sentence Google refuses. It reads
+        # the gate's questions, the reminders and the three failure
+        # sentences; the model speaks for itself. The same key as the
+        # recogniser; missing, a sentence before anything slow is loaded.
+        voice: SapiTTS | GeminiTTS = SapiTTS()
+        if settings.tts.provider == "gemini":
+            key = load_api_key("gemini")
+            if not key:
+                raise MissingAPIKeyError(
+                    "no API key stored for 'gemini', which [tts] provider names - "
+                    "run 'live-assistant setup' to add one, or set provider = \"sapi\""
                 )
-            # The Microsoft Store, asked last by `open_app` and installed from
-            # by `install_app` - the one tool that changes what is on the
-            # machine, and asks first (2026-09-13).
-            store = store_tools.WingetStore()
-            notes = NotesRepo(database)
-            reminders = ReminderRepo(database)
-            # The user's mailbox (3.3, 17 Sep 2026), opened afresh for each
-            # question by the two tools below - or not set up, in which
-            # case the tools say so and what to run.
-            mailbox = _mailbox_of(settings, load_api_key(mail_tools.MAIL_ENTRY))
-            # The tools on offer, by name, in one place. Every one of them
-            # runs through the gate below and nowhere else (section 3.9).
-            # `forget` and `install_app` are declared with the questions they
-            # ask, in the pack's words.
-            tools = ToolRegistry(
-                [
-                    get_current_time,
-                    # The machine's own state and the weather (15 Sep 2026):
-                    # the two questions about the world that need no
-                    # application opened.
-                    system_status_for(Win32Machine()),
-                    weather_tools.get_weather_for(weather),
-                    # The catalogue answers first, the player second and the
-                    # Store last, so an installed application always wins
-                    # its own name.
-                    open_app_for(
-                        catalog,
-                        media=player.open_named,
-                        store=store,
-                        unknown_publisher=pack.say(
-                            "unknown_publisher", system_tools.TEXT["unknown_publisher"]
-                        ),
-                    ),
-                    open_url,
-                    # The engine is the user's (`[web] search_url`).
-                    search_web_for(settings.web.search_url),
-                    # What was copied, and what a page says: both come back
-                    # inside the `<untrusted>` block the prompt explains.
-                    read_clipboard_for(),
-                    fetch_page_for(reader),
-                    # The user's mail, read and never written, inside the
-                    # same block.
-                    mail_tools.read_latest_emails_for(mailbox),
-                    mail_tools.search_emails_for(mailbox),
-                    open_settings,
-                    media_control,
-                    play_music_for(player),
-                    play_video_for(player),
-                    open_media_for(player),
-                    # The user's notes (4.1, 17 Sep 2026): kept as said,
-                    # found in any spelling, deleted only after the user has
-                    # heard which.
-                    notes_tools.add_note_for(notes),
-                    notes_tools.search_notes_for(notes),
-                    notes_tools.delete_note_for(
-                        notes,
-                        confirm_prompt=pack.say(
-                            "note_delete_confirm", notes_tools.TEXT["note_delete_confirm"]
-                        ),
-                    ),
-                    # Reminders (4.2): the row here, the saying by the
-                    # scheduler below, between turns.
-                    reminder_tools.create_reminder_for(reminders),
-                    reminder_tools.list_reminders_for(reminders),
-                    reminder_tools.cancel_reminder_for(
-                        reminders,
-                        confirm_prompt=pack.say(
-                            "reminder_cancel_confirm",
-                            reminder_tools.TEXT["reminder_cancel_confirm"],
-                        ),
-                    ),
-                    memory_tools.remember_for(memory),
-                    memory_tools.forget_for(
-                        memory,
-                        confirm_prompt=pack.say(
-                            "forget_confirm", memory_tools.TEXT["forget_confirm"]
-                        ),
-                    ),
-                    store_tools.install_app_for(
-                        catalog,
-                        store,
-                        confirm_prompt=pack.say(
-                            "store_install_confirm", store_tools.TEXT["store_install_confirm"]
-                        ),
-                    ),
-                    # One tool for both messaging apps; it asks first, in the
-                    # pack's words, and hears the contact, the app and the text.
-                    messaging_tools.send_message_for(
-                        {
-                            "whatsapp": messaging_tools.WhatsAppChannel(whatsapp, book),
-                            "telegram": telegram,
-                        },
-                        default_app=settings.messaging.default_app,
-                        confirm_prompt=pack.say(
-                            "send_message_confirm",
-                            messaging_tools.TEXT["send_message_confirm"],
-                        ),
-                    ),
-                    # The owner's own, from %APPDATA%\live-assistant\tools:
-                    # read here, through the same gate, never in the repository.
-                    *load_local_tools(),
-                ]
+            voice = GeminiTTS(
+                key,
+                model=settings.tts.model,
+                fallback=voice,
+                fallback_language=pack.code,
+                fallback_preference=pack.voice("sapi"),
             )
-            # Loading Whisper takes seconds of four cores. Doing it now rather
-            # than at the first question keeps the first yes or no from
-            # waiting for it (item 1.6). The detector is a tenth of a second
-            # beside it, and is loaded here for the same reason rather than
-            # inside the first block of audio it is asked about - it is the
-            # doorman now (D5), asked about every block.
-            await speech.load()
-            await detector.load()
-
-            # The one gate, built once and handed to the one place a tool is
-            # run from: the tool round (plan.md 4.4 rule 3). A second gate
-            # would be a second way to run a tool, which is the thing
-            # section 3.9 forbids.
-            gate = _gate(settings, tools, AuditRepo(database), limits=limits, pack=pack)
-            runner = ToolRunner(tools, gate, limits)
-            # The one announce queue (invariant 5) and the loop that feeds it
-            # (invariant 7): the scheduler never sees the model, and the
-            # state machine reads the queue only between turns.
-            announcements = AnnounceQueue()
-            scheduler = scheduler_runner.Scheduler(
-                reminders,
-                announcements,
-                wording={
-                    key: pack.say(key, default) for key, default in scheduler_runner.TEXT.items()
-                },
-            )
-            # The doorman and the stream (plan.md 4.1, D5, D6): the local
-            # detector opens a session on speech, the microphone streams
-            # while one is open, full or half duplex by the path it was
-            # opened through (D18) - `barge_in = false` forces half.
-            capture = LiveCapture(
-                microphone=SystemMicrophone(device=device),
-                endpoint=Endpoint(detector),
-                barge_in=live.barge_in,
-            )
-            # The icon of 4.3, when asked for: a second surface over the
-            # same state, and a second hand on the same switch - its menu
-            # line is the key's `toggle`, its "quit" is this task's cancel,
-            # and both reach the loop through `call_soon_threadsafe`.
-            icon: tray_ui.Tray | None = None
-            if tray:
-                icon = tray_ui.Tray(
-                    pack,
-                    loop=asyncio.get_running_loop(),
-                    on_toggle=capture.toggle,
-                    on_quit=_stopper(),
-                    settings_folder=config_dir(),
-                )
-
-            def session_config() -> SessionConfig:
-                # Read at every open (plan.md 4.4): the prompt carries the
-                # user's facts and the time, which move; the tools and the
-                # `[live]` knobs do not, but one place is one place.
-                return SessionConfig(
-                    model=live.model,
-                    voice=live.voice,
-                    system_prompt=_system_prompt(memory, pack),
-                    tools=runner.specs(),
-                    transcripts=live.transcripts,
-                    language_code=pack.language_code,
-                    end_sensitivity=live.end_sensitivity,
-                    silence_ms=live.silence_ms,
-                )
-
-            assistant = LiveAssistant(
-                capture=capture,
-                provider=provider,
-                session_config=session_config,
-                tool_runner=runner,
-                tts=voice,
-                stt=speech,
-                speaker=SystemSpeaker(),
-                locale=pack,
-                # Every turn's tokens, priced, to `usage_log`: what
-                # `live-assistant cost` reads and what the spending limits
-                # are checked against.
-                tracker=UsageTracker(
-                    UsageRepo(database),
-                    Pricing.load(),
-                    provider=live.provider,
-                    model=live.model,
-                    limits=limits,
+        # The Microsoft Store, asked last by `open_app` and installed from
+        # by `install_app` - the one tool that changes what is on the
+        # machine, and asks first (2026-09-13).
+        store = store_tools.WingetStore()
+        notes = NotesRepo(database)
+        reminders = ReminderRepo(database)
+        # The user's mailbox (3.3, 17 Sep 2026), opened afresh for each
+        # question by the two tools below - or not set up, in which
+        # case the tools say so and what to run.
+        mailbox = _mailbox_of(settings, load_api_key(mail_tools.MAIL_ENTRY))
+        # The tools on offer, by name, in one place. Every one of them
+        # runs through the gate below and nowhere else (section 3.9).
+        # `forget` and `install_app` are declared with the questions they
+        # ask, in the pack's words.
+        tools = ToolRegistry(
+            [
+                get_current_time,
+                # The machine's own state and the weather (15 Sep 2026):
+                # the two questions about the world that need no
+                # application opened.
+                system_status_for(Win32Machine()),
+                weather_tools.get_weather_for(weather),
+                # The catalogue answers first, the player second and the
+                # Store last, so an installed application always wins
+                # its own name.
+                open_app_for(
+                    catalog,
+                    media=player.open_named,
+                    store=store,
+                    unknown_publisher=pack.say(
+                        "unknown_publisher", system_tools.TEXT["unknown_publisher"]
+                    ),
                 ),
-                announcements=announcements,
-                idle_close_seconds=live.idle_close_seconds,
-                resume_minutes=live.resume_minutes,
-                on_state=screen.state if icon is None else _each(screen.state, icon.state),
-                on_turn=_finished(screen),
-                # The toggle's news goes to the state machine first - off is
-                # an interruption - and to the screen after it.
-                on_mode=screen.hands_free
-                if icon is None
-                else _each(screen.hands_free, icon.hands_free),
-                # The session's opening and closing: the meter on the line
-                # and the icon (plan.md 4.2), and at the close the level
-                # the server heard the microphone at (D18).
-                on_session=_session_told(screen, icon, capture),
+                open_url,
+                # The engine is the user's (`[web] search_url`).
+                search_web_for(settings.web.search_url),
+                # What was copied, and what a page says: both come back
+                # inside the `<untrusted>` block the prompt explains.
+                read_clipboard_for(),
+                fetch_page_for(reader),
+                # The user's mail, read and never written, inside the
+                # same block.
+                mail_tools.read_latest_emails_for(mailbox),
+                mail_tools.search_emails_for(mailbox),
+                open_settings,
+                media_control,
+                play_music_for(player),
+                play_video_for(player),
+                open_media_for(player),
+                # The user's notes (4.1, 17 Sep 2026): kept as said,
+                # found in any spelling, deleted only after the user has
+                # heard which.
+                notes_tools.add_note_for(notes),
+                notes_tools.search_notes_for(notes),
+                notes_tools.delete_note_for(
+                    notes,
+                    confirm_prompt=pack.say(
+                        "note_delete_confirm", notes_tools.TEXT["note_delete_confirm"]
+                    ),
+                ),
+                # Reminders (4.2): the row here, the saying by the
+                # scheduler below, between turns.
+                reminder_tools.create_reminder_for(reminders),
+                reminder_tools.list_reminders_for(reminders),
+                reminder_tools.cancel_reminder_for(
+                    reminders,
+                    confirm_prompt=pack.say(
+                        "reminder_cancel_confirm",
+                        reminder_tools.TEXT["reminder_cancel_confirm"],
+                    ),
+                ),
+                memory_tools.remember_for(memory),
+                memory_tools.forget_for(
+                    memory,
+                    confirm_prompt=pack.say("forget_confirm", memory_tools.TEXT["forget_confirm"]),
+                ),
+                store_tools.install_app_for(
+                    catalog,
+                    store,
+                    confirm_prompt=pack.say(
+                        "store_install_confirm", store_tools.TEXT["store_install_confirm"]
+                    ),
+                ),
+                # One tool for both messaging apps; it asks first, in the
+                # pack's words, and hears the contact, the app and the text.
+                messaging_tools.send_message_for(
+                    {
+                        "whatsapp": messaging_tools.WhatsAppChannel(whatsapp, book),
+                        "telegram": telegram,
+                    },
+                    default_app=settings.messaging.default_app,
+                    confirm_prompt=pack.say(
+                        "send_message_confirm",
+                        messaging_tools.TEXT["send_message_confirm"],
+                    ),
+                ),
+                # The owner's own, from %APPDATA%\live-assistant\tools:
+                # read here, through the same gate, never in the repository.
+                *load_local_tools(),
+            ]
+        )
+        # Loading Whisper takes seconds of four cores. Doing it now rather
+        # than at the first question keeps the first yes or no from
+        # waiting for it (item 1.6). The detector is a tenth of a second
+        # beside it, and is loaded here for the same reason rather than
+        # inside the first block of audio it is asked about - it is the
+        # doorman now (D5), asked about every block.
+        await speech.load()
+        await detector.load()
+
+        # The one gate, built once and handed to the one place a tool is
+        # run from: the tool round (plan.md 4.4 rule 3). A second gate
+        # would be a second way to run a tool, which is the thing
+        # section 3.9 forbids.
+        gate = _gate(settings, tools, AuditRepo(database), limits=limits, pack=pack)
+        runner = ToolRunner(tools, gate, limits)
+        # The one announce queue (invariant 5) and the loop that feeds it
+        # (invariant 7): the scheduler never sees the model, and the
+        # state machine reads the queue only between turns.
+        announcements = AnnounceQueue()
+        scheduler = scheduler_runner.Scheduler(
+            reminders,
+            announcements,
+            wording={key: pack.say(key, default) for key, default in scheduler_runner.TEXT.items()},
+        )
+        # The doorman and the stream (plan.md 4.1, D5, D6): the local
+        # detector opens a session on speech, the microphone streams
+        # while one is open, full or half duplex by the path it was
+        # opened through (D18) - `barge_in = false` forces half.
+        capture = LiveCapture(
+            microphone=SystemMicrophone(device=device),
+            endpoint=Endpoint(detector),
+            barge_in=live.barge_in,
+            on_level=screen.level,
+        )
+        # The window's listen button is this switch (D20).
+        if switch is not None:
+            switch.target = capture.toggle
+        # The icon of 4.3, when asked for: a second surface over the
+        # same state, and a second hand on the same switch - its menu
+        # line is the key's `toggle`, its "quit" is this task's cancel,
+        # and both reach the loop through `call_soon_threadsafe`.
+        icon: tray_ui.Tray | None = None
+        if tray:
+            icon = tray_ui.Tray(
+                pack,
+                loop=asyncio.get_running_loop(),
+                on_toggle=capture.toggle,
+                on_quit=_stopper(),
+                on_show=show,
+                settings_folder=config_dir(),
             )
+
+        def session_config() -> SessionConfig:
+            # Read at every open (plan.md 4.4): the prompt carries the
+            # user's facts and the time, which move; the tools and the
+            # `[live]` knobs do not, but one place is one place.
+            return SessionConfig(
+                model=live.model,
+                voice=live.voice,
+                system_prompt=_system_prompt(memory, pack),
+                tools=runner.specs(),
+                transcripts=live.transcripts,
+                language_code=pack.language_code,
+                end_sensitivity=live.end_sensitivity,
+                silence_ms=live.silence_ms,
+            )
+
+        assistant = LiveAssistant(
+            capture=capture,
+            provider=provider,
+            session_config=session_config,
+            tool_runner=runner,
+            tts=voice,
+            stt=speech,
+            # The sound both ways goes to the screen's meter (D20).
+            speaker=SystemSpeaker(on_level=screen.level),
+            locale=pack,
+            # Every turn's tokens, priced, to `usage_log`: what
+            # `live-assistant cost` reads and what the spending limits
+            # are checked against.
+            tracker=UsageTracker(
+                UsageRepo(database),
+                Pricing.load(),
+                provider=live.provider,
+                model=live.model,
+                limits=limits,
+            ),
+            announcements=announcements,
+            idle_close_seconds=live.idle_close_seconds,
+            resume_minutes=live.resume_minutes,
+            on_state=screen.state if icon is None else _each(screen.state, icon.state),
+            on_turn=_finished(screen),
+            # The toggle's news goes to the state machine first - off is
+            # an interruption - and to the screen after it.
+            on_mode=screen.hands_free
+            if icon is None
+            else _each(screen.hands_free, icon.hands_free),
+            # The session's opening and closing: the meter on the line
+            # and the icon (plan.md 4.2), and at the close the level
+            # the server heard the microphone at (D18).
+            on_session=_session_told(screen, icon, capture),
+        )
+        if icon is not None:
+            icon.start()
+        ticking = asyncio.create_task(scheduler.run())
+        try:
+            await assistant.run()
+        finally:
+            ticking.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await ticking
             if icon is not None:
-                icon.start()
-            ticking = asyncio.create_task(scheduler.run())
-            try:
-                await assistant.run()
-            finally:
-                ticking.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await ticking
-                if icon is not None:
-                    icon.stop()
+                icon.stop()
     finally:
         await player.aclose()
         await weather.aclose()
@@ -1285,7 +1448,7 @@ def _system_prompt(memory: UserMemory, pack: Locale) -> str:
 
 
 def _session_told(
-    screen: StatusLine, icon: Tray | None, capture: LiveCapture
+    screen: Screen, icon: Tray | None, capture: LiveCapture
 ) -> Callable[[bool], None]:
     """Who hears that a session opened or closed: the line's meter, the
     icon's, and - at the close - the level the microphone sent (D18), so
@@ -1306,7 +1469,7 @@ async def _model_checked(
     settings: Settings,
     verdicts: SettingsRepo,
     pack: Locale,
-    screen: StatusLine,
+    screen: Screen,
 ) -> None:
     """Makes sure there is a verdict on the model that answers, and says so
     on screen when it is a bad one.
@@ -1470,7 +1633,7 @@ def _dollars(amount: float | None) -> str:
     return "?" if amount is None else f"${amount:.4f}"
 
 
-def _finished(screen: StatusLine) -> Callable[[Turn], None]:
+def _finished(screen: Screen) -> Callable[[Turn], None]:
     """What happens to a turn once it is over: the numbers to the log, the
     words to the screen. Neither one keeps both (`logs.py`)."""
     from assistant.logs import log_turn

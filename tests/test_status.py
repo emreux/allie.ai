@@ -469,3 +469,23 @@ def test_output_that_is_a_file_rather_than_a_console_still_gets_the_turns() -> N
 
     assert "saat kaç" in str(written)
     assert "Üç buçuk." in str(written)
+
+
+# --------------------------------------------------------------------------
+# The Screen protocol (plan.md D20): the line and the window are one thing to `run`
+# --------------------------------------------------------------------------
+
+
+def test_the_line_is_a_screen_and_a_level_costs_it_nothing(screen: Screen) -> None:
+    """`run` knows the line and the window as one `Screen` (D20); the
+    line takes the sound's level and does nothing with it."""
+    from assistant.ui.status import Screen as ScreenProtocol
+
+    with line(screen) as shown_line:
+        face: ScreenProtocol = shown_line
+        before = str(screen)
+        face.level(-20.0)
+        face.level(-90.0)
+
+        assert isinstance(shown_line, ScreenProtocol)
+        assert str(screen) == before

@@ -35,7 +35,7 @@ from assistant.tools import notes as notes_tools
 from assistant.tools import reminders as reminder_tools
 from assistant.tools import store as store_tools
 from assistant.tools import system as system_tools
-from assistant.ui import status, tray
+from assistant.ui import status, tray, window
 
 PACKAGED = Path(locales.__file__).parent
 
@@ -50,6 +50,7 @@ TABLES = {
     "app": app.TEXT,
     "ui.status": status.TEXT,
     "ui.tray": tray.TEXT,
+    "ui.window": window.TEXT,
     "__main__": cli.TEXT,
     "__main__.doctor": cli.DOCTOR_TEXT,
     "agent.policy": policy.TEXT,

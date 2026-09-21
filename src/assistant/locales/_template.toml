@@ -250,6 +250,16 @@ tray_stop_listening = "Stop listening"
 tray_start_listening = "Start listening"
 tray_open_settings = "Open the settings folder"
 tray_quit = "Quit"
+tray_show_window = "Show the window"
+
+# The window (`run` without `--terminal`, D20): what it says beside the
+# status line's and the tray's words, and the wizard's page on it.
+window_loading = "Starting..."
+window_settings = "Settings"
+window_setting_up = "Settings are being changed; the assistant starts again afterwards."
+wizard_continue = "Continue"
+wizard_cancel = "Cancel"
+wizard_filter = "Type to filter the list"
 
 # `live-assistant autostart on | off | status`: the Run key of your own sign-in.
 autostart_on = "The assistant will start when you sign in, as: {command}"
