@@ -192,6 +192,15 @@ class SessionConfig:
     end_sensitivity: str = ""
     silence_ms: int = 0
 
+    # Vendor features asked for by name and honoured by the adapters that
+    # have them (`capabilities`); an adapter without one ignores it. Off by
+    # default so that a session opened by a test or a spike is the plain
+    # one. `web_search`: the provider's own web search offered to the model
+    # as a tool of the session (Gemini: `google_search`; spec 2026-09-21
+    # section 2) - the search runs on the server and no call reaches the
+    # gate, which is why it is a flag here and not a `ToolSpec`.
+    web_search: bool = False
+
 
 # --------------------------------------------------------------------------
 # What a session sends up: eleven events, and nothing else

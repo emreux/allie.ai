@@ -1366,12 +1366,13 @@ async def _talk(
             return SessionConfig(
                 model=live.model,
                 voice=live.voice,
-                system_prompt=_system_prompt(memory, pack),
+                system_prompt=_system_prompt(memory, pack, web_search=live.web_search),
                 tools=runner.specs(),
                 transcripts=live.transcripts,
                 language_code=pack.language_code,
                 end_sensitivity=live.end_sensitivity,
                 silence_ms=live.silence_ms,
+                web_search=live.web_search,
             )
 
         assistant = LiveAssistant(
@@ -1428,22 +1429,27 @@ async def _talk(
         database.close()
 
 
-def _system_prompt(memory: UserMemory, pack: Locale) -> str:
+def _system_prompt(memory: UserMemory, pack: Locale, *, web_search: bool = False) -> str:
     """What the model is told at every session open (plan.md 4.5).
 
     The frozen rules first, byte for byte; then the pack's sentence naming
     the language the user speaks (D19 - measured 2026-09-18: without it a
-    short "Saat kaç" is heard as Hindi), when the pack has one; then the
-    user's facts (section 3.7); the time last of all, so that "yarın" is a
-    date (4.2). `prompts.py` stays without an import, and no language is
-    named in the code.
+    short "Saat kaç" is heard as Hindi), when the pack has one; then, when
+    the session carries a search tool, the sentence that says when to use
+    it (D22) - after the pack's rule, before the user's facts, so that the
+    frozen bytes stay frozen for a session without one; then the user's
+    facts (section 3.7); the time last of all, so that "yarın" is a date
+    (4.2). `prompts.py` stays without an import, and no language is named
+    in the code.
     """
-    from assistant.agent.prompts import SYSTEM_PROMPT
+    from assistant.agent.prompts import SEARCH_RULE, SYSTEM_PROMPT
     from assistant.tools.reminders import current_time_line
 
     rules = SYSTEM_PROMPT
     if pack.user_language_rule:
         rules = f"{rules}\n\n{pack.user_language_rule}"
+    if web_search:
+        rules = f"{rules}\n\n{SEARCH_RULE}"
     return f"{memory.prompt(rules)}\n\n{current_time_line()}"
 
 

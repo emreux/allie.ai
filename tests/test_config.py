@@ -228,6 +228,14 @@ def test_the_two_turn_detection_knobs_round_trip_through_the_file(config_home: P
     assert (live.end_sensitivity, live.silence_ms) == ("HIGH", 300)
 
 
+def test_web_search_is_off_until_the_owner_switches_it_on(config_home: Path) -> None:
+    """D22: Google refuses the tool on the free-tier key (2026-09-21), so
+    the default cannot be on; a key with billing gets `web_search = true`."""
+    assert load_settings().live.web_search is False
+    save_settings(Settings(live=LiveSettings(web_search=True)))
+    assert load_settings().live.web_search is True
+
+
 def test_the_sensitivity_is_read_in_any_letter_case_and_kept_in_capitals() -> None:
     """The adapter builds the SDK's constant name from it; `high` typed by
     hand is the same setting."""

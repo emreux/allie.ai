@@ -22,6 +22,7 @@ from assistant.agent.prompts import (
     LANGUAGE_RULE,
     LIVE_RULES,
     PERSONALITY,
+    SEARCH_RULE,
     SYSTEM_PROMPT,
     UNTRUSTED_RULE,
 )
@@ -90,3 +91,12 @@ def test_nothing_in_the_prompt_module_can_change_between_sessions() -> None:
             imported.add(node.module.split(".")[0])
 
     assert imported <= {"__future__"}
+
+
+def test_the_search_rule_is_its_own_constant_outside_the_frozen_prompt() -> None:
+    """Sent only when the session has a search tool (spec section 2): the
+    bytes of `SYSTEM_PROMPT` do not change for the user who switched it off."""
+    assert SEARCH_RULE not in SYSTEM_PROMPT
+    assert "look things up" in SEARCH_RULE.casefold()
+    assert "browser" in SEARCH_RULE.casefold()
+    assert not [character for character in SEARCH_RULE if character.isdigit()]

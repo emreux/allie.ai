@@ -24,6 +24,10 @@ The thinking is the model's own (no `thinking_config`): with a budget of
 zero it skipped the tool call and invented the time (ADR-001), and the
 `thinking_level` field is refused by this model. No `NON_BLOCKING` tools
 either (plan.md D19: measured, no difference).
+
+Since 2026-09-21 the session may carry Google's own search beside the
+function declarations (D22): a tool of the server's, logged when it was
+used and never answered from here.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from typing import Any
 import httpx
 from google import genai
 from google.genai import errors, types
+from loguru import logger
 
 # The SDK's own transport for the Live API; its exceptions are what a
 # dropped or refused socket looks like from here.
@@ -100,9 +105,10 @@ class GeminiLive:
     id = "gemini"
 
     # What the state machine may count on beyond the protocol: a handle
-    # that continues the conversation in a later session (plan.md D5), and
-    # transcripts of both sides.
-    capabilities: frozenset[str] = frozenset({"resumption", "transcripts"})
+    # that continues the conversation in a later session (plan.md D5),
+    # transcripts of both sides, and the provider's own web search as a
+    # tool of the session (D22).
+    capabilities: frozenset[str] = frozenset({"resumption", "transcripts", "web_search"})
 
     def __init__(self, api_key: str, *, client: Any | None = None) -> None:
         self._client = client if client is not None else genai.Client(api_key=api_key)
@@ -262,6 +268,8 @@ class GeminiSession:
         content = message.server_content
         if content is None:
             return events
+        if content.grounding_metadata is not None:
+            _log_grounding(content.grounding_metadata)
         heard = content.input_transcription
         if heard is not None and heard.text:
             events.append(InputText(heard.text))
@@ -317,11 +325,7 @@ def _connect_config(config: SessionConfig) -> types.LiveConnectConfig:
     return types.LiveConnectConfig(
         response_modalities=[types.Modality.AUDIO],
         system_instruction=config.system_prompt or None,
-        tools=(
-            [types.Tool(function_declarations=[_declare(tool) for tool in config.tools])]
-            if config.tools
-            else None
-        ),
+        tools=_tools(config),
         speech_config=speech,
         input_audio_transcription=(
             types.AudioTranscriptionConfig(
@@ -336,6 +340,18 @@ def _connect_config(config: SessionConfig) -> types.LiveConnectConfig:
         # with a handle, the conversation continues where it left off.
         session_resumption=types.SessionResumptionConfig(handle=config.resume_handle),
     )
+
+
+def _tools(config: SessionConfig) -> list[types.ToolUnion] | None:
+    """What the session may call: Google's own search first, when asked for
+    (D22) - it is a tool of the server's, declared by name and never
+    answered from here - then the functions of the registry."""
+    offered: list[types.ToolUnion] = []
+    if config.web_search:
+        offered.append(types.Tool(google_search=types.GoogleSearch()))
+    if config.tools:
+        offered.append(types.Tool(function_declarations=[_declare(tool) for tool in config.tools]))
+    return offered or None
 
 
 def _declare(tool: ToolSpec) -> types.FunctionDeclaration:
@@ -355,6 +371,22 @@ def _usage(metadata: types.UsageMetadata) -> Usage:
         output_tokens=metadata.response_token_count or 0,
         cached_tokens=metadata.cached_content_token_count or 0,
     )
+
+
+def _log_grounding(grounding: types.GroundingMetadata) -> None:
+    """One line per grounded answer: what was searched and which pages it
+    stood on. The only trace of a search - nothing reaches the screen - and
+    the one that says afterwards where an answer came from."""
+    queries = list(grounding.web_search_queries or ())
+    sources = [
+        chunk.web.title
+        for chunk in grounding.grounding_chunks or ()
+        if chunk.web is not None and chunk.web.title
+    ]
+    if queries or sources:
+        logger.info(
+            "grounded: searched {queries}; read {sources}", queries=queries, sources=sources
+        )
 
 
 def _ms(byte_count: int, rate: int) -> float:

@@ -154,6 +154,10 @@ class LiveSettings(BaseModel):
     silence ends one (0 is its default). The fast setting cut the wait from
     1.3 s to 0.9 s at the price of clipping a paused sentence, so both ship
     at the server's default.
+
+    `web_search` offers the provider's web search to the model as a tool of
+    the session (D22); off until the key has billing (refused by Google on
+    the free tier, 2026-09-21).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -172,6 +176,14 @@ class LiveSettings(BaseModel):
     transcripts: bool = True
     end_sensitivity: str = ""
     silence_ms: int = 0
+
+    # The provider's own web search offered to the model (plan.md D22). Off:
+    # on the owner's free-tier key Google refuses every session that carries
+    # the tool (measured 2026-09-21: Live close 1011 and HTTP 429, both "You
+    # exceeded your current quota", while the same session without it opens
+    # in 0.8 s) - a key with billing turns it on with `web_search = true`.
+    # The adapter without the capability ignores it.
+    web_search: bool = False
 
     @field_validator("idle_close_seconds", "resume_minutes", "silence_ms")
     @classmethod

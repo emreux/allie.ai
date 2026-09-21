@@ -28,6 +28,7 @@ __all__ = [
     "LANGUAGE_RULE",
     "LIVE_RULES",
     "PERSONALITY",
+    "SEARCH_RULE",
     "SYSTEM_PROMPT",
     "UNTRUSTED_RULE",
 ]
@@ -71,6 +72,19 @@ LIVE_RULES = (
     f"A message that begins with {ANNOUNCED_PREFIX.strip()} is something you yourself "
     "already said aloud a moment ago - a reminder - not something the user said: "
     "acknowledge it silently and do not repeat it."
+)
+
+# Added 2026-09-21 with Google Search grounding (plan.md D22). Not part of
+# `SYSTEM_PROMPT`: the composition root appends it only to a session that
+# was opened with a search tool, so the frozen bytes stay frozen for a
+# user who switched it off. It says two things the model gets wrong on its
+# own: that it may search for what it does not know, and that a browser is
+# for the user's eyes, not a substitute for a search it can do itself.
+SEARCH_RULE = (
+    "You can look things up on the web yourself: do so for anything you do not know or "
+    "that changes - news, prices, results, opening hours - and say in a few words that "
+    "you looked it up. Open the user's browser only when they ask to see a page; a "
+    "search you can do yourself is not a reason to open one."
 )
 
 # Verbatim from design.md section 3.12. The three sentences are load bearing:

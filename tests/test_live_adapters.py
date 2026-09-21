@@ -36,6 +36,7 @@ from __future__ import annotations
 import ast
 import inspect
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -231,6 +232,7 @@ def test_a_session_opens_with_the_plan_s_defaults() -> None:
     assert (config.resume_handle, config.language_code) == (None, "")
     assert (config.end_sensitivity, config.silence_ms) == ("", 0)
     assert list(config.tools) == []
+    assert config.web_search is False
 
 
 def test_an_event_cannot_be_edited_after_it_is_built() -> None:
@@ -292,6 +294,17 @@ def test_every_adapter_announces_what_it_can_do(adapter: Adapter) -> None:
     announced = getattr(adapter.build(), "capabilities", None)
 
     assert isinstance(announced, frozenset)
+
+
+async def test_a_session_asked_for_web_search_still_opens_on_every_adapter(
+    adapter: Adapter,
+) -> None:
+    """The flag is provider-agnostic (spec section 2): an adapter with the
+    capability sends its vendor's tool, one without it opens all the same."""
+    provider = adapter.build()
+
+    async with provider.connect(replace(CONFIG, web_search=True)) as session:
+        assert isinstance(session, LiveSession)
 
 
 async def test_a_session_is_entered_with_async_with_and_satisfies_the_protocol(

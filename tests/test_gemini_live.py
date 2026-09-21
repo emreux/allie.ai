@@ -28,6 +28,7 @@ import httpx
 import pytest
 from google import genai
 from google.genai import errors, types
+from loguru import logger
 from websockets.exceptions import ConnectionClosedError
 
 from assistant.live.base import (
@@ -441,8 +442,78 @@ def test_what_the_adapter_announces() -> None:
     adapter, _ = gemini()
 
     assert adapter.id == "gemini"
-    assert adapter.capabilities == frozenset({"resumption", "transcripts"})
+    assert adapter.capabilities == frozenset({"resumption", "transcripts", "web_search"})
     assert DEFAULT_MODEL == "gemini-3.8-live"
+
+
+async def test_web_search_alone_offers_google_search_and_no_declarations() -> None:
+    """Spec section 2: `google_search` is a tool of the session, on the
+    server; nothing is declared for it and no call ever comes back."""
+    adapter, client = gemini()
+
+    await collect(adapter, SessionConfig(model="m", web_search=True))
+
+    [search] = opened(client).tools or []
+    assert isinstance(search, types.Tool)
+    assert isinstance(search.google_search, types.GoogleSearch)
+    assert search.function_declarations is None
+
+
+async def test_web_search_rides_beside_the_tools_search_first() -> None:
+    """Google's own example: `[{"google_search": {}}, {"function_declarations": [...]}]`."""
+    adapter, client = gemini()
+
+    await collect(adapter, SessionConfig(model="m", tools=[CLOCK], web_search=True))
+
+    search, declared = opened(client).tools or []
+    assert isinstance(search.google_search, types.GoogleSearch)
+    assert [d.name for d in declared.function_declarations or []] == ["get_current_time"]
+    assert declared.google_search is None
+
+
+async def test_without_web_search_no_search_tool_is_offered() -> None:
+    adapter, client = gemini()
+
+    await collect(adapter, SessionConfig(model="m", tools=[CLOCK]))
+
+    [declared] = opened(client).tools or []
+    assert declared.google_search is None
+
+
+def test_the_adapter_announces_web_search() -> None:
+    assert "web_search" in GeminiLive.capabilities
+
+
+async def test_what_the_model_searched_for_and_where_it_read_is_logged() -> None:
+    """The one trace of a search: which queries went to Google and which
+    pages the answer stood on, one log line - not an event, not a screen."""
+    adapter, client = gemini()
+    client.live.answers.append(
+        types.LiveServerMessage(
+            server_content=types.LiveServerContent(
+                grounding_metadata=types.GroundingMetadata(
+                    web_search_queries=["dolar kuru bugün"],
+                    grounding_chunks=[
+                        types.GroundingChunk(
+                            web=types.GroundingChunkWeb(title="TCMB", uri="https://tcmb.gov.tr")
+                        )
+                    ],
+                ),
+                turn_complete=True,
+            )
+        )
+    )
+    lines: list[str] = []
+    sink = logger.add(lines.append, format="{level} {message}")
+    try:
+        await collect(adapter, SessionConfig(model="m", web_search=True))
+    finally:
+        logger.remove(sink)
+
+    [line] = [line for line in lines if "grounded" in line]
+    assert "dolar kuru bugün" in line
+    assert "TCMB" in line
+    assert line.startswith("INFO")
 
 
 # --------------------------------------------------------------------------

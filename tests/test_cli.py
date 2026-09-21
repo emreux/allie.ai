@@ -36,6 +36,7 @@ from assistant.__main__ import BUILTIN_TOOLS, TEXT, build_parser, main, use_utf8
 from assistant.agent import core
 from assistant.agent.limits import Limits
 from assistant.agent.policy import NO_SUCH_TOOL
+from assistant.agent.prompts import SEARCH_RULE, SYSTEM_PROMPT
 from assistant.app import State, Turn
 from assistant.audio import capture
 from assistant.config import (
@@ -550,6 +551,32 @@ def test_the_two_turn_detection_knobs_in_the_settings_reach_the_session(
 
     config = session_of(wiring)
     assert (config.end_sensitivity, config.silence_ms) == ("HIGH", 300)
+
+
+def test_web_search_reaches_the_session_and_its_rule_the_prompt(
+    configured: Path, wiring: Wiring
+) -> None:
+    """Switched on (spec section 2): the session is offered the search tool
+    and the prompt says when to use it - after the pack's rule, before the
+    user's facts."""
+    configured_with(live=LiveSettings(primary=f"gemini:{MODEL}", web_search=True))
+
+    main(["run", "--terminal"])
+
+    config = session_of(wiring)
+    assert config.web_search is True
+    assert f"\n\n{SEARCH_RULE}\n\n" in config.system_prompt
+    assert config.system_prompt.index(SEARCH_RULE) > config.system_prompt.index(SYSTEM_PROMPT)
+
+
+def test_web_search_off_leaves_the_prompt_as_it_was(configured: Path, wiring: Wiring) -> None:
+    """The default (2026-09-21: refused on the free-tier key): no tool, no
+    sentence, the frozen prompt as it was."""
+    main(["run", "--terminal"])
+
+    config = session_of(wiring)
+    assert config.web_search is False
+    assert SEARCH_RULE not in config.system_prompt
 
 
 def test_the_tools_the_session_is_opened_with_are_the_runner_s(
