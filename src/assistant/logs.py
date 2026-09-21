@@ -26,22 +26,44 @@ liability nobody asked for, and the retention rules that would cover one
 **No API key can reach the file.** Nothing here logs text that could carry one,
 and `diagnose` is off so that a traceback cannot smuggle one out in the value
 of a local variable - which is exactly where it would be, one frame below the
-adapter (section 10). The masking filter section 5 describes belongs with the
-first thing that logs a provider's own words back to us.
+adapter (section 10). Since 2026-09-21 a failed session is logged with the
+provider's own words (the close code and sentence that named the stale
+resumption handle were the whole diagnosis, and the log of the day before
+had neither), so the masking filter section 5 describes is here too:
+`keep_secret` is told every key as it is loaded, and the sink replaces it
+with `***` in every line - a transport's exception can quote the address it
+was opening, and the key rides on that address.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any, cast
 
 from loguru import logger
 
 from assistant.app import Turn
 from assistant.config import log_dir
 
-__all__ = ["LOG_FILE", "RETAINED_FILES", "ROTATE_AT", "log_path", "log_turn", "setup_logging"]
+__all__ = [
+    "LOG_FILE",
+    "MASK",
+    "RETAINED_FILES",
+    "ROTATE_AT",
+    "keep_secret",
+    "log_path",
+    "log_turn",
+    "setup_logging",
+]
 
 LOG_FILE = "assistant.log"
+MASK = "***"
+
+# What must never be written: the keys, as they are loaded. A set on the
+# module rather than on a handler, so that a key loaded before the log is
+# set up is masked all the same.
+_SECRETS: set[str] = set()
 
 # A turn is one short line, so this is tens of thousands of them - long enough
 # to still hold last month when somebody asks where the money went.
@@ -57,6 +79,28 @@ def log_path() -> Path:
     one through a roaming profile (section 3.3).
     """
     return log_dir() / LOG_FILE
+
+
+def keep_secret(secret: str) -> None:
+    """Registers a value the log must never carry; masked from now on."""
+    if secret:
+        _SECRETS.add(secret)
+
+
+def _masked(record: Mapping[str, Any]) -> bool:
+    """A `loguru` filter that lets every line through, with the secrets
+    replaced. The message is already formatted here, so a key that came
+    in as an argument is caught as well as one in the template."""
+    message = record["message"]
+    # The longest first: a short secret inside a long one would otherwise
+    # nibble the long one into something the long one's own mask misses.
+    for secret in sorted(_SECRETS, key=len, reverse=True):
+        if secret in message:
+            message = message.replace(secret, MASK)
+    if message is not record["message"]:
+        # The record is the handler's own copy; the filter may edit it.
+        cast("dict[str, Any]", record)["message"] = message
+    return True
 
 
 def setup_logging(*, path: Path | None = None, level: str = "INFO") -> Path:
@@ -79,6 +123,7 @@ def setup_logging(*, path: Path | None = None, level: str = "INFO") -> Path:
         encoding="utf-8",
         backtrace=False,
         diagnose=False,
+        filter=_masked,
     )
     return target
 

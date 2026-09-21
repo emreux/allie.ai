@@ -151,6 +151,12 @@ def create_provider(
         raise MissingAPIKeyError(
             f"no API key stored for {provider_id!r} - run 'live-assistant setup' to add one"
         )
+    # The one place the key is in hand: the log is told, so that a
+    # provider's words quoted on failure can never carry it (`logs.py`).
+    # Imported here as `__main__` imports it: `logs` pulls in `app`.
+    from assistant.logs import keep_secret
+
+    keep_secret(key or "")
 
     return builder(entry, key or "")
 

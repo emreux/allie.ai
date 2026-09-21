@@ -240,8 +240,10 @@ async def test_the_channel_hands_the_digits_and_the_text_to_whatsapp() -> None:
 @pytest.mark.parametrize(
     ("outcome", "said"),
     [
+        ("sent", "Sent to"),
         ("pressed", "Handed to WhatsApp and Enter pressed"),
         ("placed", "Enter was not pressed"),
+        ("unseen", "did not show the message"),
         ("no_window", "did not open a window"),
         ("not_installed", "not installed"),
     ],

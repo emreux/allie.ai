@@ -38,6 +38,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from loguru import logger
 
 from assistant import app
 from assistant.agent.core import Confirm, ToolRunner
@@ -740,6 +741,93 @@ async def test_the_handle_is_forgotten_after_the_resume_minutes() -> None:
     await assistant.settled()
 
     assert provider.opened[1].resume_handle is None
+
+
+async def test_a_handle_the_provider_refuses_is_dropped_and_the_session_opened_afresh() -> None:
+    """Measured 2026-09-21: Gemini takes a handle 4 minutes after the close
+    and refuses one 5 minutes after it (close code 1011), for the whole two
+    hours its documentation promises. Retried with the same handle, the same
+    refusal came every time - the owner heard "could not reach the provider"
+    on every sentence for the rest of the resume window (2026-09-19 and 20),
+    and only a restart helped. A refused handle is forgotten on the spot and
+    the session opened without it: nothing is said, and the turn goes on."""
+    capture = FakeCapture()
+    tts = FakeTTS()
+    turns: list[Turn] = []
+    stale = ProviderError("gemini refused the request (1011): Internal error", kind="refused")
+    provider = Provider(refuse=[None, stale, None], events=[Resumable("h-1"), *ANSWER])
+    assistant = assistant_with(capture=capture, provider=provider, tts=tts, on_turn=turns.append)
+
+    await one_turn(assistant, capture)
+    capture.speak()
+    capture.quiet()
+    await assistant.settled()
+
+    assert [config.resume_handle for config in provider.opened] == [None, "h-1", None]
+    assert tts.said == []
+    assert [turn.failure for turn in turns] == [None, None]
+    assert assistant.state is State.IDLE
+
+
+async def test_a_fresh_open_refused_after_the_handle_is_one_failure_said_once() -> None:
+    capture = FakeCapture()
+    tts = FakeTTS()
+    turns: list[Turn] = []
+    refused = ProviderError("gemini refused the request (1011): Internal error", kind="refused")
+    provider = Provider(refuse=[None, refused, refused], events=[Resumable("h-1"), *ANSWER])
+    assistant = assistant_with(capture=capture, provider=provider, tts=tts, on_turn=turns.append)
+
+    await one_turn(assistant, capture)
+    capture.speak()
+    capture.quiet()
+    await assistant.settled()
+
+    assert [config.resume_handle for config in provider.opened] == [None, "h-1", None]
+    assert tts.said == [TURKISH.ui["unreachable"]]
+    assert [turn.failure for turn in turns] == [None, "unreachable"]
+
+
+async def test_a_network_that_is_down_keeps_the_handle_for_when_it_is_back() -> None:
+    """Only a refusal is the handle's fault. A socket that would not open
+    is said out loud as before, and the handle is still offered next time."""
+    capture = FakeCapture()
+    tts = FakeTTS()
+    down = ProviderError("gemini could not be reached (ConnectionError)", kind="unreachable")
+    provider = Provider(refuse=[None, down, None], events=[Resumable("h-1"), *ANSWER])
+    assistant = assistant_with(capture=capture, provider=provider, tts=tts)
+
+    await one_turn(assistant, capture)
+    capture.speak()
+    capture.quiet()
+    await assistant.settled()
+    capture.speak()
+    capture.quiet()
+    await assistant.settled()
+
+    assert [config.resume_handle for config in provider.opened] == [None, "h-1", "h-1"]
+    assert tts.said == [TURKISH.ui["unreachable"]]
+
+
+async def test_a_session_that_cannot_be_opened_is_logged_with_the_providers_words() -> None:
+    """The log of 2026-09-20 said "session failed: unreachable" and nothing
+    else - the close code and Google's sentence, which named the cause,
+    were in the exception and nowhere else."""
+    lines: list[str] = []
+    sink = logger.add(lines.append, format="{level} {message}")
+    try:
+        capture = FakeCapture()
+        provider = Provider(
+            refuse=[
+                ProviderError("gemini refused the request (1011): Internal error", kind="refused")
+            ]
+        )
+        assistant = assistant_with(capture=capture, provider=provider)
+
+        await one_turn(assistant, capture)
+    finally:
+        logger.remove(sink)
+
+    assert any("1011" in line and "Internal error" in line for line in lines)
 
 
 async def test_a_session_that_cannot_be_opened_is_said_out_loud_and_the_door_is_kept() -> None:

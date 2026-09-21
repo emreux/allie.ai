@@ -662,16 +662,32 @@ class LiveAssistant:
         config = self._session_config()
         if resume or self._handle_fresh():
             config = replace(config, resume_handle=self._handle)
+        opened = False
         try:
             async with self._provider.connect(config) as session:
+                opened = True
                 return await self._attend(session)
-        except AuthenticationError:
+        except AuthenticationError as refusal:
+            logger.warning("session refused: {words}", words=refusal)
             failure = "key_invalid"
         except ProviderError as refusal:
+            logger.warning("session {kind}: {words}", kind=refusal.kind, words=refusal)
+            if not opened and config.resume_handle is not None and refusal.kind == "refused":
+                # The handle, not the network: the provider would not
+                # continue the conversation it handed out (Gemini keeps one
+                # for a few minutes, not the two hours it documents -
+                # measured 2026-09-21: taken at 4 minutes, refused at 5 with
+                # close code 1011). Offered again it is refused again, so it
+                # is forgotten here and the session opened afresh, with
+                # nothing said: the context is lost, the turn is not.
+                logger.info("the resumption handle was refused; opening without it")
+                self._handle = None
+                return await self._attend_one(resume=False)
             failure = _failure_of(refusal)
-        except OSError:
+        except OSError as failure_below:
             # A socket refused below the adapter's transport never reaches
             # it to be translated.
+            logger.warning("session unreachable: {words}", words=failure_below)
             failure = "unreachable"
         self._failures += 1
         await self._failed(failure)
@@ -798,7 +814,7 @@ class LiveAssistant:
             case Closed(error=error):
                 if error is None:
                     return "closed"
-                logger.warning("session dropped: {kind}", kind=error.kind)
+                logger.warning("session dropped ({kind}): {words}", kind=error.kind, words=error)
                 self._failures += 1
                 if self._failures < MAX_OPEN_FAILURES:
                     return "reopen"

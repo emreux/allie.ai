@@ -135,6 +135,14 @@ class Desktop(Protocol):
 WM_CLOSE = 0x0010
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 KEYEVENTF_KEYUP = 0x0002
+
+# UI Automation, for `text_boxes`: the property and control-type ids from
+# `UIAutomationClient.h`, and the scope that means "everything below".
+UIA_CONTROL_TYPE = 30003
+UIA_VALUE = 30045
+UIA_DOCUMENT = 50030
+UIA_EDIT = 50004
+UIA_DESCENDANTS = 4
 _EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 
@@ -251,6 +259,55 @@ class Win32Desktop:
         there as that module's own test seam."""
         self._user32.keybd_event(code, 0, 0, 0)
         self._user32.keybd_event(code, 0, KEYEVENTF_KEYUP, 0)
+
+    def text_boxes(self, handle: int) -> list[str] | None:
+        """What the text boxes of the web page inside the window `handle`
+        hold, or `None` when there is no page to read.
+
+        Added for `messaging/whatsapp.py` (2026-09-21), which presses Enter
+        only once WhatsApp's chat box holds the message. WhatsApp is a WinUI
+        shell around a WebView2, and the page inside is reachable only
+        through UI Automation: the first `Document` below the window is the
+        page, and its `Edit` controls are its boxes (the search box and the
+        chat box). Asked that way it takes about 25 ms; asked for every edit
+        below the *window* it took 4 s, most of it in the shell's own layers
+        (measured 2026-09-21). MSAA stops at the WebView's container.
+
+        `comtypes` is imported here and not at the top: it initialises COM
+        on the thread that imports it, and this runs on a worker thread
+        (section 3.1 rule 4), which is also why COM is initialised and
+        released around each call.
+        """
+        import comtypes  # type: ignore[import-untyped]
+        import comtypes.client  # type: ignore[import-untyped]
+
+        comtypes.CoInitialize()
+        try:
+            comtypes.client.GetModule("UIAutomationCore.dll")
+            from comtypes.gen import UIAutomationClient  # type: ignore[import-untyped]
+
+            automation = comtypes.client.CreateObject(
+                UIAutomationClient.CUIAutomation, interface=UIAutomationClient.IUIAutomation
+            )
+            window = automation.ElementFromHandle(handle)
+            page = window.FindFirst(
+                UIA_DESCENDANTS, automation.CreatePropertyCondition(UIA_CONTROL_TYPE, UIA_DOCUMENT)
+            )
+            if not page:
+                return None
+            edits = page.FindAll(
+                UIA_DESCENDANTS, automation.CreatePropertyCondition(UIA_CONTROL_TYPE, UIA_EDIT)
+            )
+            return [
+                str(edits.GetElement(index).GetCurrentPropertyValue(UIA_VALUE) or "")
+                for index in range(edits.Length)
+            ]
+        except (comtypes.COMError, ValueError) as failure:
+            # The window went, or an element did between two calls.
+            logger.debug("the page in window {} could not be read: {}", handle, failure)
+            return None
+        finally:
+            comtypes.CoUninitialize()
 
     def is_window(self, handle: int) -> bool:
         return bool(self._user32.IsWindow(handle))

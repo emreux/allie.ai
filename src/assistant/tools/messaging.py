@@ -49,7 +49,7 @@ from dataclasses import replace
 from typing import Annotated, Any, Literal, Protocol
 
 from assistant.messaging.contacts import AddressBook, Contact
-from assistant.messaging.whatsapp import MAX_TEXT_CHARS, WAKE_SECONDS, Outcome
+from assistant.messaging.whatsapp import MAX_TEXT_CHARS, TYPE_SECONDS, WAKE_SECONDS, Outcome
 from assistant.tools.registry import Tool, tool
 
 __all__ = [
@@ -92,13 +92,19 @@ EMPTY = "The message is empty. Ask the user what to say."
 
 # What the WhatsApp channel answers for each outcome (`messaging/whatsapp.py`).
 WHATSAPP_SAID: dict[Outcome, str] = {
+    "sent": "Sent to {name} on WhatsApp: the message left the chat box after Enter.",
     "pressed": (
         "Handed to WhatsApp and Enter pressed - the message to {name} should be on its way; "
         "WhatsApp gives no confirmation."
     ),
     "placed": (
-        "The message to {name} is typed into the WhatsApp chat and waiting: WhatsApp did not "
-        "come to the front, so Enter was not pressed - the user presses it."
+        "The message to {name} is typed into the WhatsApp chat and waiting, not sent: Enter "
+        "was not pressed, or did not send it (WhatsApp was not in front, or the chat box "
+        "held other text too). The user looks at the chat and presses Enter."
+    ),
+    "unseen": (
+        "WhatsApp did not show the message to {name} in the chat box within {type_seconds:.0f} "
+        "seconds, so Enter was not pressed. The user checks WhatsApp."
     ),
     "no_window": "WhatsApp did not open a window within {seconds:.0f} seconds; nothing was sent.",
     "not_installed": "WhatsApp is not installed; open_app can offer it from the Store.",
@@ -241,4 +247,6 @@ class WhatsAppChannel:
 
     async def send(self, recipient: Contact, text: str) -> str:
         outcome = await self._whatsapp.send(recipient.phone, text)
-        return WHATSAPP_SAID[outcome].format(name=recipient.name, seconds=WAKE_SECONDS)
+        return WHATSAPP_SAID[outcome].format(
+            name=recipient.name, seconds=WAKE_SECONDS, type_seconds=TYPE_SECONDS
+        )

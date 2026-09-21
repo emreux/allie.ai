@@ -27,19 +27,25 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
+from assistant import logs
 from assistant.app import Turn
 from assistant.config import config_dir
 from assistant.live.base import Usage
-from assistant.logs import log_path, log_turn, setup_logging
+from assistant.logs import keep_secret, log_path, log_turn, setup_logging
 
 KEY = "AIzaSyD-notarealkeyatall-000000000000000"
 
 
 @pytest.fixture(autouse=True)
 def close_the_log() -> Iterator[None]:
-    """No test leaves a handler behind holding a file open."""
+    """No test leaves a handler behind holding a file open, and no test
+    leaves a secret behind for the next one to mask."""
+    kept = set(logs._SECRETS)
+    logs._SECRETS.clear()
     yield
     logger.remove()
+    logs._SECRETS.clear()
+    logs._SECRETS.update(kept)
 
 
 @pytest.fixture
@@ -269,3 +275,52 @@ def test_the_value_of_a_variable_is_never_written_down(log: Path) -> None:
         logger.exception("that did not work")
 
     assert KEY not in read(log)
+
+
+def test_a_secret_the_program_was_told_about_is_masked_wherever_it_appears(log: Path) -> None:
+    """Since 2026-09-21 the log carries the provider's own words when a
+    session fails - the close code and the sentence that name the cause.
+    A transport's exception could quote the address it was opening, and
+    the key rides on that address. So the key is registered where it is
+    loaded, and the sink masks it in every line from then on."""
+    keep_secret(KEY)
+
+    logger.warning("gemini could not be reached: wss://example/ws?key={} refused", KEY)
+    logger.info("two keys in one line: {} and {}", KEY, KEY)
+
+    written = read(log)
+    assert KEY not in written
+    assert "wss://example/ws?key=*** refused" in written
+    assert "two keys in one line: *** and ***" in written
+
+
+def test_an_empty_secret_masks_nothing(log: Path) -> None:
+    """A provider without a key registers nothing; every character of
+    every line would otherwise be a match."""
+    keep_secret("")
+
+    logger.info("plain words")
+
+    assert "plain words" in read(log)
+
+
+def test_a_short_secret_does_not_break_the_mask_of_a_long_one(log: Path) -> None:
+    """The setup command registers whatever was typed, "key" included; the
+    real key must still be masked whole, not nibbled around it."""
+    keep_secret("key")
+    keep_secret(KEY)
+
+    logger.info("the key {}", KEY)
+
+    written = read(log)
+    assert KEY not in written
+    assert "notareal" not in written
+
+
+def test_a_secret_registered_before_the_log_is_set_up_is_still_masked(tmp_path: Path) -> None:
+    keep_secret(KEY)
+    path = setup_logging(path=tmp_path / "logs" / "assistant.log")
+
+    logger.info("the key {} again", KEY)
+
+    assert KEY not in read(path)

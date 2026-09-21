@@ -344,6 +344,15 @@ wheels = [
 ]
 
 [[package]]
+name = "comtypes"
+version = "1.4.17"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/ff/c7836bd0d78fc615281016f154f514e9d523d7cb9ab9e8b4d344adc5f5e7/comtypes-1.4.17.tar.gz", hash = "sha256:3d9c1e92ad8daf7600d371e76ee16161a627a5fb70c3144f6e52e78af6034363", size = 262743, upload-time = "2026-09-21T08:08:07.687Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/89/9c/d0bc1fb69ad22a04bdc01dd9b5613a2ebc4d02ba1ec24b02127dc93791ba/comtypes-1.4.17-py3-none-any.whl", hash = "sha256:4e0a221dde2c589b82977bed802efd71cd5eb67a380347b732e02735e597f586", size = 298743, upload-time = "2026-09-21T08:08:06.461Z" },
+]
+
+[[package]]
 name = "cryptography"
 version = "50.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -803,6 +812,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyascii" },
+    { name = "comtypes" },
     { name = "faster-whisper" },
     { name = "google-genai" },
     { name = "httpx" },
@@ -841,6 +851,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyascii", specifier = ">=0.3.3" },
+    { name = "comtypes", specifier = ">=1.4.17" },
     { name = "faster-whisper", specifier = ">=1.2.1" },
     { name = "google-genai", specifier = ">=2.20.0" },
     { name = "httpx", specifier = ">=0.28.1" },

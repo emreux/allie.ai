@@ -9,6 +9,14 @@ The one rule that matters is tested from both sides: Enter is pressed only
 when the foreground window belongs to `WhatsApp.exe` at *both* checks, and
 a message left waiting in the chat is the outcome otherwise - never a
 keystroke into whatever the user was typing in.
+
+Since 2026-09-21 the fake is a small WhatsApp too: the link fills its chat
+box (on top of whatever draft was there, as the real one does), Enter
+empties it when it works, and the box can be made unreadable. Enter is
+pressed only once the box holds exactly the message - measured on the
+owner's machine, 2026-09-20/21: after a restore from the tray the page
+inside WhatsApp takes 7-10 s to apply the link, and an Enter on a timer
+landed on an empty box, with the text arriving afterwards.
 """
 
 from __future__ import annotations
@@ -16,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Sequence
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -34,7 +43,8 @@ PHONE = "905320000000"
 
 
 class FakeScreen:
-    """Windows by image, a scripted run of foreground answers, recorded presses."""
+    """Windows by image, a scripted run of foreground answers, recorded
+    presses - and a chat box that the link fills and Enter empties."""
 
     def __init__(
         self, *, windows: set[int] | None = None, foreground: Sequence[str | None] = ()
@@ -51,6 +61,37 @@ class FakeScreen:
         # test wants one to come late.
         self.appears_after: int | None = None
         self.polls = 0
+        # The chat box: what it holds, what the link will add to it after
+        # how many reads (the page applying the link late), whether Enter
+        # empties it, and whether it can be read at all.
+        self.box = ""
+        self.search = ""
+        self.pending: str | None = None
+        self.fills_after = 0
+        self.reads = 0
+        self.enter_works = True
+        self.readable = True
+        self.launched: list[str] = []
+
+    def launch(self, target: str) -> None:
+        """`shell.launch`, as WhatsApp would take it: the link's text goes
+        into the box, on top of whatever was there."""
+        self.launched.append(target)
+        query = parse_qs(urlsplit(target).query)
+        if "text" in query:
+            self.pending = query["text"][0]
+            self.reads = 0
+
+    def text_boxes(self, window: int) -> list[str] | None:
+        self.threads.append(threading.current_thread())
+        if not self.readable:
+            return None
+        self.reads += 1
+        if self.pending is not None and self.reads > self.fills_after:
+            self.box += self.pending
+            self.pending = None
+        # The real box reads as one newline when empty.
+        return [self.search, self.box or "\n"]
 
     def windows_named(self, image: str) -> set[int]:
         self.threads.append(threading.current_thread())
@@ -69,24 +110,43 @@ class FakeScreen:
     def press(self, code: int) -> None:
         self.threads.append(threading.current_thread())
         self.pressed.append(code)
+        if code == VK_RETURN and self.enter_works:
+            self.box = ""
 
 
 @pytest.fixture
-def launched(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    seen: list[str] = []
-    monkeypatch.setattr(shell, "launch", seen.append)
-    return seen
+def screen(monkeypatch: pytest.MonkeyPatch) -> FakeScreen:
+    """A screen whose WhatsApp is running and in front; `shell.launch` is
+    its own, so that the link fills its box."""
+    fake = FakeScreen(windows={1}, foreground=[IMAGE])
+    monkeypatch.setattr(shell, "launch", fake.launch)
+    return fake
 
 
-def whatsapp(screen: FakeScreen, *, installed: bool = True) -> WhatsApp:
+@pytest.fixture
+def launched(screen: FakeScreen) -> list[str]:
+    """What Windows was handed, in order."""
+    return screen.launched
+
+
+def whatsapp(screen: FakeScreen, *, installed: bool = True, **seconds: float) -> WhatsApp:
+    waits = dict.fromkeys(
+        (
+            "wake_seconds",
+            "settle_seconds",
+            "front_seconds",
+            "compose_seconds",
+            "type_seconds",
+            "sent_seconds",
+            "poll_seconds",
+        ),
+        0.0,
+    )
+    waits.update(seconds)
     return WhatsApp(
         screen=screen,
         named=lambda scheme: "WhatsApp" if installed and scheme == SCHEME else None,
-        wake_seconds=0.0,
-        settle_seconds=0.0,
-        front_seconds=0.0,
-        compose_seconds=0.0,
-        poll_seconds=0.0,
+        **waits,
     )
 
 
@@ -114,8 +174,8 @@ def test_nothing_in_the_text_can_reach_the_link_unencoded() -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_not_installed_opens_nothing(launched: list[str]) -> None:
-    screen = FakeScreen()
+async def test_not_installed_opens_nothing(screen: FakeScreen, launched: list[str]) -> None:
+    screen.windows.clear()
 
     assert await whatsapp(screen, installed=False).send(PHONE, "hi") == "not_installed"
     assert launched == []
@@ -133,42 +193,37 @@ def test_installed_is_asked_of_windows_by_the_scheme() -> None:
     assert asked == ["whatsapp"]
 
 
-async def test_a_running_app_is_handed_the_link_at_once(launched: list[str]) -> None:
-    screen = FakeScreen(windows={1}, foreground=[IMAGE])
-
+async def test_a_running_app_is_handed_the_link_at_once(
+    screen: FakeScreen, launched: list[str]
+) -> None:
     outcome = await whatsapp(screen).send(PHONE, "hi")
 
-    assert outcome == "pressed"
+    assert outcome == "sent"
     assert launched == [send_link(PHONE, "hi")]
     assert screen.pressed == [VK_RETURN]
+    assert screen.box == ""
 
 
 async def test_an_app_without_a_window_is_woken_first_and_the_link_sent_after_it_appears(
-    launched: list[str],
+    screen: FakeScreen, launched: list[str]
 ) -> None:
     """A Store app that is still starting drops the link it was started with
     (measured with Spotify, 2026-09-14): the bare scheme first, then the link."""
-    screen = FakeScreen(foreground=[IMAGE])
+    screen.windows.clear()
     screen.appears_after = 3
-    patient = WhatsApp(
-        screen=screen,
-        named=lambda _: "WhatsApp",
-        wake_seconds=1.0,
-        settle_seconds=0.0,
-        front_seconds=0.0,
-        compose_seconds=0.0,
-        poll_seconds=0.0,
-    )
+    patient = whatsapp(screen, wake_seconds=1.0)
 
     outcome = await patient.send(PHONE, "hi")
 
-    assert outcome == "pressed"
+    assert outcome == "sent"
     assert launched == [APP_HOME, send_link(PHONE, "hi")]
     assert screen.polls > 3
 
 
-async def test_no_window_within_the_wait_is_no_window_and_no_link(launched: list[str]) -> None:
-    screen = FakeScreen(foreground=[IMAGE])
+async def test_no_window_within_the_wait_is_no_window_and_no_link(
+    screen: FakeScreen, launched: list[str]
+) -> None:
+    screen.windows.clear()
 
     outcome = await whatsapp(screen).send(PHONE, "hi")
 
@@ -178,25 +233,26 @@ async def test_no_window_within_the_wait_is_no_window_and_no_link(launched: list
 
 
 async def test_a_foreground_that_never_becomes_whatsapp_is_placed_and_nothing_is_pressed(
-    launched: list[str],
+    screen: FakeScreen, launched: list[str]
 ) -> None:
     """The user's editor stayed in front: the text is in the chat, waiting."""
-    screen = FakeScreen(windows={1}, foreground=["Code.exe"])
+    screen.foreground = ["Code.exe"]
 
     outcome = await whatsapp(screen).send(PHONE, "hi")
 
     assert outcome == "placed"
     assert launched == [send_link(PHONE, "hi")]
     assert screen.pressed == []
+    assert screen.box == "hi"
 
 
 async def test_a_focus_that_moved_between_the_two_checks_is_placed_and_nothing_is_pressed(
-    launched: list[str],
+    screen: FakeScreen, launched: list[str]
 ) -> None:
     """The one rule that matters: the foreground is checked again right
     before the key. WhatsApp at the first check, the user's editor at the
     second - an Enter into the editor is not an acceptable failure."""
-    screen = FakeScreen(windows={1}, foreground=[IMAGE, "Code.exe"])
+    screen.foreground = [IMAGE, "Code.exe"]
 
     outcome = await whatsapp(screen).send(PHONE, "hi")
 
@@ -204,33 +260,114 @@ async def test_a_focus_that_moved_between_the_two_checks_is_placed_and_nothing_i
     assert screen.pressed == []
 
 
-async def test_whatsapp_at_both_checks_is_one_enter_and_pressed() -> None:
-    screen = FakeScreen(windows={1}, foreground=[IMAGE, IMAGE])
+async def test_whatsapp_at_both_checks_is_one_enter_and_sent(screen: FakeScreen) -> None:
+    screen.foreground = [IMAGE, IMAGE]
 
     outcome = await whatsapp(screen).send(PHONE, "hi")
 
-    assert outcome == "pressed"
+    assert outcome == "sent"
     assert screen.pressed == [VK_RETURN]
 
 
-async def test_the_image_is_compared_without_regard_to_case_or_path() -> None:
-    screen = FakeScreen(windows={1}, foreground=["whatsapp.EXE"])
+async def test_the_image_is_compared_without_regard_to_case_or_path(screen: FakeScreen) -> None:
+    screen.foreground = ["whatsapp.EXE"]
+
+    assert await whatsapp(screen).send(PHONE, "hi") == "sent"
+
+
+async def test_a_foreground_that_comes_to_whatsapp_late_is_waited_for(screen: FakeScreen) -> None:
+    """The link brings the window to the front; it takes a moment."""
+    screen.foreground = [None, "explorer.exe", IMAGE]
+    late = whatsapp(screen, front_seconds=1.0)
+
+    assert await late.send(PHONE, "hi") == "sent"
+
+
+# --------------------------------------------------------------------------
+# The chat box: Enter only once it holds exactly the message (2026-09-21)
+# --------------------------------------------------------------------------
+
+
+async def test_enter_waits_for_the_message_to_show_in_the_box(screen: FakeScreen) -> None:
+    """The page applies the link late (7-10 s after a restore from the
+    tray, measured 2026-09-21): the key waits for the text, not a timer."""
+    screen.fills_after = 4
+    patient = whatsapp(screen, type_seconds=1.0)
+
+    outcome = await patient.send(PHONE, "hi")
+
+    assert outcome == "sent"
+    assert screen.reads > 4
+    assert screen.pressed == [VK_RETURN]
+
+
+async def test_a_message_that_never_shows_is_unseen_and_nothing_is_pressed(
+    screen: FakeScreen,
+) -> None:
+    screen.fills_after = 10_000
+
+    outcome = await whatsapp(screen).send(PHONE, "hi")
+
+    assert outcome == "unseen"
+    assert screen.pressed == []
+
+
+async def test_a_draft_already_in_the_box_keeps_enter_and_is_placed(screen: FakeScreen) -> None:
+    """The link adds the text to a draft rather than replacing it (measured
+    2026-09-21: "deneme 3 (...)deneme 4 (...)"). What would go is not what
+    the user confirmed, so nothing is pressed and the user looks."""
+    screen.box = "an older draft"
+
+    outcome = await whatsapp(screen).send(PHONE, "hi")
+
+    assert outcome == "placed"
+    assert screen.pressed == []
+    assert screen.box == "an older drafthi"
+
+
+async def test_the_box_is_compared_without_the_newline_whatsapp_keeps_in_it(
+    screen: FakeScreen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty box reads as one newline, and a filled one may keep it."""
+    screen.box = "hi\n"
+    monkeypatch.setattr(shell, "launch", screen.launched.append)
+
+    assert await whatsapp(screen).send(PHONE, " hi ") == "sent"
+
+
+async def test_an_enter_that_did_not_empty_the_box_is_placed(screen: FakeScreen) -> None:
+    """WhatsApp's "Enter is send" setting off, or the box not ready: the
+    text is still there after the key, and the user is told so."""
+    screen.enter_works = False
+
+    outcome = await whatsapp(screen).send(PHONE, "hi")
+
+    assert outcome == "placed"
+    assert screen.pressed == [VK_RETURN]
+
+
+async def test_a_box_that_cannot_be_read_after_enter_is_pressed_unverified(
+    screen: FakeScreen,
+) -> None:
+    """The page went away between the key and the look: the key was pressed
+    and that is all that is known."""
+
+    def press(code: int) -> None:
+        screen.pressed.append(code)
+        screen.readable = False
+
+    screen.press = press  # type: ignore[method-assign]
 
     assert await whatsapp(screen).send(PHONE, "hi") == "pressed"
 
 
-async def test_a_foreground_that_comes_to_whatsapp_late_is_waited_for() -> None:
-    """The link brings the window to the front; it takes a moment."""
-    screen = FakeScreen(windows={1}, foreground=[None, "explorer.exe", IMAGE])
-    late = WhatsApp(
-        screen=screen,
-        named=lambda _: "WhatsApp",
-        front_seconds=1.0,
-        compose_seconds=0.0,
-        poll_seconds=0.0,
-    )
+async def test_a_box_that_cannot_be_read_at_all_is_unseen(screen: FakeScreen) -> None:
+    """No page to read - WhatsApp changed, or UI Automation is silent: an
+    Enter on a timer is what failed on 2026-09-20, so it is not pressed."""
+    screen.readable = False
 
-    assert await late.send(PHONE, "hi") == "pressed"
+    assert await whatsapp(screen).send(PHONE, "hi") == "unseen"
+    assert screen.pressed == []
 
 
 # --------------------------------------------------------------------------
@@ -247,22 +384,24 @@ def test_the_store_application_of_december_2025_is_known_by_its_newer_name() -> 
 
 
 async def test_a_running_app_under_the_newer_name_is_handed_the_link_at_once(
-    launched: list[str],
+    screen: FakeScreen, launched: list[str]
 ) -> None:
-    screen = FakeScreen(windows={1}, foreground=["WhatsApp.Root.exe"])
+    screen.foreground = ["WhatsApp.Root.exe"]
     screen.image = "WhatsApp.Root.exe"
 
     outcome = await whatsapp(screen).send(PHONE, "hi")
 
-    assert outcome == "pressed"
+    assert outcome == "sent"
     assert launched == [send_link(PHONE, "hi")]
     assert screen.pressed == [VK_RETURN]
 
 
-async def test_enter_goes_to_the_newer_name_in_front_too(launched: list[str]) -> None:
+async def test_enter_goes_to_the_newer_name_in_front_too(
+    screen: FakeScreen, launched: list[str]
+) -> None:
     """Both checks before the key accept either name; a stranger in front
     still keeps the key."""
-    screen = FakeScreen(windows={1}, foreground=["WhatsApp.Root.exe", "Code.exe"])
+    screen.foreground = ["WhatsApp.Root.exe", "Code.exe"]
     screen.image = "WhatsApp.Root.exe"
 
     assert await whatsapp(screen).send(PHONE, "hi") == "placed"
@@ -274,9 +413,10 @@ async def test_enter_goes_to_the_newer_name_in_front_too(launched: list[str]) ->
 # --------------------------------------------------------------------------
 
 
-async def test_two_sends_do_not_press_enter_in_each_others_chat(launched: list[str]) -> None:
+async def test_two_sends_do_not_press_enter_in_each_others_chat(
+    screen: FakeScreen, launched: list[str]
+) -> None:
     """One at a time: the second waits for the first to have pressed."""
-    screen = FakeScreen(windows={1}, foreground=[IMAGE])
     app = whatsapp(screen)
     order: list[str] = []
 
@@ -287,14 +427,12 @@ async def test_two_sends_do_not_press_enter_in_each_others_chat(launched: list[s
     await asyncio.gather(one("first"), one("second"))
 
     assert launched == [send_link(PHONE, "first"), send_link(PHONE, "second")]
-    assert order == ["first:pressed", "second:pressed"]
+    assert order == ["first:sent", "second:sent"]
 
 
-async def test_the_screen_is_never_touched_on_the_event_loop() -> None:
-    """Section 3.1 rule 4: enumerating windows and pressing keys are Win32
-    calls, and they run on a thread like the media window's."""
-    screen = FakeScreen(windows={1}, foreground=[IMAGE])
-
+async def test_the_screen_is_never_touched_on_the_event_loop(screen: FakeScreen) -> None:
+    """Section 3.1 rule 4: enumerating windows, reading the box and pressing
+    keys are Win32 calls, and they run on a thread like the media window's."""
     await whatsapp(screen).send(PHONE, "hi")
 
     assert screen.threads and all(t is not threading.main_thread() for t in screen.threads)
