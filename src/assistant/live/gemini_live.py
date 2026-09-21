@@ -106,9 +106,12 @@ class GeminiLive:
 
     # What the state machine may count on beyond the protocol: a handle
     # that continues the conversation in a later session (plan.md D5),
-    # transcripts of both sides, and the provider's own web search as a
-    # tool of the session (D22).
-    capabilities: frozenset[str] = frozenset({"resumption", "transcripts", "web_search"})
+    # transcripts of both sides, the provider's own web search as a tool
+    # of the session (D22), the tone of the voice answered in kind, and a
+    # context the server keeps under its ceiling (D25).
+    capabilities: frozenset[str] = frozenset(
+        {"resumption", "transcripts", "web_search", "affective_dialog", "context_compression"}
+    )
 
     def __init__(self, api_key: str, *, client: Any | None = None) -> None:
         self._client = client if client is not None else genai.Client(api_key=api_key)
@@ -339,6 +342,15 @@ def _connect_config(config: SessionConfig) -> types.LiveConnectConfig:
         # Asked for on every open so that the handles come (`Resumable`);
         # with a handle, the conversation continues where it left off.
         session_resumption=types.SessionResumptionConfig(handle=config.resume_handle),
+        # The two switches of D25, sent only when asked for; `None` is the
+        # server's own default, as with everything above. Proactive audio is
+        # not sent at all: on this model it is on by the server's own rule.
+        enable_affective_dialog=True if config.affective_dialog else None,
+        context_window_compression=(
+            types.ContextWindowCompressionConfig(sliding_window=types.SlidingWindow())
+            if config.compress_context
+            else None
+        ),
     )
 
 

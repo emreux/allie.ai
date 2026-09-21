@@ -569,6 +569,25 @@ def test_web_search_reaches_the_session_and_its_rule_the_prompt(
     assert config.system_prompt.index(SEARCH_RULE) > config.system_prompt.index(SYSTEM_PROMPT)
 
 
+def test_the_two_session_switches_reach_the_session(configured: Path, wiring: Wiring) -> None:
+    """The defaults (D25, 2026-09-21): compression on, affective dialog off."""
+    main(["run", "--terminal"])
+
+    config = session_of(wiring)
+    assert (config.affective_dialog, config.compress_context) == (False, True)
+
+
+def test_the_two_session_switches_can_be_flipped(configured: Path, wiring: Wiring) -> None:
+    configured_with(
+        live=LiveSettings(primary=f"gemini:{MODEL}", affective_dialog=True, compress_context=False)
+    )
+
+    main(["run", "--terminal"])
+
+    config = session_of(wiring)
+    assert (config.affective_dialog, config.compress_context) == (True, False)
+
+
 def test_web_search_off_leaves_the_prompt_as_it_was(configured: Path, wiring: Wiring) -> None:
     """The default (2026-09-21: refused on the free-tier key): no tool, no
     sentence, the frozen prompt as it was."""

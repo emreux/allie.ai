@@ -157,7 +157,10 @@ class LiveSettings(BaseModel):
 
     `web_search` offers the provider's web search to the model as a tool of
     the session (D22); off until the key has billing (refused by Google on
-    the free tier, 2026-09-21).
+    the free tier, 2026-09-21). `affective_dialog` and `compress_context` are
+    the two session switches of D25: the tone of the voice answered in kind
+    (off: refused by `gemini-3.8-live`, 2026-09-21), and a context the server
+    keeps under its ceiling (on).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -184,6 +187,16 @@ class LiveSettings(BaseModel):
     # in 0.8 s) - a key with billing turns it on with `web_search = true`.
     # The adapter without the capability ignores it.
     web_search: bool = False
+
+    # Two of the session's own switches (plan.md D25): the model answers to
+    # the tone of the voice, and the server keeps the context under its
+    # ceiling so that a long conversation is not cut at fifteen minutes.
+    # Affective dialog is off: `gemini-3.8-live` refuses the field (measured
+    # 2026-09-21: close code 1007 "invalid argument" with our config and with
+    # a bare one, on v1beta and v1alpha alike) - the model reads the voice
+    # by its own rule, as it does proactive audio. Compression is accepted.
+    affective_dialog: bool = False
+    compress_context: bool = True
 
     @field_validator("idle_close_seconds", "resume_minutes", "silence_ms")
     @classmethod

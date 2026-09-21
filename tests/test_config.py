@@ -228,6 +228,20 @@ def test_the_two_turn_detection_knobs_round_trip_through_the_file(config_home: P
     assert (live.end_sensitivity, live.silence_ms) == ("HIGH", 300)
 
 
+def test_compression_is_on_and_affective_dialog_off_unless_the_owner_says_otherwise(
+    config_home: Path,
+) -> None:
+    """D25: the model refuses `enable_affective_dialog` (2026-09-21), so that
+    one ships off; the sliding window is accepted and ships on."""
+    live = load_settings().live
+    assert (live.affective_dialog, live.compress_context) == (False, True)
+
+    save_settings(Settings(live=LiveSettings(affective_dialog=True, compress_context=False)))
+
+    live = load_settings().live
+    assert (live.affective_dialog, live.compress_context) == (True, False)
+
+
 def test_web_search_is_off_until_the_owner_switches_it_on(config_home: Path) -> None:
     """D22: Google refuses the tool on the free-tier key (2026-09-21), so
     the default cannot be on; a key with billing gets `web_search = true`."""

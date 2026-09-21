@@ -233,6 +233,7 @@ def test_a_session_opens_with_the_plan_s_defaults() -> None:
     assert (config.end_sensitivity, config.silence_ms) == ("", 0)
     assert list(config.tools) == []
     assert config.web_search is False
+    assert (config.affective_dialog, config.compress_context) == (False, False)
 
 
 def test_an_event_cannot_be_edited_after_it_is_built() -> None:
@@ -296,14 +297,16 @@ def test_every_adapter_announces_what_it_can_do(adapter: Adapter) -> None:
     assert isinstance(announced, frozenset)
 
 
-async def test_a_session_asked_for_web_search_still_opens_on_every_adapter(
+async def test_a_session_asked_for_the_optional_features_still_opens_on_every_adapter(
     adapter: Adapter,
 ) -> None:
-    """The flag is provider-agnostic (spec section 2): an adapter with the
-    capability sends its vendor's tool, one without it opens all the same."""
+    """The flags are provider-agnostic (spec sections 2 and 6): an adapter
+    with the capability sends its vendor's tool or switch, one without it
+    opens all the same."""
     provider = adapter.build()
 
-    async with provider.connect(replace(CONFIG, web_search=True)) as session:
+    asked = replace(CONFIG, web_search=True, affective_dialog=True, compress_context=True)
+    async with provider.connect(asked) as session:
         assert isinstance(session, LiveSession)
 
 

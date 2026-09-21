@@ -200,6 +200,14 @@ class SessionConfig:
     # section 2) - the search runs on the server and no call reaches the
     # gate, which is why it is a flag here and not a `ToolSpec`.
     web_search: bool = False
+    # `affective_dialog`: the model reads the tone of the voice and answers
+    # in kind (Gemini `enable_affective_dialog`). `compress_context`: the
+    # server keeps the context under its own ceiling by dropping the oldest
+    # turns, so that a session has no fixed end (Gemini
+    # `context_window_compression` with the server's default window;
+    # without it an audio session is capped at fifteen minutes).
+    affective_dialog: bool = False
+    compress_context: bool = False
 
 
 # --------------------------------------------------------------------------

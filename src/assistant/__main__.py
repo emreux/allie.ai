@@ -1378,6 +1378,8 @@ async def _talk(
                 end_sensitivity=live.end_sensitivity,
                 silence_ms=live.silence_ms,
                 web_search=live.web_search,
+                affective_dialog=live.affective_dialog,
+                compress_context=live.compress_context,
             )
 
         assistant = LiveAssistant(

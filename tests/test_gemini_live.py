@@ -442,7 +442,9 @@ def test_what_the_adapter_announces() -> None:
     adapter, _ = gemini()
 
     assert adapter.id == "gemini"
-    assert adapter.capabilities == frozenset({"resumption", "transcripts", "web_search"})
+    assert adapter.capabilities == frozenset(
+        {"resumption", "transcripts", "web_search", "affective_dialog", "context_compression"}
+    )
     assert DEFAULT_MODEL == "gemini-3.8-live"
 
 
@@ -514,6 +516,53 @@ async def test_what_the_model_searched_for_and_where_it_read_is_logged() -> None
     assert "dolar kuru bugün" in line
     assert "TCMB" in line
     assert line.startswith("INFO")
+
+
+async def test_affective_dialog_is_switched_on_when_asked() -> None:
+    """B7 (plan.md D25): the model reads the tone of the voice and answers
+    in kind. One boolean in the connect config; no API version to set,
+    the SDK's default for the Gemini API is already v1beta."""
+    adapter, client = gemini()
+
+    await collect(adapter, SessionConfig(model="m", affective_dialog=True))
+
+    assert opened(client).enable_affective_dialog is True
+
+
+async def test_affective_dialog_is_left_to_the_server_by_default() -> None:
+    adapter, client = gemini()
+
+    await collect(adapter, SessionConfig(model="m"))
+
+    assert opened(client).enable_affective_dialog is None
+
+
+async def test_context_compression_asks_for_the_server_s_sliding_window() -> None:
+    """B9: without it an audio session ends at 15 minutes; with it the
+    server drops the oldest turns past a trigger and the session has no
+    end. The numbers are the server's own (Google's example), not ours."""
+    adapter, client = gemini()
+
+    await collect(adapter, SessionConfig(model="m", compress_context=True))
+
+    compression = opened(client).context_window_compression
+    assert compression is not None
+    assert isinstance(compression.sliding_window, types.SlidingWindow)
+    assert compression.sliding_window.target_tokens is None
+    assert compression.trigger_tokens is None
+
+
+async def test_without_compression_nothing_is_sent() -> None:
+    adapter, client = gemini()
+
+    await collect(adapter, SessionConfig(model="m"))
+
+    assert opened(client).context_window_compression is None
+    assert opened(client).proactivity is None
+
+
+def test_the_adapter_announces_the_two_switches() -> None:
+    assert {"affective_dialog", "context_compression"} <= GeminiLive.capabilities
 
 
 # --------------------------------------------------------------------------
