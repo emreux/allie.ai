@@ -22,8 +22,8 @@ another language leaves the publisher and the price unknown, and an unknown
 price is *tried*, because winget refuses a paid app itself, with its own
 words, and refusing every app on a Turkish Windows would be the worse error.
 
-**A download can outlast the turn.** The turn has a minute to its first word
-(`app.THINKING_TIMEOUT`), and the confirmation is already inside it, so the
+**A download can outlast the turn.** A tool has a minute to answer
+(`Limits.turn_seconds`), and the confirmation is already inside it, so the
 install is waited for `INSTALL_WAIT_SECONDS` and then left to finish on its
 own - the process is kept, not killed, and `settled()` tells `open_app` that
 the catalogue is stale the next time someone asks for the app. Everything

@@ -1,17 +1,21 @@
 """What the assistant is told about itself, once, and never again (item 1.9).
 
-Five rules, kept as five constants so each can be read and argued with on its
+Six rules, kept as six constants so each can be read and argued with on its
 own: who is speaking, how long an answer may be, which language it is in, what
-to do when the last message had no language in it at all, and what to make of
-words a tool brought in from outside.
+to do when the last message had no language in it at all, what to make of words
+a tool brought in from outside, and what the live session adds - a tool that
+answers "declined", and the line the assistant sends after reading a reminder
+aloud. `SEARCH_RULE` is a seventh that the composition root appends only to a
+session opened with web search (plan.md D22), and is outside `SYSTEM_PROMPT`
+for that reason.
 
 **The prompt is frozen.** No clock, no date, no name of the user, nothing this
 module computes - and that is why there is not a single import below. A
 provider that caches a long prefix only does so while the bytes match exactly
 (architecture guide section 2); the moment a timestamp is interpolated in, the
 cache stops hitting on every request and nothing anywhere reports it. The
-assistant learns the time from a tool in phase 2, which is where knowledge that
-changes belongs.
+assistant learns the time from `get_current_time`, which is where knowledge
+that changes belongs.
 
 **No language is named here.** Section 3.12 makes the reply language a property
 of what the user just said rather than a constant in the code. The rule below
@@ -33,10 +37,14 @@ __all__ = [
     "UNTRUSTED_RULE",
 ]
 
+# Rewritten 2026-09-22 for the live product: the old line told the model it
+# was reading a transcript and to expect misheard words. It hears the voice
+# itself now (D1), and a model told to read through mistakes that are not
+# there second-guesses words it heard perfectly well.
 PERSONALITY = (
-    "You are a voice assistant running on the user's own computer. What reaches you is "
-    "a transcript of speech, so expect the odd misheard word and read through it; ask "
-    "for a repeat only when the mistake would change what you do. "
+    "You are a voice assistant running on the user's own computer. You hear the user's "
+    "own voice rather than a transcript of it, so their tone and their pauses are yours "
+    "to read; ask for a word again only when getting it wrong would change what you do. "
     "You are calm, direct and unhurried, the way a good assistant is: you do what was "
     "asked and say plainly when something cannot be done or when you do not know. "
     "You do not open with pleasantries, praise the question, apologise for what is not "

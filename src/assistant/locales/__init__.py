@@ -25,7 +25,7 @@ import ctypes
 import locale as windows
 import tomllib
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -65,19 +65,14 @@ class Locale:
     # is answered by the caller's own English constant through `say`.
     ui: Mapping[str, str]
 
-    # What the recogniser is told to expect before each utterance, from
-    # `[stt] prompt`: a sentence in this language with `{apps}` where the
-    # installed apps' names go (`stt/local_whisper.py`). Like the speech
-    # language it does not fall back to English - English words would not
-    # help a Turkish speaker be understood - so a pack that leaves it out
-    # gives the recogniser the names alone rather than the wrong sentence.
-    stt_prompt: str = ""
-
     # The words the confirmation window listens for, from `[speech]`
     # (design.md 3.1 rule 2). They fall back the way sentences do, not the
     # way identity does: a pack without them gets the English words beside
     # the code that listens (`app.py`), together with the English hint that
-    # tells the user which words to say - so the two always agree.
+    # tells the user which words to say - so the two always agree. They are
+    # also what the recogniser of that window is told to expect
+    # (`app.confirm_prompt`): since 2026-09-22 there is no separate
+    # `[stt] prompt`, because a live product's recogniser hears nothing else.
     yes_words: tuple[str, ...] = ()
     no_words: tuple[str, ...] = ()
 
@@ -86,14 +81,6 @@ class Locale:
     # back like the yes and no words, to the English beside the code that
     # says them (`app.py`).
     fillers: tuple[str, ...] = ()
-
-    # The short commands answered without the model, from `[intents]`
-    # (design.md section 4): the English name of the intent, to the phrases
-    # that mean it in this language. They fall back like the yes and no
-    # words, intent by intent - a pack that lists none for an intent gets
-    # the English phrases beside the code that answers it
-    # (`agent/intents.py`), and `en.toml` carries none for that reason.
-    intents: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     # The question the setup wizard asks a model to see whether it calls a
     # tool, from `[probe]` (design.md section 3.2, 2.6). In the pack's own
@@ -144,11 +131,9 @@ def load(code: str | None = None, *, directory: Path | None = None) -> Locale:
         stt_language=_text(_table(pack, "stt"), "language") or wanted,
         voices=_texts(_table(_table(pack, "tts"), "voice")),
         ui={**_texts(_table(english, "ui")), **_texts(_table(pack, "ui"))},
-        stt_prompt=_text(_table(pack, "stt"), "prompt").strip(),
         yes_words=_words(_table(pack, "speech"), "yes_words"),
         no_words=_words(_table(pack, "speech"), "no_words"),
         fillers=_words(_table(pack, "speech"), "filler"),
-        intents=_word_lists(_table(pack, "intents")),
         probe_question=_text(_table(pack, "probe"), "question").strip(),
         language_code=_text(_table(pack, "live"), "language_code").strip(),
         user_language_rule=_text(_table(pack, "live"), "user_language_rule").strip(),
@@ -266,13 +251,6 @@ def _words(values: Mapping[str, Any], key: str) -> tuple[str, ...]:
     if not isinstance(found, list):
         return ()
     return tuple(word.strip() for word in found if isinstance(word, str) and word.strip())
-
-
-def _word_lists(values: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
-    """Every list of words in a table, by key; a key with nothing usable
-    under it is left out, so that the code's own list answers for it."""
-    lists = {key: _words(values, key) for key in values}
-    return {key: words for key, words in lists.items() if words}
 
 
 def _ui_language_id() -> int:

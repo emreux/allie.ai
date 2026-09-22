@@ -22,7 +22,6 @@ import pytest
 from assistant.tools import system
 from assistant.tools.system import (
     LISTING_COMMAND,
-    PROMPT_NAMES,
     AppCatalog,
     AppEntry,
     scan_start_apps,
@@ -194,53 +193,6 @@ def test_the_spoken_form_drops_what_nobody_says(listed: str, spoken: str) -> Non
     vanish entirely is kept as it is."""
     assert spoken_form(listed) == spoken
     assert AppEntry(listed, r"C:\x.lnk").spoken == spoken
-
-
-def test_the_spoken_names_put_products_before_system_shortcuts() -> None:
-    """Capitalised names first - `dfrgui`, `services`, `computer` are what
-    the machine calls its utilities - then the shorter first, each spoken
-    form once, and no more than asked for."""
-    catalog = AppCatalog(
-        [
-            AppEntry("dfrgui", r"C:\dfrgui.lnk"),
-            AppEntry("Outlook (classic)", r"C:\Outlook (classic).lnk"),
-            AppEntry("PyCharm 2026.2.1", r"C:\PyCharm.lnk"),
-            AppEntry("Outlook", r"C:\Outlook.lnk"),
-            AppEntry("Run", r"C:\Run.lnk"),
-            AppEntry("FortiClient VPN", r"C:\FortiClient VPN.lnk"),
-        ]
-    )
-
-    assert catalog.spoken_names() == ["Run", "Outlook", "PyCharm", "FortiClient VPN", "dfrgui"]
-    assert catalog.spoken_names(limit=2) == ["Run", "Outlook"]
-
-
-def test_the_names_the_user_has_asked_for_come_first_as_the_catalogue_knows_them() -> None:
-    """The audit log's names are what the user said - "pay charm", "Teams" -
-    and they are resolved to the apps they opened; what resolves to nothing
-    is skipped, and nothing is offered twice."""
-    catalog = AppCatalog(
-        [
-            AppEntry("Run", r"C:\\Run.lnk"),
-            AppEntry("PyCharm 2026.2.1", r"C:\\PyCharm.lnk"),
-            AppEntry("Microsoft Teams", r"C:\\Teams.lnk"),
-            AppEntry("Google Chrome", r"C:\\Chrome.lnk"),
-        ]
-    )
-
-    offered = catalog.spoken_names(first=["Teams", "zzzz", "pay charm", "teams"])
-
-    assert offered == ["Microsoft Teams", "PyCharm", "Run", "Google Chrome"]
-    assert catalog.spoken_names(limit=1, first=["chrome"]) == ["Google Chrome"]
-
-
-def test_the_offer_is_larger_than_before_and_the_recogniser_fits_it() -> None:
-    """The count is an offer; what fits is measured in tokens where the
-    tokenizer is (`stt/local_whisper.py`)."""
-    many = AppCatalog([AppEntry(f"App {n}", f"C:\\{n}.lnk") for n in range(PROMPT_NAMES * 3)])
-
-    assert PROMPT_NAMES == 120
-    assert len(many.spoken_names()) == PROMPT_NAMES
 
 
 # --------------------------------------------------------------------------

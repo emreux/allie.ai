@@ -24,7 +24,7 @@ from websockets.exceptions import ConnectionClosedError
 
 from assistant.app import Heard, hear
 from assistant.stt import gemini_stt
-from assistant.stt.base import SAMPLE_RATE, Audio, STTProvider, Transcript, buffered_stream
+from assistant.stt.base import SAMPLE_RATE, Audio, STTProvider, Transcript
 from assistant.stt.gemini_stt import (
     CHUNK_SECONDS,
     DEFAULT_MODEL,
@@ -88,7 +88,6 @@ class FakeFallback:
     """The engine behind Google's: asked when Google could not be."""
 
     id = "local"
-    supports_streaming = False
 
     def __init__(self) -> None:
         self.asked: list[tuple[Audio, str | None]] = []
@@ -100,11 +99,6 @@ class FakeFallback:
     async def transcribe(self, pcm: Audio, *, hint: str | None = None) -> Transcript:
         self.asked.append((pcm, hint))
         return Transcript(text="yedekten", language=hint or "")
-
-    def transcribe_stream(
-        self, pcm_chunks: AsyncIterator[Audio], *, hint: str | None = None
-    ) -> AsyncIterator[Transcript]:
-        return buffered_stream(self, pcm_chunks, hint=hint)
 
 
 def final(text: str, *, language: str | None = None) -> types.LiveServerMessage:
@@ -150,11 +144,6 @@ def tone(seconds: float = 1.0) -> Audio:
     return (0.5 * np.sin(2 * np.pi * 440 * samples / SAMPLE_RATE)).astype(np.float32)
 
 
-async def chunks_of(*buffers: Audio) -> AsyncIterator[Audio]:
-    for buffer in buffers:
-        yield buffer
-
-
 def session_of(client: FakeClient) -> FakeSession:
     assert len(client.live.sessions) == 1
     return client.live.sessions[0]
@@ -187,8 +176,11 @@ def test_to_pcm16_clips_what_is_out_of_range() -> None:
     assert samples.tolist() == [32767, -32767]
 
 
-async def test_the_hint_is_the_language_code_and_the_names_the_vocabulary() -> None:
-    stt, client = gemini(vocabulary=["PyCharm", "FortiClient VPN"])
+async def test_the_hint_is_the_language_code_and_there_is_no_vocabulary() -> None:
+    """The API takes a custom vocabulary; this product has nothing to put in
+    it since 2026-09-22. What reaches this recogniser is the yes or no of a
+    confirmation window (D3, D10), whose words are the pack's."""
+    stt, client = gemini()
     client.live.answers = [final("x")]
 
     await stt.transcribe(tone(), hint="tr")
@@ -196,7 +188,7 @@ async def test_the_hint_is_the_language_code_and_the_names_the_vocabulary() -> N
     (opened,) = client.live.opened
     asr = opened["config"].input_audio_transcription
     assert asr.language_codes == ["tr"]
-    assert asr.custom_vocabulary == ["PyCharm", "FortiClient VPN"]
+    assert asr.custom_vocabulary is None
     # The end of speech is ours to say, so the server's detector is off.
     assert opened["config"].realtime_input_config.automatic_activity_detection.disabled is True
 
@@ -347,7 +339,6 @@ def test_the_provider_satisfies_the_protocol() -> None:
     stt, _ = gemini()
     assert isinstance(stt, STTProvider)
     assert stt.id == "gemini"
-    assert stt.supports_streaming is False
     assert CHUNK_SECONDS == 0.5
 
 
@@ -454,17 +445,13 @@ async def test_loading_without_a_fallback_is_quiet() -> None:
     await stt.load()
 
 
-async def test_the_stream_answers_with_one_final_transcript() -> None:
+async def test_the_whole_utterance_goes_over_as_one_transcript() -> None:
     stt, client = gemini()
     client.live.answers = [final("Saat kaç?")]
     pcm = tone()
 
-    transcripts = [
-        transcript
-        async for transcript in stt.transcribe_stream(chunks_of(pcm[:8000], pcm[8000:]), hint="tr")
-    ]
+    transcript = await stt.transcribe(pcm, hint="tr")
 
-    assert transcripts == [Transcript(text="Saat kaç?", language="tr")]
-    assert transcripts[0].is_final
+    assert transcript == Transcript(text="Saat kaç?", language="tr")
     sent = session_of(client).sent
     assert b"".join(call["audio"].data for call in sent[1:-1]) == to_pcm16(pcm)

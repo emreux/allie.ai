@@ -1,11 +1,11 @@
 """The tray icon (design.md section 3.1, phase 4.3; 17 Sep 2026).
 
-A second surface over the same state machine as the status line, and like
-it owning no behaviour of its own: what the icon shows is what `on_state`
-and `on_mode` say, and what its menu does is what the key and Ctrl+C
-already do. `run --tray` puts it up beside the terminal, which stays -
-there is no window (decision 3 of section 12), and the terminal is where
-what was said still scrolls past.
+A third surface over the same state machine as the status line and the
+window, and like them owning no behaviour of its own: what the icon shows is
+what `on_state` and `on_mode` say, and what its menu does is what the key and
+Ctrl+C already do. `run --tray` puts it up beside whichever of the two is
+showing - the window by default, the terminal line under `--terminal` - and
+that one keeps showing what was said.
 
 **pystray runs on a thread of its own.** `run_detached` starts it and the
 shell's messages arrive there. A click on the menu is one of them, and

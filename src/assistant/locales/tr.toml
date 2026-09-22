@@ -9,12 +9,6 @@ name = "Türkçe"
 
 [stt]
 language = "tr"
-# What the recogniser is told to expect before each sentence (design.md 3.4):
-# a sentence, not a list - the decoder is being shown what speech in this
-# language looks like - with the commands people say most, and the names of
-# the installed apps where {apps} is. The program fills them in, as many as
-# the recogniser's window holds.
-prompt = "Bilgisayarımdaki uygulamalar: {apps}. Uygulamayı aç, siteyi aç, ayarları göster, müzik çal, sonraki şarkı, saat kaç?"
 
 [speech]
 # What the confirmation window listens for (design.md 3.1 rule 2). Whole
@@ -154,7 +148,6 @@ state_reconnecting = "yeniden bağlanıyor"
 you_said = "sen"
 it_said = "asistan"
 turn_cost = "{input} girdi, {output} çıktı"
-not_caught = "(anlaşılmadı - güven {confidence})"
 # The session and the meter beside the state (plan.md 4.2): a live model
 # bills by the minute while a session is open.
 session_open = "oturum açık"

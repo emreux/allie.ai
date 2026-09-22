@@ -307,7 +307,6 @@ class FakeSTT:
     """A recogniser that hears whatever the test says it hears."""
 
     id = "fake_stt"
-    supports_streaming = False
 
     def __init__(self, *heard: Transcript) -> None:
         self.heard = list(heard) or [Transcript(text="evet", confidence=0.9)]
@@ -316,11 +315,6 @@ class FakeSTT:
     async def transcribe(self, pcm: Audio, *, hint: str | None = None) -> Transcript:
         self.hints.append(hint)
         return self.heard.pop(0) if len(self.heard) > 1 else self.heard[0]
-
-    def transcribe_stream(
-        self, pcm_chunks: AsyncIterator[Audio], *, hint: str | None = None
-    ) -> AsyncIterator[Transcript]:
-        raise NotImplementedError
 
 
 class FakeTTS:
@@ -969,8 +963,11 @@ async def test_the_limit_is_the_three_failures_the_plan_names() -> None:
 
 
 async def test_the_idle_close_and_the_resume_window_are_the_config_s_defaults() -> None:
+    """Four minutes of resumption, not D5's ten: Gemini refuses the handle at
+    five (measured 2026-09-21, close 1011), so a wider window only buys a
+    failed open before the session is opened afresh."""
     assert IDLE_CLOSE_SECONDS == 60.0
-    assert RESUME_MINUTES == 10.0
+    assert RESUME_MINUTES == 4.0
 
 
 # --------------------------------------------------------------------------
@@ -1009,6 +1006,27 @@ async def test_the_answer_stops_the_instant_the_server_says_so() -> None:
 
     assert speaker.stopped >= 1
     assert [turn.said for turn in turns] == ["Uzun"]
+
+
+async def test_the_tokens_of_a_cut_answer_belong_to_the_turn_that_was_cut() -> None:
+    """Measured in the spikes of 2026-09-18: `interrupted` is followed by the
+    cut answer's `usage_metadata` and only then by `turn_complete`. Ending the
+    turn at `interrupted` booked those tokens to the turn after it - a turn
+    with no words in it at all, written to the log and counted in the cost
+    report as a turn of its own."""
+    capture = FakeCapture()
+    turns: list[Turn] = []
+    events: list[LiveEvent] = [
+        voice("Uzun "),
+        OutputText("Uzun "),
+        Interrupted(),
+        UsageReport(Usage(120, 8)),
+        TurnComplete(),
+    ]
+
+    await one_turn(assistant_with(capture=capture, events=events, on_turn=turns.append), capture)
+
+    assert [(turn.said, turn.usage) for turn in turns] == [("Uzun", Usage(120, 8))]
 
 
 async def test_the_microphone_is_deaf_for_the_answer_and_listens_again_after_it() -> None:
@@ -1975,6 +1993,23 @@ async def test_a_sleeping_capture_starts_the_machine_asleep() -> None:
     assert assistant.state is State.SLEEPING
     assert seen[-1] is State.SLEEPING
     assert capture.on_wake is not None
+
+
+async def test_a_voice_at_the_door_while_asleep_opens_nothing() -> None:
+    """Asleep, the capture hands its blocks to the wake word alone and never
+    reports the door (D21). The machine refuses it anyway: the one thing a
+    room must not be able to do while the assistant sleeps is open a session
+    that bills by the minute."""
+    capture = FakeCapture(asleep=True)
+    assistant = assistant_with(capture=capture)
+    await assistant.begin()
+
+    capture.speak()
+    capture.quiet()
+    await assistant.settled()
+
+    assert not assistant.session_open
+    assert assistant.state is State.SLEEPING
 
 
 async def test_the_wake_word_chimes_and_opens_a_session_at_once() -> None:

@@ -7,7 +7,8 @@ puts the pieces together, hands them to the state machine, and shows the one
 line of terminal that is the entire interface until the tray icon of phase
 4.2. `cost` is 2.4: what the turns cost, read back from `usage_log`. `purge --all`
 is 4.6: everything the machine recorded, listed and then deleted after the
-word `yes`. `doctor` arrives in phase 3 (design.md section 8).
+word `yes`. `doctor` says who answers, what leaves this machine and where the
+files are; its wording is the owner's (section 8).
 
 This is the only file that knows the concrete names: which tools are on
 offer, which gate runs them, where the audit rows go. `agent/core.py` sees a
@@ -1048,7 +1049,7 @@ async def _talk(
     from assistant.agent.core import ToolRunner
     from assistant.agent.limits import Limits
     from assistant.announce.queue import AnnounceQueue
-    from assistant.app import LiveAssistant
+    from assistant.app import LiveAssistant, confirm_prompt
     from assistant.audio.capture import LiveCapture, SystemMicrophone
     from assistant.audio.player import SystemSpeaker
     from assistant.audio.vad import Endpoint, SileroVAD
@@ -1093,7 +1094,6 @@ async def _talk(
     from assistant.tools.registry import ToolRegistry
     from assistant.tools.status import system_status_for
     from assistant.tools.system import (
-        PROMPT_NAMES,
         AppCatalog,
         get_current_time,
         open_app_for,
@@ -1174,19 +1174,15 @@ async def _talk(
         await _model_checked(provider, settings, SettingsRepo(database), pack, screen)
         screen.starting()
         # The apps this machine can open, read once: a few seconds of
-        # files and a PowerShell process, on a thread (2.2). Before the
-        # speech model, because the model is told the names it will hear.
+        # files and a PowerShell process, on a thread (2.2).
         catalog = await AppCatalog.load()
-        # The names this user has asked to open before lead the list;
-        # the window holds few (`stt/local_whisper.py`).
-        asked = AuditRepo(database).names_asked("open_app", limit=PROMPT_NAMES)
-        # People first (spec A6): their names are the shortest, most
-        # ambiguous words the recogniser hears, and there are few of them.
-        names = [*book.names(), *catalog.spoken_names(first=asked)]
-        # The recogniser hears the yes or no of the gate window and
-        # nothing else (D3, D10); the vocabulary is the old one, and
-        # harmless there.
-        whisper = LocalWhisper(vocabulary=names, prompt=pack.stt_prompt)
+        # The recogniser hears the yes or no of the gate's window and nothing
+        # else (D3, D10), so that is what it is told to expect - the pack's
+        # own words, the ones the window accepts. Until 2026-09-22 it was
+        # told the names of the installed applications instead, 120 tokens of
+        # them, which cost the window most of a second of decode for a bias
+        # towards words it never hears.
+        whisper = LocalWhisper(prompt=confirm_prompt(pack))
         speech: LocalWhisper | GeminiSTT = whisper
         if settings.stt.provider == "gemini":
             # Google first, Whisper loaded behind it for the free tier's
@@ -1199,7 +1195,7 @@ async def _talk(
                     "no API key stored for 'gemini', which [stt] provider names - "
                     "run 'live-assistant setup' to add one, or set provider = \"local\""
                 )
-            speech = GeminiSTT(key, model=settings.stt.model, vocabulary=names, fallback=whisper)
+            speech = GeminiSTT(key, model=settings.stt.model, fallback=whisper)
         # The local voice (D3, D4, D10): Windows' own, or Google's with
         # Windows behind it for the sentence Google refuses. It reads
         # the gate's questions, the reminders and the three failure
@@ -1481,14 +1477,16 @@ def _session_told(
 ) -> Callable[[bool], None]:
     """Who hears that a session opened or closed: the line's meter, the
     icon's, and - at the close - the level the microphone sent (D18), so
-    that a quiet one is said on the screen once."""
+    that a quiet one is said on the screen once. `level_judged` rather than
+    `level_dbfs`: on the raw kernel path the threshold was never measured
+    and the sentence would be a false alarm."""
 
     def told(open: bool) -> None:
         screen.session(open)
         if icon is not None:
             icon.session(open)
         if not open:
-            screen.microphone_level(capture.level_dbfs)
+            screen.microphone_level(capture.level_judged)
 
     return told
 

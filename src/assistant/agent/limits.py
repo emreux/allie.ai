@@ -1,16 +1,17 @@
 """The limits of design.md section 3.11: what one turn may do, what a day may cost.
 
-The loop of `core.py` has no exit of its own. A model that did not get what
-it wanted from a tool asks again, with the same arguments, and would go on
-asking - every round a request paid for (architecture guide section 12). So
-the loop is given a referee for the turn, `TurnGuard`, asked before every
-tool call and answering either "go" or the sentence the model reads instead
-of a result. Three limits are its to keep: how many calls a turn may make,
-how many times in a row the same call may be made, and - through
-`Limits.output_tokens`, which the loop hands to the provider - how long an
-answer may be. The two spending limits, the gate's look-back window and the
-turn's own clock ride in the same `Limits`, because section 3.11 is one table;
-who reads which row is written on the class.
+The tool round of `core.py` has no exit of its own. A model that did not get
+what it wanted from a tool asks again, with the same arguments, and would go on
+asking - every round a request paid for (architecture guide section 12). So the
+round is given a referee for the turn, `TurnGuard`, asked before every tool call
+and answering either "go" or the sentence the model reads instead of a result.
+Two limits are its to keep: how many calls a turn may make, and how many times
+in a row the same call may be made. The two spending limits, the gate's
+look-back window and the turn's own clock ride in the same `Limits`, because
+section 3.11 is one table; who reads which row is written on the class.
+`Limits.output_tokens` rides there too and has no reader on the live path: an
+answer is speech now, and how long it may be is the prompt's business
+(`BREVITY`). `doctor` prints it, and `doctor` is the owner's.
 
 **Written here and not in an adapter** (invariant 3). Inside an adapter each
 limit would be written three times, once per vendor, and one of the three

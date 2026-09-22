@@ -142,22 +142,11 @@ def log_turn(finished: Turn) -> None:
     are where a key could travel, and the masking filter of section 5 is not
     written yet.
 
-    So is a turn that was *missed*: speech the recogniser could not turn into
-    words. It cost nothing, which is exactly why the line matters - a user
-    reporting that the assistant "does nothing" and a log full of these have
-    already answered each other. The decoder's doubt goes with it when there
-    was one. The words are still not written down: a transcript nothing stood
-    behind is no more worth keeping than one that was.
-
-    A turn the fast path answered (2.5) is written by its intent and the
-    number of tools the gate ran for it, and by no token count: none was
-    spent, and zeros would read as a request that happened to be free.
+    Two kinds of line went with the pipeline (2026-09-22): a turn the
+    recogniser could not read, and a turn the fast path answered without the
+    model. A live turn is neither - the model hears the user itself and there
+    is no fast path (D7) - and both branches were unreachable.
     """
-    if finished.missed:
-        confidence = "-" if finished.confidence is None else f"{finished.confidence:.2f}"
-        logger.info("missed: nothing worth answering, confidence {value}", value=confidence)
-        return
-
     # By the name the turn goes by in `tool_audit` (section 3.9), so that a
     # row there and a line here can be read together. A turn from before
     # there were names is still a turn.
@@ -168,15 +157,6 @@ def log_turn(finished: Turn) -> None:
         return
 
     if not finished.heard:
-        return
-
-    if finished.intent is not None:
-        logger.info(
-            "{where}: intent {intent}, {tools} tools",
-            where=where,
-            intent=finished.intent,
-            tools=finished.tool_calls,
-        )
         return
 
     usage = finished.usage

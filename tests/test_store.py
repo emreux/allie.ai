@@ -224,35 +224,6 @@ def test_a_denied_call_is_finished_as_it_is_written(
     assert row["finished_at"] == row["ts"] == 1_700_000_000
 
 
-def test_the_names_asked_of_a_tool_are_the_distinct_ones_most_recent_first(
-    database: sqlite3.Connection,
-) -> None:
-    """What this user actually asks to open (2026-09-13): the recogniser is
-    told those names before any other. Only calls that ran; each name once,
-    by its latest use; other tools' names are not app names."""
-    tick = iter(range(1_700_000_000, 1_700_000_100))
-    audit = AuditRepo(database, clock=lambda: next(tick))
-
-    def ran(tool: str, name: str, *, status: str = "ok") -> None:
-        row = audit.start(
-            ToolCall(id="c", name=tool, arguments={"name": name}), turn_id="t", risk="safe"
-        )
-        audit.finish(row, status=status)  # type: ignore[arg-type]
-
-    ran("open_app", "PyCharm")
-    ran("open_app", "Teams")
-    ran("open_url", "example.com")
-    ran("open_app", "Chrome", status="error")
-    ran("open_app", "PyCharm")
-    audit.deny(
-        ToolCall(id="d", name="open_app", arguments={"name": "Denied"}), turn_id="t", risk="confirm"
-    )
-
-    assert audit.names_asked("open_app", limit=10) == ["PyCharm", "Teams"]
-    assert audit.names_asked("open_app", limit=1) == ["PyCharm"]
-    assert audit.names_asked("play_music", limit=10) == []
-
-
 def test_each_row_gets_its_own_id(database: sqlite3.Connection, audit: AuditRepo) -> None:
     first = audit.start(CALL, turn_id="t1", risk="safe")
     second = audit.deny(CALL, turn_id="t1", risk="safe")

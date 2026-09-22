@@ -388,33 +388,6 @@ def test_a_turn_reports_what_it_spent(screen: Screen) -> None:
     assert TEXT["turn_cost"].format(input=300, output=10) in str(screen)
 
 
-def test_a_turn_that_was_missed_shows_the_number_instead_of_the_words(screen: Screen) -> None:
-    """There is no transcript worth printing - that is what missed means - and
-    the number is what tells the user whether speaking up would have helped."""
-    with line(screen) as status:
-        status.turn(Turn(said="I did not catch that.", missed=True, confidence=0.55))
-
-    shown = str(screen)
-    assert "0.55" in shown
-    assert "I did not catch that." in shown
-
-
-def test_a_missed_turn_with_no_number_is_still_shown(screen: Screen) -> None:
-    with line(screen) as status:
-        status.turn(Turn(said="I did not catch that.", missed=True, confidence=None))
-
-    assert "I did not catch that." in str(screen)
-
-
-def test_a_missed_turn_says_so_in_the_user_s_language(screen: Screen) -> None:
-    pack = Locale("tr", "Türkçe", "tr", {}, {"not_caught": "(anlaşılmadı - güven {confidence})"})
-
-    with line(screen, pack) as status:
-        status.turn(Turn(said="Seni anlayamadım.", missed=True, confidence=0.55))
-
-    assert "anlaşılmadı" in str(screen)
-
-
 def test_a_turn_that_heard_nothing_is_not_written_down(screen: Screen) -> None:
     """A key tapped by accident, or a recording of silence. Neither is a turn
     the user had, and a screen full of empty ones hides the real ones."""

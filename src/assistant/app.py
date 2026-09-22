@@ -159,6 +159,8 @@ __all__ = [
     "State",
     "Turn",
     "choose_voice",
+    "confirm_prompt",
+    "confirm_words",
     "hear",
     "read_answer",
 ]
@@ -307,21 +309,23 @@ class Turn:
     `tool_calls` how many calls the gate ran. `first_sound_ms` is how long
     after the user stopped talking the model's first sound arrived - the
     number a live product is about - and `None` when there was none, or
-    nobody was heard to stop. `missed`, `confidence` and `intent` are the
-    old pipeline's and stay for the log that reads them; a live turn never
-    sets them.
+    nobody was heard to stop.
+
+    It carried three more fields until 2026-09-22 - `missed`, `confidence`,
+    `intent` - which the old pipeline set when its recogniser could not read a
+    recording or when a short command was answered without the model (D7).
+    A live turn set none of the three, so every reader of them was a branch
+    that could not run: the log line, the transcript row, a pack key in two
+    languages.
     """
 
     heard: str = ""
     said: str = ""
     usage: Usage = field(default_factory=Usage)
-    missed: bool = False
-    confidence: float | None = None
     failure: str | None = None
     turn_id: str = ""
     cost_usd: float | None = None
     tool_calls: int = 0
-    intent: str | None = None
     first_sound_ms: float | None = None
     audio_in_ms: int = 0
     audio_out_ms: int = 0
@@ -504,8 +508,7 @@ class LiveAssistant:
         self._on_session = on_session
 
         self._said = {key: locale.say(key, default) for key, default in TEXT.items()}
-        self._yes = locale.yes_words or YES_WORDS
-        self._no = locale.no_words or NO_WORDS
+        self._yes, self._no = confirm_words(locale)
         self._fillers = locale.fillers or FILLERS
         self._fillers_said = 0
         self._state = State.IDLE
@@ -615,7 +618,11 @@ class LiveAssistant:
 
     def _speech(self, speaking: bool) -> None:
         """The doorman heard a voice begin, or stop (plan.md 4.2)."""
-        if self._state is State.OFF:
+        if self._state in (State.OFF, State.SLEEPING):
+            # Asleep, the capture hands its blocks to the wake word and to
+            # nothing else, so this is not called (D21). Guarded all the
+            # same: the one thing a voice must never do while the assistant
+            # is asleep is open a session that costs money.
             return
         self._user_speaking = speaking
         self._active()
@@ -846,11 +853,25 @@ class LiveAssistant:
                 self._playback.push(pcm16, sample_rate=rate)
             case Interrupted():
                 # The server heard the user over the model: what is queued is
-                # dropped, what the sound card holds is aborted, and the turn
-                # is over as it stands (rule 2).
+                # dropped and what the sound card holds is aborted (rule 2).
+                # Nothing said from here belongs to the answer, but the turn
+                # stays open until the server closes it: measured in the
+                # spikes of 2026-09-18 (`docs/spikes/A-default.jsonl`) and
+                # again on 2026-09-21, `interrupted` is followed by the
+                # cut answer's `usage_metadata` and then by `turn_complete`.
+                # Ending the turn here booked those tokens to the next turn,
+                # which had no words in it and went to the log as a turn of
+                # its own.
                 self._playback.stop()
-                self._end_turn(session)
-                self._turn.cut = True
+                turn.cut = True
+                # A tool call in the server turn just cut no longer owes us
+                # a `TurnComplete` of its own: the next one ends the turn.
+                turn.called = False
+                # The machine rests now rather than when the turn is closed:
+                # the sound is already gone, and a server that went quiet
+                # after `interrupted` must not leave the microphone deaf and
+                # the idle close - which only fires in `IDLE` - disarmed.
+                self._spawn(self._quieten())
             case ToolCallEvent(call=call):
                 turn.open = True
                 turn.called = True
@@ -1094,17 +1115,13 @@ class LiveAssistant:
         if self._withdrawn():
             return False
 
-        # The window has to hear. A sentence under way keeps the microphone
-        # deaf (`_play`); it is opened for the window and closed again after
-        # it - and `unmute` is also what lets the room's echo of the
-        # question pass before the window listens (`audio/capture.py`).
-        if self._playing:
-            self._capture.unmute()
-        try:
-            pcm = await self._capture.listen_for(CONFIRM_WINDOW_SECONDS)
-        finally:
-            if self._playing:
-                self._capture.mute()
+        # The window hears: `_play` has already unmuted the microphone on its
+        # way out, and the echo tail that left behind counts down before the
+        # window listens, so the room repeating the question is not a yes
+        # (`audio/capture.py`). The old product opened and closed the
+        # microphone around this line as well; on this path it was always
+        # open already, and `test_app.py` pins that the window is never deaf.
+        pcm = await self._capture.listen_for(CONFIRM_WINDOW_SECONDS)
         if pcm is None or self._withdrawn():
             return False
 
@@ -1372,6 +1389,35 @@ def hear(transcript: Transcript) -> Heard:
 # A word, for the purpose of hearing "yes" in an answer: letters and digits in
 # any script. Punctuation and the spaces between are where words end.
 _WORD = re.compile(r"\w+")
+
+
+def confirm_words(locale: Locale) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The yes and the no words of `locale`, or the English ones written here.
+
+    Resolved in one place because two things read them: the window that judges
+    the answer (`read_answer`) and the recogniser that hears it
+    (`confirm_prompt`). Told different words, the recogniser would be shown
+    what the window does not accept.
+    """
+    return (tuple(locale.yes_words) or YES_WORDS, tuple(locale.no_words) or NO_WORDS)
+
+
+def confirm_prompt(locale: Locale) -> str:
+    """What the recogniser is told to expect before a window opens.
+
+    The live model hears the user itself (D1); all that is left for the local
+    recogniser is the yes or no of a confirmation window and the odd reminder
+    (D3, D10). So it is shown those words - the pack's own, exactly the ones
+    the window accepts - and not the vocabulary of installed applications the
+    old pipeline needed, which this product carried until 2026-09-22 at about
+    0.65 s of decode per hundred tokens of prompt (measured 2026-09-13,
+    `stt/local_whisper.py`) and a bias towards names nobody says here.
+    """
+    yes, no = confirm_words(locale)
+    words = [word.strip() for word in (*yes, *no) if word.strip()]
+    if not words:
+        return ""
+    return ". ".join(words) + "."
 
 
 def read_answer(text: str, *, yes: Iterable[str], no: Iterable[str]) -> bool | None:

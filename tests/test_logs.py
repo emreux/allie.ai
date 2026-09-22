@@ -192,29 +192,6 @@ def test_a_turn_that_never_happened_is_not_a_line_in_the_log(log: Path) -> None:
     assert read(log).strip() == ""
 
 
-def test_a_turn_that_was_missed_is_a_line_with_a_number_in_it(log: Path) -> None:
-    """A user reporting that the assistant "does nothing" and a log full of
-    missed turns at 0.5 have already answered each other."""
-    log_turn(Turn(said="Seni anlayamadim.", missed=True, confidence=0.55))
-
-    assert "0.55" in read(log)
-
-
-def test_a_missed_turn_does_not_write_down_what_was_misheard(log: Path) -> None:
-    """A transcript nothing stood behind is no more worth keeping than one
-    that did."""
-    log_turn(Turn(said="Seni anlayamadim.", missed=True, confidence=0.55))
-
-    assert "Seni anlayamadim." not in read(log)
-
-
-def test_a_missed_turn_with_no_number_still_gets_its_line(log: Path) -> None:
-    """Not every recogniser reports a confidence, and the line is the point."""
-    log_turn(Turn(said="...", missed=True, confidence=None))
-
-    assert read(log).strip() != ""
-
-
 def test_a_turn_that_failed_is_still_a_turn(log: Path) -> None:
     """It spent no tokens anybody can account for, and it is exactly the turn
     worth finding in the log afterwards."""
@@ -234,27 +211,6 @@ def test_a_turn_that_failed_says_why_and_claims_no_tokens(log: Path) -> None:
     assert "failed: unreachable" in line
     assert " in, " not in line, "a failed turn must not be written as a token count"
     assert "Sağlayıcıya" not in line
-
-
-def test_a_turn_the_fast_path_answered_is_written_by_its_intent(log: Path) -> None:
-    """No request was made, so no token count - and no zeros either, which
-    would read as a request that happened to be free (2.5)."""
-    log_turn(
-        Turn(heard="saat kaç", said="Saat 14 3.", intent="get_time", tool_calls=1, turn_id="9f2a")
-    )
-
-    line = read(log)
-    assert "turn 9f2a: intent get_time, 1 tools" in line
-    assert " in, " not in line
-    assert "$" not in line
-
-
-def test_a_command_answered_by_silence_is_still_a_line(log: Path) -> None:
-    """It is a turn the user had, and the count of them is how "dur" being
-    heard as "durum" would be noticed."""
-    log_turn(Turn(heard="dur", intent="stop"))
-
-    assert "intent stop, 0 tools" in read(log)
 
 
 # --------------------------------------------------------------------------

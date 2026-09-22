@@ -14,7 +14,6 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "google-genai>=2.20.0",
     "httpx>=0.28.1",
-    "httpx2>=2.12.0",
     "keyring>=25.7.0",
     "livekit-wakeword>=0.2.1",
     "loguru>=0.7.3",
@@ -32,7 +31,6 @@ dependencies = [
     "sounddevice>=0.5.6",
     "soundfile>=0.14.0",
     "telethon>=1.45.0",
-    "tenacity>=9.1.4",
     # Named rather than left transitive: both live adapters ride on it
     # (`google-genai` brings this version; the OpenAI adapter may use it
     # directly, L2.1).

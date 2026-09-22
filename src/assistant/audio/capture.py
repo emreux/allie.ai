@@ -113,7 +113,9 @@ FULL_DUPLEX_HOST_APIS = ("WASAPI", "MME", "DirectSound")
 # the owner's array at -45 dBFS RMS was heard as Hindi, -35 is the target.
 # No digital gain - measured, x6 made recognition worse - so the number is
 # said (log, `doctor`, the status line) and the fix is Windows' own level and
-# boost controls.
+# boost controls. **Measured through the Windows audio engine**, which applies
+# the driver's own gain: on the raw kernel path the number means something
+# else, and `LiveCapture.level_judged` is where that is decided.
 QUIET_DBFS = -40.0
 
 # Below this RMS a block is silence and does not count towards the level:
@@ -546,6 +548,21 @@ class LiveCapture(HandsFree):
         return 20 * math.log10(math.sqrt(self._level_squares / self._level_samples))
 
     @property
+    def level_judged(self) -> float | None:
+        """`level_dbfs` where `QUIET_DBFS` means something, `None` where it
+        does not.
+
+        The threshold was calibrated through the Windows audio engine, which
+        applies the driver's own gain (ADR-001 section 5). The raw kernel path
+        has no such gain: measured 2026-09-19 on the owner's array, the very
+        session that answered every one of 25 spoken sentences sent -52 dBFS.
+        A microphone that works is not worth a warning, and a user sent to the
+        sound settings by a false one loses trust in every other line, so
+        nothing is judged on a path where nothing was measured.
+        """
+        return self.level_dbfs if self.duplex == "full" else None
+
+    @property
     def asleep(self) -> bool:
         """Whether only the wake word is listened for."""
         return self._asleep
@@ -739,7 +756,8 @@ class LiveCapture(HandsFree):
         level = self.level_dbfs
         if level is None:
             return
-        if level < QUIET_DBFS:
+        judged = self.level_judged
+        if judged is not None and judged < QUIET_DBFS:
             logger.warning(
                 "microphone level: {level:.0f} dBFS sent, under {quiet:.0f} dBFS - quiet; "
                 "raise the microphone level or boost in Windows' sound settings",
@@ -747,7 +765,12 @@ class LiveCapture(HandsFree):
                 quiet=QUIET_DBFS,
             )
         else:
-            logger.info("microphone level: {level:.0f} dBFS sent", level=level)
+            # The number, always; the verdict only where it was measured.
+            logger.info(
+                "microphone level: {level:.0f} dBFS sent ({duplex} duplex)",
+                level=level,
+                duplex=self.duplex,
+            )
 
 
 def _as_audio(chunks: list[Audio]) -> Audio:

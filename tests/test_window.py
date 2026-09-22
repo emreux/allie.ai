@@ -15,6 +15,7 @@ real Tk panel is built once, in `test_the_real_panel_comes_up_and_goes_down`
 from __future__ import annotations
 
 import asyncio
+import math
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -22,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from assistant import locales
+from assistant import config, locales
 from assistant.app import State, Turn
 from assistant.audio.capture import QUIET_DBFS
 from assistant.setup_wizard import TEXT as WIZARD_TEXT
@@ -30,13 +31,18 @@ from assistant.setup_wizard import Option
 from assistant.ui import orb, status
 from assistant.ui import window as window_ui
 from assistant.ui.window import (
+    ACCENT,
+    BACKGROUND,
+    QUIET,
     TEXT,
+    TICK_MS,
     TRANSCRIPT_ROWS,
     Switch,
     View,
     Window,
     WindowError,
     WindowPrompter,
+    plate,
 )
 
 TR = locales.load("tr")
@@ -311,16 +317,15 @@ def test_a_finished_turn_is_two_rows_you_and_the_assistant(built: Any) -> None:
     assert one.view.row_label("notice") == ""
 
 
-def test_a_turn_with_nothing_heard_is_no_row_and_a_missed_one_shows_the_number(
-    built: Any,
-) -> None:
+def test_a_turn_with_nothing_heard_is_no_row(built: Any) -> None:
+    """The status line's rule: a key tapped by accident or a question withdrawn
+    mid-turn is not a turn the user had."""
     one = built()
     one.window.turn(Turn())
-    one.window.turn(Turn(missed=True, confidence=0.4))
+    one.window.turn(Turn(heard="saat kaç", said="Üç buçuk."))
     one.settle()
 
-    assert one.view.rows[0] == ("you", said("not_caught", status.TEXT).format(confidence="0.40"))
-    assert len(one.view.rows) == 2
+    assert one.view.rows == [("you", "saat kaç"), ("it", "Üç buçuk.")]
 
 
 def test_the_oldest_rows_go_after_two_hundred(built: Any) -> None:
@@ -544,6 +549,75 @@ def test_an_unknown_message_is_a_bug_not_a_silent_drop() -> None:
 
     with pytest.raises(ValueError, match="unknown window message"):
         view.apply(("dance",))
+
+
+# --------------------------------------------------------------------------
+# The look: what can be checked without a screen
+# --------------------------------------------------------------------------
+
+
+def test_the_window_wears_the_products_name_and_not_its_folders() -> None:
+    """The title bar says Allie (U3); the folder, the Credential Manager
+    entry and the environment variable keep the name the machine already
+    has, or the settings and the key on it would be lost."""
+    assert config.APP_TITLE == "Allie"
+    assert config.APP_NAME == "live-assistant"
+    assert config.KEYRING_SERVICE == "live-assistant"
+
+
+def test_the_tick_is_sixty_frames_a_second() -> None:
+    """Fifteen milliseconds, not sixteen: Windows rounds a wait up to the
+    next 15.6 ms and sixteen would come back at thirty-one (U1)."""
+    assert TICK_MS == 15
+    assert 1000 / TICK_MS >= 60
+
+
+def test_the_arc_the_eye_follows_is_moved_every_frame() -> None:
+    """The heavy inner arc turned 0.6 of a degree a frame at thirty frames
+    and cleared the half degree it takes to be redrawn. At sixty it turns
+    0.3 - under that old threshold, which would have drawn it every other
+    frame and handed back the thirty frames U1 was about. The threshold is
+    still there, and still under half a pixel at the orb's size: an arc it
+    holds back is one that did not visibly move."""
+    a_frame = abs(orb.RINGS[0].speed) * orb.SPEED[State.IDLE] * (TICK_MS / 1000)
+
+    assert a_frame == pytest.approx(0.27, abs=0.05)
+    assert a_frame > window_ui.MIN_TURN_DEGREES
+    assert math.radians(window_ui.MIN_TURN_DEGREES) * (window_ui.ORB_HEIGHT / 2) < 0.5
+
+
+def test_a_button_plate_is_a_rounded_shape_on_the_windows_own_dark() -> None:
+    """Drawn by Pillow because Tk has neither a rounded corner nor an
+    anti-aliased one (U4): the middle is the fill, the corner is the
+    background it was painted on, and the corner is not a hard step."""
+    fill = (31, 106, 196)
+    image = plate(80, 32, 9, fill, None, BACKGROUND)
+
+    assert image.size == (80, 32)
+    assert image.mode == "RGB"
+    assert image.getpixel((40, 16)) == fill
+    assert image.getpixel((0, 0)) == BACKGROUND
+
+    corner = image.getpixel((2, 2))
+    assert isinstance(corner, tuple)
+    # A stepped corner would be one colour or the other; a smooth one is
+    # part way between them on every channel.
+    assert all(
+        dark < shade < bright for dark, shade, bright in zip(BACKGROUND, corner, fill, strict=True)
+    )
+
+
+def test_a_plate_of_no_size_is_a_bug() -> None:
+    with pytest.raises(ValueError, match="cannot be drawn"):
+        plate(0, 20, 6, (10, 10, 10), None, BACKGROUND)
+
+
+def test_every_button_answers_the_pointer_and_says_when_it_is_out_of_use() -> None:
+    """A style carries four plates: at rest, under the pointer, held down,
+    and faded. They are four different colours, or the button would not
+    answer at all."""
+    for style in (QUIET, ACCENT, window_ui.DANGER):
+        assert len({style.fill, style.hover, style.press}) == 3
 
 
 # --------------------------------------------------------------------------

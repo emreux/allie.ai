@@ -21,6 +21,14 @@
 # 2026-09-09 (the page's own date: 2026-09-08), paid tier, text. Where a
 # price depends on the prompt length, the tier for prompts up to 200k tokens
 # is written, which is every turn this assistant makes.
+#
+# Only providers this build can actually speak to are listed. Anthropic's
+# seven tables were carried over from the pipeline product and removed on
+# 2026-09-22: there is no Anthropic adapter here, and a price for a provider
+# nothing can open reads as support for it. `gemini-3.8-live` has no table
+# either, on purpose (plan.md D26): a live model bills by the minute of audio
+# as well as by the token, so `live-assistant cost` says its price is unknown
+# rather than claiming a number that is only part of the bill.
 
 [gemini."gemini-3.5-flash-lite"]
 input_per_mtok = 0.30
@@ -52,43 +60,3 @@ cached_per_mtok = 0.03
 input_per_mtok = 0.10
 output_per_mtok = 0.40
 cached_per_mtok = 0.01
-
-# Anthropic prices as of 2026-06-24 (first-party API, per million tokens).
-# A cache read is a tenth of the input price, Anthropic's standard rate;
-# the models above the Opus tier price differently and are not listed.
-# Model ids carry no date suffix: `claude-opus-5`, never `claude-opus-5-2026...`.
-
-[anthropic."claude-opus-5"]
-input_per_mtok = 5.00
-output_per_mtok = 25.00
-cached_per_mtok = 0.50
-
-[anthropic."claude-opus-4-8"]
-input_per_mtok = 5.00
-output_per_mtok = 25.00
-cached_per_mtok = 0.50
-
-[anthropic."claude-opus-4-7"]
-input_per_mtok = 5.00
-output_per_mtok = 25.00
-cached_per_mtok = 0.50
-
-[anthropic."claude-opus-4-6"]
-input_per_mtok = 5.00
-output_per_mtok = 25.00
-cached_per_mtok = 0.50
-
-[anthropic."claude-sonnet-5"]
-input_per_mtok = 2.00
-output_per_mtok = 10.00
-cached_per_mtok = 0.20
-
-[anthropic."claude-sonnet-4-6"]
-input_per_mtok = 3.00
-output_per_mtok = 15.00
-cached_per_mtok = 0.30
-
-[anthropic."claude-haiku-4-5"]
-input_per_mtok = 1.00
-output_per_mtok = 5.00
-cached_per_mtok = 0.10

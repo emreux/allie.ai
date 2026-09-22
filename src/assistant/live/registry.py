@@ -30,7 +30,6 @@ from assistant.live.gemini_live import GeminiLive
 __all__ = [
     "ADAPTERS",
     "MissingAPIKeyError",
-    "MissingBaseURLError",
     "ProviderEntry",
     "RegistryError",
     "UnknownProviderError",
@@ -44,7 +43,7 @@ CATALOG_FILE_NAME = "providers.toml"
 
 
 class RegistryError(Exception):
-    """Base for the three ways asking for a provider can fail."""
+    """Base for the ways asking for a provider can fail."""
 
 
 class UnknownProviderError(RegistryError):
@@ -59,10 +58,6 @@ class MissingAPIKeyError(RegistryError):
     """The provider needs a key and the Credential Manager has none."""
 
 
-class MissingBaseURLError(RegistryError):
-    """The entry has no address and none was given."""
-
-
 @dataclass(frozen=True, slots=True)
 class ProviderEntry:
     """One row of the catalogue, as the setup command and the adapters see it."""
@@ -74,7 +69,6 @@ class ProviderEntry:
     key_prefix: str | None = None
     base_url: str | None = None
     requires_key: bool = True
-    has_live_pricing: bool = False
 
 
 # An adapter takes its entry as well as the key: an adapter that speaks to

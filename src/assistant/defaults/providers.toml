@@ -18,7 +18,6 @@
 #   key_prefix       expected start of the key, for a typo check
 #   base_url         the endpoint, for adapters that speak to an address
 #   requires_key     false for a local endpoint (default true)
-#   has_live_pricing the model list returns prices too (default false)
 
 # The first adapter (plan.md D1, D13): Google's Live API, on the owner's
 # AI Studio key. The adapter is `live/gemini_live.py`.

@@ -78,6 +78,12 @@ __all__ = [
 ]
 
 APP_NAME = "live-assistant"
+# What the product calls itself where a person reads it - the window's title
+# bar, and nothing else yet (task U3). It is deliberately **not** `APP_NAME`:
+# the folders, the Credential Manager entry and the environment variable are
+# named above and moving them would lose the settings and the key already on
+# the machine. A name on a title bar is free to change; a path is not.
+APP_TITLE = "Allie"
 CONFIG_DIR_ENV = "LIVE_ASSISTANT_CONFIG_DIR"
 CONFIG_FILE_NAME = "config.toml"
 
@@ -146,8 +152,12 @@ class LiveSettings(BaseModel):
     closes the session - a live session bills by the minute while open,
     silent or not - and `resume_minutes` is how long the provider's
     resumption handle is reused when it reopens, so that the conversation
-    continues. `transcripts` asks the provider to send what was said both
-    ways as text, for the screen and the log.
+    continues. Four, not the ten of D5: measured 2026-09-21, Gemini takes
+    the handle four minutes after the close and refuses it at five (close
+    1011), whatever its documentation says, and a refused handle costs an
+    open and most of a second before the session is opened afresh.
+    `transcripts` asks the provider to send what was said both ways as text,
+    for the screen and the log.
 
     `end_sensitivity` and `silence_ms` are the two server-side turn-detection
     knobs ADR-001 kept for the owner to tune: how eagerly the server decides
@@ -176,7 +186,7 @@ class LiveSettings(BaseModel):
     voice: str = ""
     barge_in: bool = True
     idle_close_seconds: float = 60.0
-    resume_minutes: float = 10.0
+    resume_minutes: float = 4.0
     transcripts: bool = True
     end_sensitivity: str = ""
     silence_ms: int = 0
@@ -230,8 +240,9 @@ class LiveSettings(BaseModel):
     def model(self) -> str:
         """Everything after the first colon.
 
-        Only the first: `ollama:llama3:8b` and `openrouter:google/gemini-2.5-flash`
-        are real model names, and splitting on every colon would truncate them.
+        Only the first: a model name may carry colons of its own - the old
+        product reached endpoints that named models `llama3:8b` - and splitting
+        on every colon would truncate them.
         """
         return self.primary.partition(":")[2]
 

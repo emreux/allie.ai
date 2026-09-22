@@ -24,8 +24,8 @@ from assistant.live.gemini_live import GeminiLive
 from assistant.live.registry import (
     ADAPTERS,
     MissingAPIKeyError,
-    MissingBaseURLError,
     ProviderEntry,
+    RegistryError,
     UnknownProviderError,
     UnsupportedAdapterError,
     create_provider,
@@ -204,17 +204,20 @@ def test_an_empty_address_from_the_caller_is_no_address(
     keys_handed_over: list[str],
 ) -> None:
     """An addressed adapter given an empty address refuses in a sentence
-    that names the fix, as a missing key does."""
+    that names the fix, as a missing key does. The refusal is the adapter's
+    own `RegistryError`: there was a `MissingBaseURLError` for it, and nothing
+    in `src` ever raised it (removed 2026-09-22), because L2.1 is where the
+    first addressed adapter arrives."""
 
     def build(entry: ProviderEntry, api_key: str) -> LiveProvider:
         if not entry.base_url:
-            raise MissingBaseURLError(f"no server address stored for {entry.id!r}")
+            raise RegistryError(f"no server address stored for {entry.id!r}")
         return Inert()
 
     catalog = {"custom": ProviderEntry(id="custom", adapter="addressed", display_name="Other")}
     ADAPTERS["addressed"] = build
     try:
-        with pytest.raises(MissingBaseURLError):
+        with pytest.raises(RegistryError):
             create_provider("custom", api_key="k", catalog=catalog, base_url="")
         assert isinstance(
             create_provider("custom", api_key="k", catalog=catalog, base_url="http://x/v1"),

@@ -36,6 +36,17 @@ def test_the_prompt_is_made_of_the_rules_it_names() -> None:
     assert "\n\n".join(rules) == SYSTEM_PROMPT
 
 
+def test_the_model_is_told_it_hears_the_voice_itself() -> None:
+    """D1: nothing stands between the user and the model any more. The old
+    line promised a transcript and asked the model to read through misheard
+    words - a pipeline's problem, and one a live model invents if told it
+    has it."""
+    said = PERSONALITY.casefold()
+
+    assert "hear the user's own voice" in said
+    assert "misheard" not in said
+
+
 def test_the_prompt_pins_no_language() -> None:
     """Section 3.12: the reply mirrors whatever language the user just used.
     Naming one here would quietly beat the rule that says so."""

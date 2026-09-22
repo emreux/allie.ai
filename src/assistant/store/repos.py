@@ -101,11 +101,6 @@ class ModelUsage:
     unpriced: int
 
 
-# How far back `names_asked` reads: the latest rows, not the whole history,
-# which grows by every tool call of every day.
-RECENT_ROWS = 500
-
-
 class AuditRepo:
     """The `tool_audit` table: one row per tool call, in two phases.
 
@@ -197,30 +192,6 @@ class AuditRepo:
         if row is None:
             return None
         return EarlierCall(status=row["status"], ago=max(now - int(row["ts"]), 0))
-
-    def names_asked(self, tool: str, *, limit: int) -> list[str]:
-        """The `name` argument of the calls to `tool` that ran, each once,
-        the most recently asked first.
-
-        What this user actually asks to open (2026-09-13): those are the
-        names the recogniser is told before any other, so that its short
-        window holds the apps of this machine's user rather than the
-        shortest names of the machine. Only `ok` rows: a call that was
-        refused or failed is not something the user opens.
-        """
-        rows = self._connection.execute(
-            "SELECT args_json FROM tool_audit WHERE tool = ? AND status = 'ok'"
-            " ORDER BY ts DESC, id DESC LIMIT ?",
-            (tool, RECENT_ROWS),
-        ).fetchall()
-        names: dict[str, None] = {}
-        for row in rows:
-            name = json.loads(row["args_json"]).get("name")
-            if isinstance(name, str) and name.strip():
-                names.setdefault(name.strip(), None)
-            if len(names) >= limit:
-                break
-        return list(names)
 
     def _now(self) -> int:
         return int(self._clock())

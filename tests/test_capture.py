@@ -1617,6 +1617,29 @@ async def test_a_quiet_microphone_is_written_down_when_the_stream_closes() -> No
     assert "-54 dBFS" in line
 
 
+async def test_the_raw_path_gets_the_number_without_the_verdict() -> None:
+    """The threshold was measured through the Windows audio engine, which
+    applies the driver's gain (ADR-001 section 5). Measured 2026-09-19 on the
+    owner's WDM-KS array: -52 dBFS, and the model answered all 25 sentences of
+    a tool tour. So the level is written down and the warning is not."""
+    microphone = FakeMicrophone(host_api="Windows WDM-KS")
+    talk = LiveCapture(microphone=microphone, toggle=FakeHotkey(), endpoint=Sensitive())
+    lines: list[str] = []
+    sink = logger.add(lines.append, format="{level} {message}")
+    try:
+        with talk:
+            await heard_by_loop(microphone, block(0.002))
+            assert talk.level_judged is None
+            talk.close()
+    finally:
+        logger.remove(sink)
+
+    [line] = [line for line in lines if "dBFS" in line]
+    assert line.startswith("INFO")
+    assert "-54 dBFS" in line
+    assert "half duplex" in line
+
+
 async def test_a_microphone_at_a_good_level_is_written_down_quietly() -> None:
     talk, _, microphone, _ = live()
     lines: list[str] = []
@@ -1645,6 +1668,18 @@ async def test_a_stream_that_sent_nothing_writes_no_level() -> None:
         logger.remove(sink)
 
     assert not any("dBFS" in line for line in lines)
+
+
+async def test_the_level_the_engine_path_sends_is_judged() -> None:
+    """The other side of the rule: through the audio engine the number is the
+    one the threshold was measured against, so it is handed on to be judged."""
+    talk, _, microphone, _ = live()
+
+    with talk:
+        await heard_by_loop(microphone, block(0.5))
+
+        assert talk.level_judged == talk.level_dbfs
+        assert talk.duplex == "full"
 
 
 def test_the_quiet_threshold_is_the_one_measured() -> None:

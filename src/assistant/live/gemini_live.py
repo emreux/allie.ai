@@ -93,10 +93,11 @@ _RATE_LIMITED = 429
 
 # WebSocket close codes, as the SDK hands them up in an `APIError`: the
 # server hung up the way servers do (we hung up, or it said `go_away` and
-# went), the socket went, or the server refused something in the session.
+# went), or the socket went. Everything else falls through to `_refused`,
+# which keeps the server's own words: a set naming 1007 and 1008 was carried
+# over from the old adapter and nothing ever read it.
 _CLOSED_POLITELY = frozenset({1000, 1001})
 _CLOSED_ABNORMALLY = 1006
-_CLOSED_ON_US = frozenset({1007, 1008})
 
 
 class GeminiLive:

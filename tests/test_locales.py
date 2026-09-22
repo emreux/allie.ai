@@ -321,28 +321,18 @@ def test_the_language_windows_is_in_can_be_asked_for() -> None:
 
 
 # --------------------------------------------------------------------------
-# The vocabulary (2.2)
+# What the recogniser is told to expect (D3, D10; 2026-09-22)
 # --------------------------------------------------------------------------
 
 
-def test_every_shipped_pack_tells_the_recogniser_what_to_expect_as_a_sentence() -> None:
-    """The prompt before each utterance (3.4): a sentence in the pack's
-    language with the installed apps' names in it, where `{apps}` is."""
-    for pack in available():
-        assert "{apps}" in pack.stt_prompt, f"{pack.code} gives the recogniser no prompt"
-
-
-def test_the_prompt_comes_from_the_pack_that_was_asked_for(tmp_path: Path) -> None:
-    write(tmp_path, "de", '[stt]\nlanguage = "de"\nprompt = " Apps: {apps}. Öffnen. "\n')
-
-    assert load("de", directory=tmp_path).stt_prompt == "Apps: {apps}. Öffnen."
-
-
-def test_english_does_not_lend_its_prompt_either(tmp_path: Path) -> None:
-    """English command words would not help a German be understood."""
-    write(tmp_path, "en", '[stt]\nlanguage = "en"\nprompt = "Apps: {apps}."\n')
-
-    assert load("de", directory=tmp_path).stt_prompt == ""
+def test_no_shipped_pack_writes_a_recogniser_prompt_of_its_own() -> None:
+    """There was a `[stt] prompt` here - a sentence with the installed apps'
+    names in it - while every sentence the user spoke went through the local
+    decoder. The live model hears those, so the prompt is built from the words
+    of the confirmation window instead (`app.confirm_prompt`), and a key that
+    fed nothing would have translators filling it in for years."""
+    for path in shipped():
+        assert "prompt" not in read(path).get("stt", {}), path.name
 
 
 def test_the_turkish_pack_has_the_words_the_store_install_asks_with() -> None:
@@ -418,8 +408,8 @@ def test_words_of_the_wrong_shape_are_read_as_far_as_they_make_sense(tmp_path: P
 
 
 # --------------------------------------------------------------------------
-# The short commands of the old fast path are gone (plan.md D7): no pack
-# lists them, and the loader's `intents` is read by nothing.
+# The short commands of the old fast path are gone (plan.md D7): no pack lists
+# them, and the loader stopped carrying them on 2026-09-22.
 # --------------------------------------------------------------------------
 
 

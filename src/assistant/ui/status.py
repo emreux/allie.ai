@@ -1,9 +1,9 @@
-"""The terminal status line - the whole interface of phase 1 (item 1.11).
+"""The terminal status line (item 1.11), and the `Screen` both surfaces answer to.
 
-There is no window and no tray icon yet, and a voice assistant gives the user
-nothing to look at by design. So one line of the terminal has to answer the
-only question they have while nothing is being said: is it listening, is it
-thinking, or has it stopped?
+It was the whole interface once. The window of D20 is what `run` opens now, the
+tray icon (4.3) can sit beside either, and this line is what `run --terminal`
+keeps - still the shortest answer to the only question a user has while nothing
+is being said: is it listening, is it thinking, or has it stopped?
 
 **One line, overwritten.** The state changes four times in a turn. Printed as
 four lines each, a minute of use buries what was actually said under a hundred
@@ -48,7 +48,7 @@ from assistant.audio.capture import DEFAULT_TOGGLE_HOTKEY, QUIET_DBFS
 from assistant.live.base import Usage
 from assistant.locales import Locale
 
-__all__ = ["TEXT", "Screen", "SessionMinutes", "StatusLine", "label_key", "spell"]
+__all__ = ["TEXT", "QuietNotice", "Screen", "SessionMinutes", "StatusLine", "label_key", "spell"]
 
 # The mark at the start of the line. A shape rather than a word, so it needs
 # no translation and no room.
@@ -83,7 +83,6 @@ TEXT: dict[str, str] = {
     "you_said": "you",
     "it_said": "assistant",
     "turn_cost": "{input} in, {output} out",
-    "not_caught": "(not caught - confidence {confidence})",
     # The session and the meter (plan.md 4.2): shown beside the state.
     "session_open": "session open",
     "session_closed": "session closed",
@@ -117,6 +116,38 @@ def spell(hotkey: str) -> str:
     their keyboard, where none of the angle brackets appear.
     """
     return "+".join(part.strip("<>").capitalize() for part in hotkey.split("+"))
+
+
+class QuietNotice:
+    """Says once, per stretch of quiet, that the microphone is quiet (D18).
+
+    The line and the window show the same sentence by the same rule, and the
+    rule was written out in both until 2026-09-22 - eight identical lines, the
+    kind that drift apart the day one of them is fixed. `sentence` is the
+    pack's, already resolved; `say` is whoever puts a notice on the screen.
+    """
+
+    def __init__(self, sentence: str, say: Callable[[str], None]) -> None:
+        self._sentence = sentence
+        self._say = say
+        # Whether it has been said for the stretch of quiet under way; a level
+        # that is loud enough arms it again, because a headset changed or a
+        # Windows update deserves a new line.
+        self._told = False
+
+    def level(self, dbfs: float | None) -> None:
+        """What the microphone sent when a stream closed. `None` says nothing:
+        either nothing was sent, or the threshold does not apply to the path
+        this microphone was opened on (`LiveCapture.level_judged`)."""
+        if dbfs is None:
+            return
+        if dbfs >= QUIET_DBFS:
+            self._told = False
+            return
+        if self._told:
+            return
+        self._told = True
+        self._say(self._sentence.format(level=round(dbfs), quiet=int(QUIET_DBFS)))
 
 
 class SessionMinutes:
@@ -194,9 +225,7 @@ class StatusLine:
         self._console = console if console is not None else Console()
         # The meter (plan.md 4.2): closed until the state machine opens one.
         self._session = SessionMinutes(clock=clock)
-        # Whether the quiet-microphone line has been said for the current
-        # stretch of quiet; a level that is loud enough arms it again.
-        self._said_quiet = False
+        self._quiet = QuietNotice(self._said["microphone_quiet"], self.notice)
 
         keys = {"toggle": spell(toggle)}
         # Both are built up front; only which one is shown changes when the
@@ -267,17 +296,8 @@ class StatusLine:
     def microphone_level(self, dbfs: float | None) -> None:
         """What the server heard, in dBFS, when a stream closed (D18): a
         quiet microphone is said once, on a line that stays, and said again
-        only after it was heard loudly enough in between. `None` - nothing
-        was sent - says nothing."""
-        if dbfs is None:
-            return
-        if dbfs >= QUIET_DBFS:
-            self._said_quiet = False
-            return
-        if self._said_quiet:
-            return
-        self._said_quiet = True
-        self.notice(self._said["microphone_quiet"].format(level=round(dbfs), quiet=int(QUIET_DBFS)))
+        only after it was heard loudly enough in between."""
+        self._quiet.level(dbfs)
 
     def level(self, dbfs: float) -> None:
         """The sound, block by block (plan.md D20). The line has no meter
@@ -301,19 +321,14 @@ class StatusLine:
         after the process ends, and the log deliberately holds the numbers
         rather than the words (`logs.py`).
         """
-        if not finished.heard and not finished.missed:
+        if not finished.heard:
             # A key tapped by accident, a recording of silence, or a question
-            # withdrawn mid-turn. None of them is a turn the user had.
+            # withdrawn mid-turn. None of them is a turn the user had. (The
+            # old pipeline also had turns it could not read, shown here as a
+            # confidence; a live model hears the user itself.)
             return
 
-        # A missed turn shows the number instead of the words. There is no
-        # transcript worth printing - that is what missed means - and the
-        # number is what tells the user whether speaking up would have helped.
-        if finished.missed:
-            confidence = "-" if finished.confidence is None else f"{finished.confidence:.2f}"
-            heard = Text(self._said["not_caught"].format(confidence=confidence), style="dim")
-        else:
-            heard = Text(finished.heard)
+        heard = Text(finished.heard)
 
         answer = Text(finished.said)
         spent = self._spent(finished.usage)

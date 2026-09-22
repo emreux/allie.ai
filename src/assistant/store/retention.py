@@ -2,9 +2,10 @@
 phase 4.6; 17 Sep 2026).
 
 `tool_audit` is written before every tool runs and its rows are never
-deleted: the row is what makes the repeat check of section 3.11 work, and
-the list of what this user opens before (`AuditRepo.names_asked`), and a
-table that forgets its rows forgets both. But a row carries two things of
+deleted: the row is what makes the repeat check of section 3.11 work, and a
+table that forgets its rows forgets that. (It also fed the recogniser the
+names this user had opened before, until 2026-09-22 left the recogniser with
+the yes and no of a confirmation window.) But a row carries two things of
 different weight. Which tool ran, when, and how it went is bookkeeping;
 `result_summary` is the first two hundred characters of what the tool
 answered - the top of a web page, the text of a note, a forecast - and
@@ -12,10 +13,10 @@ there is no reason for that to sit on a disk for years.
 
 So the summary is blanked and the row stays. Once at every start, before
 anything reads the table, every row older than `[retention] audit_days`
-loses its summary. The arguments stay: the repeat check and the recogniser
-read them, and they are what the user asked for rather than what the world
-answered back. Notes and reminders are never touched here - the user wrote
-those down to keep them, and `live-assistant purge --all` is the door for them.
+loses its summary. The arguments stay: the repeat check reads them, and they
+are what the user asked for rather than what the world answered back. Notes and
+reminders are never touched here - the user wrote those down to keep them, and
+`live-assistant purge --all` is the door for them.
 """
 
 from __future__ import annotations

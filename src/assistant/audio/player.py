@@ -68,22 +68,11 @@ CHANNELS = 1
 BLOCK_FRAMES = 1_600
 
 
-class OutputStream(Protocol):
-    """The four things this needs an open sound device to do."""
-
-    def write(self, data: bytes) -> None: ...
-
-    def stop(self) -> None:
-        """Waits for what is queued to finish playing."""
-        ...
-
-    def abort(self) -> None:
-        """Drops what is queued instead of playing it."""
-        ...
-
-    def close(self) -> None: ...
-
-
+# What an open sound device is to this module: `write`, `stop`, `abort`,
+# `close`, as `sounddevice.RawOutputStream` has them. Typed as `Any` rather
+# than as a protocol - the old repository declared one and nothing referred
+# to it, because the only thing that opens a stream here is `_open_output`
+# and the tests pass their own object in its place.
 StreamFactory = Callable[[int], Any]
 
 

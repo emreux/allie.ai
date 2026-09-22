@@ -25,18 +25,16 @@ name = "Your language"
 # assistant, not the one it shows them.
 language = "xx"
 
-# What the recogniser is told to expect before each sentence (design.md 3.4).
-# Write a short sentence in your language, not a list: the decoder is being
-# shown what speech in your language looks like. Put the commands people say
-# most in it, and keep {apps} where the names of the installed apps should
-# go - the program fills them in, as many as fit. Leave it empty if unsure.
-prompt = "Installed apps: {apps}. Open the app, open the site, show settings, play music, next song, what time is it?"
-
 [speech]
 # The words the assistant listens for after asking "shall I?" - the ones
 # people actually say, in your language. Whole words, any case. A word from
 # `no_words` anywhere in the answer wins over one from `yes_words`, so keep
 # the two lists apart. Leave the table out and the English words are used.
+#
+# These are also what the recogniser of the confirmation window is told to
+# expect before it listens (`app.confirm_prompt`), which is why the list is
+# worth keeping short and worth keeping to words people really say: the live
+# model hears everything else itself.
 yes_words = ["yes", "ok", "okay", "confirm"]
 no_words = ["no", "cancel", "stop"]
 # What the assistant says while a tool is taking its time - "one moment,
@@ -205,7 +203,6 @@ state_reconnecting = "reconnecting"
 you_said = "you"
 it_said = "assistant"
 turn_cost = "{input} in, {output} out"
-not_caught = "(not caught - confidence {confidence})"
 # The session and the meter beside the state: a live model bills by the
 # minute while a session is open. {minutes} is a whole number.
 session_open = "session open"
@@ -219,7 +216,6 @@ microphone_quiet = "The microphone is quiet: {level} dBFS reached the server, un
 not_set_up = "Nothing is set up yet. Run 'live-assistant setup' first."
 cannot_start = "The assistant cannot start: {problem}"
 stopped = "Stopped."
-# Said by `run` while the live loop is not built yet; every other command works.
 # Said at startup when the tool-use test failed; the assistant runs anyway.
 model_no_tools = "The model does not call tools, and most of what the assistant does depends on that. Run 'live-assistant setup' to choose another."
 

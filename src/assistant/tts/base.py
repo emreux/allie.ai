@@ -5,11 +5,12 @@ little endian, at the rate it declares in `sample_rate`.** Windows speaks at
 16 kHz, Azure at 24; both are asked for raw PCM rather than a compressed
 format, so whatever plays the audio never has to decode anything.
 
-Streaming is not optional here, and `sentences` below is why. The model writes
-a reply in fragments over a second or two. Waiting for the last one before
-making a sound would add the whole generation time to the latency of section
-4; instead a sentence is handed to the engine the moment it is whole, and the
-first one is usually speaking while the model is still writing the second.
+Streaming is not optional here, and `sentences` below is why. A sentence is
+handed to the engine the moment it is whole rather than at the end of the
+script, so the first is already being said while the rest arrives. What arrives
+in the live product is short and already written - a gate's question, a
+reminder, one of three failure sentences (D3, D4, D10) - and the streaming
+shape is what lets `app.py` cut any of them off mid-word when the user talks.
 
 Text normalisation - reading `25.08.2026` and `%14` the way a person would -
 is phase 3.4 and lives in `tts/normalize.py` when it arrives. It belongs in

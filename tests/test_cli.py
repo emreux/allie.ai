@@ -21,7 +21,7 @@ import asyncio
 import sqlite3
 import sys
 import time
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
@@ -37,7 +37,7 @@ from assistant.agent import core
 from assistant.agent.limits import Limits
 from assistant.agent.policy import NO_SUCH_TOOL
 from assistant.agent.prompts import SEARCH_RULE, SYSTEM_PROMPT
-from assistant.app import State, Turn
+from assistant.app import State, Turn, confirm_prompt
 from assistant.audio import capture
 from assistant.audio import wake as wake_module
 from assistant.config import (
@@ -232,8 +232,8 @@ class Wiring:
     captures: list[FakeLiveCapture] = field(default_factory=list)
     microphones: list[Any] = field(default_factory=list)
     databases: list[sqlite3.Connection] = field(default_factory=list)
-    # What the speech model was told to expect (2.2).
-    vocabularies: list[list[str]] = field(default_factory=list)
+    # What the speech model was told to expect: the words of the confirmation
+    # window, since that is all it hears (D3, D10).
     prompts_for_speech: list[str] = field(default_factory=list)
     # Google's recogniser, when the settings ask for it: what it was built
     # with (2026-09-14).
@@ -247,8 +247,9 @@ class Wiring:
     # What the state machine does while it "runs", when a test wants more
     # than one turn reported: the tray's "quit" arrives in the middle of it.
     during_run: Callable[[], Awaitable[None]] | None = None
-    # The level the microphone sent, as the capture reports it at the close
-    # of a session (D18); `None` until a test sets one.
+    # The level the microphone sent, as the capture reports it at the close of
+    # a session and judged against the threshold (D18, `level_judged`); `None`
+    # until a test sets one, and `None` from a raw-path microphone.
     level: float | None = None
 
 
@@ -289,6 +290,7 @@ class FakeLiveCapture:
         self.wake = wake
         self.on_wake = on_wake
         self.level_dbfs: float | None = None
+        self.level_judged: float | None = None
         self.toggles = 0
 
     def toggle(self) -> None:
@@ -331,8 +333,7 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
         return connection
 
     class FakeWhisper:
-        def __init__(self, *, vocabulary: Iterable[str] = (), prompt: str = "") -> None:
-            seen.vocabularies.append(list(vocabulary))
+        def __init__(self, *, prompt: str = "") -> None:
             seen.prompts_for_speech.append(prompt)
 
         async def load(self) -> None:
@@ -345,7 +346,6 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
                 {
                     "api_key": api_key,
                     "model": rest.get("model"),
-                    "vocabulary": list(rest.get("vocabulary", ())),
                     "fallback": self.fallback,
                 }
             )
@@ -372,6 +372,7 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
     def capture_here(**parts: Any) -> FakeLiveCapture:
         built = FakeLiveCapture(**parts)
         built.level_dbfs = seen.level
+        built.level_judged = seen.level
         seen.captures.append(built)
         return built
 
@@ -832,31 +833,18 @@ def test_a_tool_file_beside_the_settings_is_on_offer(configured: Path, wiring: W
     assert runner.tools[:-1] == list(BUILTIN_TOOLS)
 
 
-def test_the_speech_model_is_told_the_locales_sentence_and_the_apps_names(
+def test_the_speech_model_is_told_the_words_the_window_accepts(
     configured: Path, wiring: Wiring
 ) -> None:
-    """Section 3.4: the pack's `[stt] prompt` with the catalogue's names as
-    people say them (2026-09-13). It hears two words now (D3), and the old
-    vocabulary is harmless there."""
+    """D3, D10: the recogniser hears the yes or no of the gate's window and
+    nothing else, so that is what it is told to expect - the pack's own words
+    (`app.confirm_prompt`). Until 2026-09-22 it was given the names of the
+    installed applications and the address book, 120 tokens of them, which
+    cost the window most of a second of decode for words it never hears."""
     main(["run", "--terminal"])
 
-    assert wiring.vocabularies == [["Spotify", "Google Chrome"]]
-    assert wiring.prompts_for_speech == [locales.load("tr").stt_prompt]
-
-
-def test_the_people_in_the_address_book_lead_the_recognisers_names(
-    configured: Path, wiring: Wiring
-) -> None:
-    """Spec A6 (2026-09-15): people's names are the shortest, most ambiguous
-    words the recogniser hears, and there are few of them."""
-    (configured / CONTACTS_FILE_NAME).write_text(
-        '[[contact]]\nname = "Ahmet Yılmaz"\naliases = ["abi"]\nphone = "+90 532 000 00 00"\n',
-        encoding="utf-8",
-    )
-
-    main(["run", "--terminal"])
-
-    assert wiring.vocabularies == [["Ahmet Yılmaz", "abi", "Spotify", "Google Chrome"]]
+    assert wiring.prompts_for_speech == [confirm_prompt(locales.load("tr"))]
+    assert "evet" in wiring.prompts_for_speech[0].casefold()
 
 
 def test_send_message_asks_its_question_in_the_language_of_the_pack(
@@ -924,7 +912,6 @@ def test_with_the_setting_the_recogniser_is_gemini_with_whisper_behind_it(
     (built,) = wiring.recognisers
     assert built["api_key"] == "AIza-not-a-real-key"
     assert built["model"] == "gemini-3.5-transcribe-live"
-    assert built["vocabulary"] == ["Spotify", "Google Chrome"]
     assert type(built["fallback"]).__name__ == "FakeWhisper"
     assert wiring.happened[-4:] == ["app catalogue", "speech model", "gemini", "assistant"]
     assert type(wiring.built[-1]["stt"]).__name__ == "FakeGemini"
@@ -1323,9 +1310,10 @@ def test_the_session_and_its_minutes_are_shown_on_screen(
 def test_a_quiet_microphone_is_said_on_screen_when_the_session_closes(
     configured: Path, wiring: Wiring, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """D18: the level the capture reports when a session closes goes to the
+    """D18: the level the capture judged when a session closes goes to the
     line, and under -40 dBFS it is a sentence the user reads once. Measured
-    2026-09-18: the owner's array sent -45."""
+    2026-09-18: the owner's array sent -45 through the audio engine. A raw-path
+    microphone judges nothing (`LiveCapture.level_judged`) and says nothing."""
     wiring.level = -45.0
 
     main(["run", "--terminal"])

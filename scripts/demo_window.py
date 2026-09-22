@@ -44,7 +44,7 @@ STATES = (
 TURNS = (
     Turn(heard="saat kaç", said="Saat on beş kırk iki."),
     Turn(heard="yarın dokuzda toplantı hatırlat", said="Hatırlatma kuruldu."),
-    Turn(missed=True, confidence=0.31),
+    Turn(heard="bunu not al", said="Not kaydedildi.", tool_calls=1),
 )
 
 

@@ -4,10 +4,11 @@ Measured 2026-08-27: "adım Emre" was remembered in the next turn and
 forgotten at the next start. Nothing in the design held it. The history
 lives in memory and dies with the process (`agent/core.py`), the system
 prompt carries no name so that its bytes never change (`agent/prompts.py`),
-and the disk had only the audit rows. This is the third kind of memory,
-beside the window of twelve turns and the notes of phase 4: what the user
-explicitly asked to be kept, and the assistant's own name, read at startup
-and put in front of every request.
+and the disk had only the audit rows. This is the second kind of memory,
+beside the notes of phase 4: what the user explicitly asked to be kept, and
+the assistant's own name, read at startup and put in front of every session.
+(The first kind was the old loop's window of twelve turns. A live session keeps
+its own history, on the server, for as long as it stays open.)
 
 **A file, not a table.** `%APPDATA%\\live-assistant\\memory.toml`, beside
 `config.toml` and under its rules (section 10): data rather than code,
@@ -28,12 +29,12 @@ program writes here, so the file holds what the user asked for, in the
 words they used. A file that does not parse - a hand edit gone wrong - is
 a sentence at startup and is never written over.
 
-**The block is composed at every request** from what this holds, not once
-at startup. The loop is handed the prompt as a source rather than a
-sentence (`Agent`), so "bana Emre de" holds from the next request on,
-thirteen turns later when the window has dropped it, and at the next
-start. The bytes change only when the facts do, which is the one time the
-cache of architecture guide section 2 is meant to miss.
+**The block is composed at every session** from what this holds, not once
+at startup. `__main__` reads it inside the `session_config` closure rather than
+handing over a finished sentence, so "bana Emre de" holds from the next session
+on - the one the next sentence opens - and at the next start. The bytes change
+only when the facts do, which is the one time the cache of architecture guide
+section 2 is meant to miss.
 
 **The persona is the third list** (2026-09-21, D23): how the assistant
 should speak, under `[assistant]` beside its name, read into the prompt

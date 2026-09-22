@@ -32,6 +32,16 @@ is the Tk half: widgets, the orb on a canvas, the tick.
 paints once per colour (Tk cannot blur), the core an oval that breathes,
 the rings arcs whose `start` turns every tick, the dots ovals moved.
 
+**Sixty frames a second, and one size** (task U1-U2). The tick asks for
+fifteen milliseconds and subtracts the time the last one took, so the
+period is the frame and not the frame plus the work; Windows is asked for
+a one millisecond timer while the window is up, because at its usual
+15.6 ms granularity a sixteen millisecond wait is rounded up to thirty-one
+and sixty frames quietly become thirty. The window does not resize: it is
+one shape at one size, so the maximise button is greyed out and the orb is
+laid out once. Nothing here is a clock the animation reads - every frame
+is still told how long it was.
+
 **The wizard's page** is the `Prompter` of `setup_wizard.py` on a window:
 `WindowPrompter` posts each question and awaits a future the Tk thread
 resolves when Continue is pressed - so the wizard's checks (the key, the
@@ -45,26 +55,27 @@ state labels are the status line's, the button words the tray's.
 from __future__ import annotations
 
 import asyncio
+import gc
 import math
 import queue
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 from assistant.app import State, Turn
-from assistant.audio.capture import QUIET_DBFS
-from assistant.config import APP_NAME
+from assistant.config import APP_TITLE
 from assistant.locales import Locale
 from assistant.setup_wizard import Option, wording
-from assistant.ui import orb
+from assistant.ui import logo, orb
 from assistant.ui.orb import RGB, Frame, Orb
 from assistant.ui.status import TEXT as STATUS_TEXT
-from assistant.ui.status import SessionMinutes, label_key
+from assistant.ui.status import QuietNotice, SessionMinutes, label_key
 from assistant.ui.tray import TEXT as TRAY_TEXT
 
 __all__ = [
@@ -73,8 +84,10 @@ __all__ = [
     "TICK_MS",
     "TRANSCRIPT_ROWS",
     "Answer",
+    "Button",
     "Message",
     "Panel",
+    "Style",
     "Switch",
     "TkPanel",
     "View",
@@ -82,6 +95,7 @@ __all__ = [
     "WindowError",
     "WindowPrompter",
     "WizardPage",
+    "plate",
     "system_panel",
 ]
 
@@ -103,15 +117,18 @@ STATUS_KEYS = (
     "session_minutes",
     "you_said",
     "it_said",
-    "not_caught",
     "microphone_quiet",
 )
 TRAY_KEYS = ("tray_not_listening", "tray_stop_listening", "tray_start_listening", "tray_quit")
 
-TICK_MS = 33
+# Fifteen rather than sixteen: Windows' usual timer granularity is 15.6 ms,
+# and a wait is rounded *up* to the next tick of it - sixteen would come
+# back at 31 ms and draw thirty frames a second. Fifteen lands on 15.6 ms
+# without the fine timer and on 15 ms with it; both are over sixty.
+TICK_MS = 15
 TRANSCRIPT_ROWS = 200
+# One size, no resizing (U2): the window is a shape, not a workspace.
 WINDOW_SIZE = (420, 640)
-MIN_SIZE = (360, 520)
 ORB_HEIGHT = 300
 BACKGROUND: RGB = (11, 15, 20)
 WHITE: RGB = (230, 243, 255)
@@ -245,16 +262,10 @@ class View:
     # ------------------------------------------------------------------------
 
     def _turn(self, finished: Turn) -> None:
-        # The status line's rule: a turn nobody had is no row, a missed one
-        # shows the number.
-        if not finished.heard and not finished.missed:
+        # The status line's rule: a turn nobody had is no row.
+        if not finished.heard:
             return
-        if finished.missed:
-            confidence = "-" if finished.confidence is None else f"{finished.confidence:.2f}"
-            heard = self._status["not_caught"].format(confidence=confidence)
-        else:
-            heard = finished.heard
-        self._add("you", heard)
+        self._add("you", finished.heard)
         self._add("it", finished.said)
 
     def _add(self, kind: str, text: str) -> None:
@@ -299,7 +310,9 @@ class Window:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.view = View(locale, clock=clock)
-        self._quiet = locale.say("microphone_quiet", STATUS_TEXT["microphone_quiet"])
+        self._quiet = QuietNotice(
+            locale.say("microphone_quiet", STATUS_TEXT["microphone_quiet"]), self.notice
+        )
         self._queue: queue.SimpleQueue[Message] = queue.SimpleQueue()
         self._loop = loop
         self._on_toggle = on_toggle
@@ -313,7 +326,6 @@ class Window:
         # Set on the Tk thread when quit was pressed: a question asked after
         # that is answered "walked away" at once rather than shown.
         self._quitting = False
-        self._said_quiet = False
 
     # -- the thread ------------------------------------------------------------
 
@@ -343,7 +355,20 @@ class Window:
             self._up.set()
             return
         self._up.set()
-        panel.run()
+        try:
+            panel.run()
+        finally:
+            # Tk's objects are let go here, on the thread that made them.
+            # A widget tree holds itself up - every parent knows its
+            # children and every child its parent - so it is the garbage
+            # collector that frees it, and the collector runs on whichever
+            # thread happens to allocate next, which at the end of the
+            # process is the main one. Tcl kills the process outright
+            # ("async handler deleted by the wrong thread") when its
+            # interpreter is deleted anywhere but where it was born, so the
+            # panel is dropped and collected here rather than by chance.
+            del panel
+            gc.collect()
 
     # -- Screen (ui/status.py), called on the loop ----------------------------
 
@@ -363,17 +388,9 @@ class Window:
         self._post(("session", open))
 
     def microphone_level(self, dbfs: float | None) -> None:
-        """The status line's rule (D18): a quiet microphone is said once
-        per stretch of quiet, as a notice."""
-        if dbfs is None:
-            return
-        if dbfs >= QUIET_DBFS:
-            self._said_quiet = False
-            return
-        if self._said_quiet:
-            return
-        self._said_quiet = True
-        self.notice(self._quiet.format(level=round(dbfs), quiet=int(QUIET_DBFS)))
+        """The status line's rule, and the same code as the line (D18): a
+        quiet microphone is said once per stretch of quiet, as a notice."""
+        self._quiet.level(dbfs)
 
     def hands_free(self, listening: bool) -> None:
         self._post(("mode", listening))
@@ -494,13 +511,21 @@ PANE = "#0f151c"
 PRESSED = "#1a2430"
 NOTICE_INK = "#f39c12"
 # The core's hot centre as the canvas can draw it: ovals stepping inwards,
-# each a fraction of the core's radius and that much whiter.
-SPOT_STEPS: tuple[tuple[float, float], ...] = (
-    (0.80, 0.14),
-    (0.64, 0.28),
-    (0.48, 0.42),
-    (0.32, 0.56),
+# each a fraction of the core's radius and that much whiter. Sixteen steps
+# rather than the first four (U1): at four the gradient had rings of its
+# own in it, which the eye read as banding and not as a glow. The curve is
+# the four's, carried on to a hotter centre.
+SPOT_COUNT = 16
+SPOT_HOT = 0.95
+SPOT_FALLOFF = 1.25
+SPOT_STEPS: tuple[tuple[float, float], ...] = tuple(
+    (reach, SPOT_HOT * (1 - reach) ** SPOT_FALLOFF)
+    for reach in (1 - (step + 1) / (SPOT_COUNT + 1) for step in range(SPOT_COUNT))
 )
+# The halo Pillow paints under the core, as (how far out, how blurred, how
+# strong). Tighter and thinner than the mockup's since U1: the wide, soft
+# layer lay over the two inner arcs and washed the mechanism out.
+GLOW_LAYERS: tuple[tuple[float, float, int], ...] = ((2.05, 0.34, 58), (1.28, 0.11, 150))
 # A ring cut into this many pieces or more is drawn as one arc with Tk's
 # own dash pattern instead of one item per piece: seventy-two items cost
 # more to move than the rest of the orb put together (W1). One pixel wide,
@@ -508,8 +533,83 @@ SPOT_STEPS: tuple[tuple[float, float], ...] = (
 # wider, the dashes come out shorter and the pattern is not the ring's.
 DASHED_RING_MIN = 24
 # A ring that turned less than this since it was last drawn is left where
-# it is: under a pixel at the orb's size, and every move redraws the orb.
-MIN_TURN_DEGREES = 0.4
+# it is: a quarter of a pixel at the orb's size, and every move redraws the
+# orb. It was 0.4 while the window drew thirty frames a second; at sixty the
+# inner arc turns 0.3 of a degree a frame and would have been held back
+# every other frame - thirty frames again, which is what U1 was about.
+MIN_TURN_DEGREES = 0.12
+
+
+# -- the buttons -----------------------------------------------------------
+#
+# Tk's own button is a grey slab with a square corner and no answer to the
+# pointer. These are canvases: a rounded plate Pillow draws (supersampled,
+# because Tk has no anti-aliased corner either), the label as canvas text on
+# top so it stays the system's own crisp glyphs, and four plates per button -
+# at rest, under the pointer, held down, and out of use.
+
+
+@dataclass(frozen=True, slots=True)
+class Style:
+    """What one kind of button wears. `edge` is the hairline round the plate,
+    or nothing for a filled one; `hover_ink` recolours the label under the
+    pointer, which only the one destructive button uses."""
+
+    fill: RGB
+    hover: RGB
+    press: RGB
+    edge: RGB | None
+    ink: str
+    hover_ink: str | None = None
+
+
+# The everyday button: a plate barely above the background, lifting under
+# the pointer.
+QUIET = Style(fill=(22, 30, 41), hover=(33, 45, 60), press=(15, 21, 29), edge=(40, 54, 71), ink=INK)
+# What the window is for: the orb's ready blue, filled.
+ACCENT = Style(
+    fill=(31, 106, 196), hover=(48, 133, 229), press=(24, 84, 158), edge=None, ink="#f3f9ff"
+)
+# Quit: the quiet plate until the pointer is on it, then it says so.
+DANGER = Style(
+    fill=(22, 30, 41),
+    hover=(58, 29, 38),
+    press=(44, 21, 29),
+    edge=(40, 54, 71),
+    ink=INK,
+    hover_ink="#ff9aa7",
+)
+
+BUTTON_FONT = 10
+BUTTON_PAD_X = 16
+BUTTON_PAD_Y = 9
+BUTTON_RADIUS = 9
+# How much larger the plate is drawn before it is shrunk back, so that the
+# corners come out smooth.
+PLATE_SUPERSAMPLE = 4
+# Out of use: the plate faded this far towards the background.
+FADED = 0.45
+
+
+def plate(
+    width: int, height: int, radius: int, fill: RGB, edge: RGB | None, background: RGB
+) -> Image.Image:
+    """One rounded button plate, `width` by `height`, painted on `background`
+    (opaque, so that Tk is handed no alpha to blend every frame - the orb's
+    rule). Drawn `PLATE_SUPERSAMPLE` times larger and shrunk back: Pillow's
+    rounded rectangle has stepped corners at the size asked for."""
+    if width < 1 or height < 1:
+        raise ValueError(f"a plate of {width}x{height} cannot be drawn")
+    scale = PLATE_SUPERSAMPLE
+    image = Image.new("RGB", (width * scale, height * scale), background)
+    ImageDraw.Draw(image).rounded_rectangle(
+        (0, 0, width * scale - 1, height * scale - 1),
+        radius=radius * scale,
+        fill=fill,
+        outline=edge,
+        width=scale if edge is not None else 0,
+    )
+    return image.resize((width, height), Image.Resampling.LANCZOS)
 
 
 def hex_of(colour: RGB) -> str:
@@ -539,6 +639,158 @@ def _dpi_aware() -> None:
         pass
 
 
+def _timer_period(milliseconds: int, *, begin: bool) -> None:
+    """Asks Windows for a finer timer while the window is up, and gives it
+    back when the window goes down (U1). Without this the 15 ms the tick
+    asks for is served at the system's 15.6 ms granularity, which is still
+    sixty frames - but with the audio device's own request gone, a coarse
+    granularity would round it to 31 ms and halve the rate. Windows only,
+    and harmless where the call does not exist."""
+    try:
+        import ctypes
+
+        call = ctypes.windll.winmm.timeBeginPeriod if begin else ctypes.windll.winmm.timeEndPeriod
+        call(milliseconds)
+    except (AttributeError, OSError):
+        pass
+
+
+class Button(tk.Canvas):
+    """A rounded button that answers the pointer: `Style`'s four plates, the
+    label in the system's font on top, and the command on release inside.
+
+    Keyboard-reachable like Tk's own: it takes focus, wears the pointer's
+    plate while it has it, and Return or Space presses it.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        text: str,
+        command: Callable[[], None],
+        style: Style = QUIET,
+        scale: float = 1.0,
+        background: RGB = BACKGROUND,
+    ) -> None:
+        super().__init__(
+            parent,
+            bg=hex_of(background),
+            highlightthickness=0,
+            bd=0,
+            takefocus=True,
+            cursor="hand2",
+        )
+        self._style = style
+        self._command = command
+        self._background = background
+        self._pad = (round(BUTTON_PAD_X * scale), round(BUTTON_PAD_Y * scale))
+        self._radius = max(2, round(BUTTON_RADIUS * scale))
+        self._font = tkfont.Font(family=FONT, size=BUTTON_FONT)
+        self._plates: dict[str, ImageTk.PhotoImage] = {}
+        self._plate_item = self.create_image(0, 0, anchor="nw")
+        self._label_item = self.create_text(0, 0, anchor="center", font=self._font, text="")
+        self._enabled = True
+        self._under = False
+        self._held = False
+        # None until the first `set_text`, so that a button born with no
+        # words still gets its plates and its size when they arrive.
+        self._text: str | None = None
+        for event, handler in (
+            ("<Enter>", self._entered),
+            ("<Leave>", self._left),
+            ("<ButtonPress-1>", self._pressed),
+            ("<ButtonRelease-1>", self._released),
+            ("<FocusIn>", self._entered),
+            ("<FocusOut>", self._left),
+            ("<Return>", self._struck),
+            ("<space>", self._struck),
+        ):
+            self.bind(event, handler)
+        self.set_text(text)
+
+    # -- what the panel says to it -----------------------------------------
+
+    def set_text(self, text: str) -> None:
+        """The label, and with it the button's size: the plates are repainted
+        only when the words really changed."""
+        if text == self._text:
+            return
+        self._text = text
+        width = self._font.measure(text) + 2 * self._pad[0]
+        height = self._font.metrics("linespace") + 2 * self._pad[1]
+        self.configure(width=width, height=height)
+        self._plates = {
+            name: ImageTk.PhotoImage(
+                plate(width, height, self._radius, fill, edge, self._background)
+            )
+            for name, fill, edge in self._faces()
+        }
+        self.coords(self._label_item, width / 2, height / 2)
+        self.itemconfigure(self._label_item, text=text)
+        self._wear()
+
+    def set_enabled(self, enabled: bool) -> None:
+        if enabled != self._enabled:
+            self._enabled = enabled
+            self.configure(cursor="hand2" if enabled else "")
+            self._wear()
+
+    # -- what the pointer says to it ---------------------------------------
+
+    def _entered(self, _: object = None) -> None:
+        self._under = True
+        self._wear()
+
+    def _left(self, _: object = None) -> None:
+        self._under = self._held = False
+        self._wear()
+
+    def _pressed(self, _: object) -> None:
+        if not self._enabled:
+            return
+        self._held = True
+        self.focus_set()
+        self._wear()
+
+    def _released(self, _: object) -> None:
+        held, self._held = self._held, False
+        self._wear()
+        if held and self._enabled:
+            self._command()
+
+    def _struck(self, _: object) -> None:
+        if self._enabled:
+            self._command()
+
+    # ----------------------------------------------------------------------
+
+    def _faces(self) -> tuple[tuple[str, RGB, RGB | None], ...]:
+        style = self._style
+        faded = blend(style.fill, self._background, 1 - FADED)
+        edge = None if style.edge is None else blend(style.edge, self._background, 1 - FADED)
+        return (
+            ("rest", style.fill, style.edge),
+            ("hover", style.hover, style.edge),
+            ("held", style.press, style.edge),
+            ("off", faded, edge),
+        )
+
+    def _wear(self) -> None:
+        if not self._plates:
+            return
+        if not self._enabled:
+            face, ink = "off", DIM_INK
+        elif self._held:
+            face, ink = "held", self._style.ink
+        elif self._under:
+            face, ink = "hover", self._style.hover_ink or self._style.ink
+        else:
+            face, ink = "rest", self._style.ink
+        self.itemconfigure(self._plate_item, image=self._plates[face])
+        self.itemconfigure(self._label_item, fill=ink)
+
+
 class TkPanel:
     """The widgets, the orb and the tick. Lives on the window's thread."""
 
@@ -546,14 +798,26 @@ class TkPanel:
         _dpi_aware()
         self._view = view
         self._window = window
+        _timer_period(1, begin=True)
         root = self._root = tk.Tk()
         background = hex_of(BACKGROUND)
-        root.title(APP_NAME)
+        root.title(APP_TITLE)
         root.configure(bg=background)
         self._scale = root.winfo_fpixels("1i") / 96.0
         width, height = (round(side * self._scale) for side in WINDOW_SIZE)
         root.geometry(f"{width}x{height}")
-        root.minsize(*(round(side * self._scale) for side in MIN_SIZE))
+        # One size (U2): no drag on an edge, no maximise - Windows greys the
+        # middle title-bar button out, and minimise and close stay.
+        root.resizable(False, False)
+        # The mark, in the title bar and on the taskbar button (U5). Tk keeps
+        # no reference of its own, so the photos are held here or the icon
+        # goes blank the moment they are collected.
+        self._marks = [ImageTk.PhotoImage(logo.draw_logo(size)) for size in logo.ICON_SIZES]
+        # By name rather than by object: Pillow's photo is not Tk's own
+        # class, and `wm iconphoto` takes the Tcl name either way - Windows
+        # picks the size it wants for the title bar and for the taskbar.
+        names = [str(mark) for mark in self._marks]
+        root.iconphoto(True, names[0], *names[1:])
         root.protocol("WM_DELETE_WINDOW", self._close)
 
         # The face: orb, labels, transcript, buttons.
@@ -571,10 +835,12 @@ class TkPanel:
         # asks for twenty-four lines it would be pushed off the window.
         bar = tk.Frame(self._face, bg=background)
         bar.pack(side="bottom", fill="x", padx=12, pady=12)
-        self._switch = self._button(bar, "", window.toggle)
+        # The switch is what the window is for, so it is the filled one; quit
+        # is quiet until the pointer is on it (U4).
+        self._switch = self._button(bar, "", window.toggle, style=ACCENT)
         self._switch.pack(side="left")
         self._button(bar, view.said["window_settings"], window.settings).pack(side="left", padx=8)
-        self._button(bar, view.quit_label(), self._quit).pack(side="right")
+        self._button(bar, view.quit_label(), self._quit, style=DANGER).pack(side="right")
         self._text = self._pane(self._face, height=6)
         self._text.tag_configure("who", foreground=DIM_INK)
         self._text.tag_configure("you", foreground=DIM_INK)
@@ -616,7 +882,9 @@ class TkPanel:
         self._entry.bind("<Return>", lambda _: self._continue_pressed())
         buttons = tk.Frame(self._page, bg=background)
         buttons.pack(side="bottom", fill="x", padx=12, pady=12)
-        self._continue = self._button(buttons, view.said["wizard_continue"], self._continue_pressed)
+        self._continue = self._button(
+            buttons, view.said["wizard_continue"], self._continue_pressed, style=ACCENT
+        )
         self._continue.pack(side="left")
         self._cancel = self._button(buttons, view.said["wizard_cancel"], self._cancel_pressed)
         self._cancel.pack(side="right")
@@ -645,26 +913,17 @@ class TkPanel:
         root.after(TICK_MS, self._tick)
 
     def run(self) -> None:
-        self._root.mainloop()
+        try:
+            self._root.mainloop()
+        finally:
+            _timer_period(1, begin=False)
 
     # -- widgets ---------------------------------------------------------------
 
-    def _button(self, parent: tk.Misc, text: str, command: Callable[[], None]) -> tk.Button:
-        return tk.Button(
-            parent,
-            text=text,
-            command=command,
-            bg=PANE,
-            fg=INK,
-            activebackground=PRESSED,
-            activeforeground=INK,
-            relief="flat",
-            bd=0,
-            padx=14,
-            pady=6,
-            font=(FONT, 10),
-            cursor="hand2",
-        )
+    def _button(
+        self, parent: tk.Misc, text: str, command: Callable[[], None], *, style: Style = QUIET
+    ) -> Button:
+        return Button(parent, text=text, command=command, style=style, scale=self._scale)
 
     def _pane(self, parent: tk.Misc, *, height: int | None = None) -> tk.Text:
         pane = tk.Text(
@@ -699,6 +958,7 @@ class TkPanel:
     # -- the tick ---------------------------------------------------------------
 
     def _tick(self) -> None:
+        started = time.monotonic()
         for message in self._window.drain():
             if message == ("quit",):
                 self._root.destroy()
@@ -708,10 +968,13 @@ class TkPanel:
                 continue
             self._view.apply(message)
         self._paint()
-        now = time.monotonic()
-        dt, self._last = min(now - self._last, MAX_DT), now
+        dt, self._last = min(started - self._last, MAX_DT), started
         self._draw(self._view.frame(dt))
-        self._root.after(TICK_MS, self._tick)
+        # The next frame is due `TICK_MS` after this one began, not after it
+        # ended: asking for the whole period again would add the drawing to
+        # it and leave the window short of sixty frames a second (U1).
+        spent = round((time.monotonic() - started) * 1000)
+        self._root.after(max(1, TICK_MS - spent), self._tick)
 
     def _paint(self) -> None:
         view = self._view
@@ -720,7 +983,7 @@ class TkPanel:
             self._shown = shown
             self._label.configure(text=shown[0])
             self._meter.configure(text=shown[1])
-            self._switch.configure(text=shown[2])
+            self._switch.set_text(shown[2])
         if view.version != self._rows_version:
             self._rows_version = view.version
             self._text.configure(state="normal")
@@ -771,9 +1034,8 @@ class TkPanel:
                 self._entry.configure(show="•" if page.kind == "secret" else "")
                 self._entry.pack(fill="x", padx=12, pady=8)
                 self._entry.focus_set()
-            state: Literal["normal", "disabled"] = "normal" if page.open else "disabled"
-            self._continue.configure(state=state)
-            self._cancel.configure(state=state)
+            self._continue.set_enabled(page.open)
+            self._cancel.set_enabled(page.open)
 
     def _fill_list(self, options: Sequence[Option]) -> None:
         self._visible = list(options)
@@ -881,10 +1143,10 @@ class TkPanel:
         the background, so the background is painted into it here and the
         photo goes to Tk without an alpha channel - blending a quarter of
         a million pixels a frame cost more than the rings did (W1)."""
-        size = int(core * 5.4) + 1
+        size = int(core * 2 * max(reach for reach, _, _ in GLOW_LAYERS) * 1.3) + 1
         image = Image.new("RGBA", (size, size), (*BACKGROUND, 255))
         centre = size / 2
-        for reach, blur, alpha in ((2.2, 0.45, 70), (1.35, 0.16, 160)):
+        for reach, blur, alpha in GLOW_LAYERS:
             layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
             r = core * reach
             ImageDraw.Draw(layer).ellipse(

@@ -22,17 +22,16 @@ import contextlib
 import math
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 import pytest
 
-from assistant.stt.base import SAMPLE_RATE, Audio, STTProvider, Transcript, buffered_stream
+from assistant.stt.base import SAMPLE_RATE, Audio, STTProvider
 from assistant.stt.local_whisper import (
     COMPRESSION_CEILING,
-    PROMPT_TOKENS,
     TOKENS_AT_LEAST,
     TOKENS_PER_SECOND,
     LocalWhisper,
@@ -128,11 +127,6 @@ def silence(seconds: float = 0.5) -> Audio:
     return np.zeros(int(SAMPLE_RATE * seconds), dtype=np.float32)
 
 
-async def chunks_of(*buffers: Audio) -> AsyncIterator[Audio]:
-    for buffer in buffers:
-        yield buffer
-
-
 def whisper(**kwargs: Any) -> tuple[LocalWhisper, FakeModel]:
     model = FakeModel(**kwargs)
     return LocalWhisper(build=lambda: model), model
@@ -149,7 +143,6 @@ async def test_the_transcript_is_the_segments_joined() -> None:
     transcript = await stt.transcribe(silence())
 
     assert transcript.text == "Merhaba, nasilsin?"
-    assert transcript.is_final is True
 
 
 async def test_the_language_is_the_one_the_model_reports() -> None:
@@ -416,72 +409,6 @@ async def test_a_model_that_cannot_be_loaded_fails_by_name() -> None:
 
 
 # --------------------------------------------------------------------------
-# Streaming, for a provider that cannot stream
-# --------------------------------------------------------------------------
-
-
-async def test_a_provider_that_cannot_stream_still_answers_the_stream_call() -> None:
-    stt, _ = whisper()
-
-    results = [t async for t in stt.transcribe_stream(chunks_of(silence(), silence()))]
-
-    assert len(results) == 1
-    assert results[0].is_final is True
-
-
-async def test_the_whole_utterance_reaches_the_model_in_one_piece() -> None:
-    """Whisper has no use for a fragment; the pieces are joined in order."""
-    stt, model = whisper()
-    first, second = np.full(3, 0.1, dtype=np.float32), np.full(2, 0.2, dtype=np.float32)
-
-    async for _ in stt.transcribe_stream(chunks_of(first, second)):
-        pass
-
-    heard, _ = model.calls[0]
-    assert np.array_equal(heard, np.concatenate([first, second]))
-
-
-async def test_a_stream_that_carried_no_audio_is_not_an_error() -> None:
-    """The key was pressed and released before a single frame arrived."""
-    stt, model = whisper(texts=())
-
-    results = [t async for t in stt.transcribe_stream(chunks_of())]
-
-    assert [t.text for t in results] == [""]
-    assert len(model.calls[0][0]) == 0
-
-
-async def test_the_hint_survives_the_stream() -> None:
-    stt, model = whisper()
-
-    async for _ in stt.transcribe_stream(chunks_of(silence()), hint="en"):
-        pass
-
-    assert model.calls[0][1]["language"] == "en"
-
-
-async def test_the_default_body_is_shared_not_copied() -> None:
-    """`buffered_stream` is what every non-streaming provider uses; writing it
-    again per provider is how one of them ends up wrong."""
-
-    class Deaf:
-        id = "deaf"
-        supports_streaming = False
-
-        async def transcribe(self, pcm: Audio, *, hint: str | None = None) -> Transcript:
-            return Transcript(text=f"{len(pcm)} samples", language=hint or "")
-
-        def transcribe_stream(
-            self, pcm_chunks: AsyncIterator[Audio], *, hint: str | None = None
-        ) -> AsyncIterator[Transcript]:
-            return buffered_stream(self, pcm_chunks, hint=hint)
-
-    results = [t async for t in Deaf().transcribe_stream(chunks_of(silence(0.1)))]
-
-    assert [t.text for t in results] == ["1600 samples"]
-
-
-# --------------------------------------------------------------------------
 # The protocol
 # --------------------------------------------------------------------------
 
@@ -490,27 +417,28 @@ def test_the_local_model_is_an_stt_provider() -> None:
     stt, _ = whisper()
 
     assert isinstance(stt, STTProvider)
-    assert stt.supports_streaming is False
 
 
 # --------------------------------------------------------------------------
-# The prompt (2.2; a sentence, fitted by tokens, 2026-09-13)
+# The prompt: what the caller says the next utterance will be (D3, D10)
 # --------------------------------------------------------------------------
 
 
-async def test_the_vocabulary_reaches_the_model_as_one_prompt() -> None:
-    """Section 3.4's free trick: the names the decoder is told to expect,
-    joined into the one string the library takes when the pack gives no
-    sentence to put them in. Blank terms are dropped."""
+async def test_the_prompt_reaches_the_decoder_as_it_was_given() -> None:
+    """Section 3.4's free trick and nothing cleverer: the caller knows what the
+    window is about to hear (`app.confirm_prompt`), so the sentence is passed
+    on as it stands. Until 2026-09-22 this file fitted a list of application
+    names into a template here, 120 tokens of them, which cost the
+    confirmation window about 0.8 s of decode for words it never hears."""
     model = FakeModel()
-    stt = LocalWhisper(build=lambda: model, vocabulary=["aç, ayarlar", "Spotify", "  ", "Chrome"])
+    stt = LocalWhisper(build=lambda: model, prompt="  Evet. Hayır. İptal.  ")
 
     await stt.transcribe(silence())
 
-    assert model.calls[0][1]["initial_prompt"] == "aç, ayarlar, Spotify, Chrome"
+    assert model.calls[0][1]["initial_prompt"] == "Evet. Hayır. İptal."
 
 
-async def test_without_a_vocabulary_the_model_is_given_no_prompt() -> None:
+async def test_without_a_prompt_the_model_is_given_none() -> None:
     """`None`, not an empty string: the library's own way of saying so."""
     stt, model = whisper()
 
@@ -519,67 +447,16 @@ async def test_without_a_vocabulary_the_model_is_given_no_prompt() -> None:
     assert model.calls[0][1]["initial_prompt"] is None
 
 
-async def test_the_pack_s_sentence_carries_the_names_where_apps_is() -> None:
-    """A sentence in the user's language reads to the decoder as speech in
-    that language; a comma list does not (measured 2026-09-13, weakly)."""
+async def test_the_decoder_is_never_asked_to_count_tokens_any_more() -> None:
+    """The fitting is gone with the vocabulary: nothing here encodes text, so
+    loading the model costs the weights and not a tokenizer pass."""
     model = FakeModel()
-    stt = LocalWhisper(
-        build=lambda: model,
-        vocabulary=["PyCharm", "Chrome"],
-        prompt="Bilgisayarımdaki uygulamalar: {apps}. Uygulamayı aç.",
-    )
-
-    await stt.transcribe(silence())
-
-    assert (
-        model.calls[0][1]["initial_prompt"]
-        == "Bilgisayarımdaki uygulamalar: PyCharm, Chrome. Uygulamayı aç."
-    )
-
-
-async def test_the_names_stop_where_the_window_ends_and_the_sentence_survives() -> None:
-    """The library keeps the *last* 223 tokens of a long prompt, which would
-    cut the sentence's own words off the front. So the fit is ours: names
-    are added in the offered order while the whole stays under the budget."""
-    model = FakeModel()
-    names = [f"App{n}" for n in range(PROMPT_TOKENS * 2)]
-    stt = LocalWhisper(build=lambda: model, vocabulary=names, prompt="Apps: {apps}. Open it.")
-
-    await stt.transcribe(silence())
-
-    prompt = model.calls[0][1]["initial_prompt"]
-    assert prompt.startswith("Apps: App0, App1,")
-    assert prompt.endswith(". Open it.")
-    assert len(prompt.split()) <= PROMPT_TOKENS
-    assert len(prompt.split()) >= PROMPT_TOKENS - 2
-    assert "App199" not in prompt
-    # Measured 2026-09-13 on the target CPU: about 0.65 s per hundred tokens
-    # of prompt (no prompt 2.25 s, 87 tokens 3.02 s, 198 tokens 3.55 s).
-    assert PROMPT_TOKENS == 120
-
-
-async def test_the_prompt_is_fitted_once_when_the_model_loads() -> None:
-    model = FakeModel()
-    stt = LocalWhisper(build=lambda: model, vocabulary=["A", "B"], prompt="Apps: {apps}.")
+    stt = LocalWhisper(build=lambda: model, prompt="Evet. Hayır.")
 
     await stt.load()
-    encoded = len(model.hf_tokenizer.encoded)
-    await stt.transcribe(silence())
     await stt.transcribe(silence())
 
-    assert encoded > 0
-    assert len(model.hf_tokenizer.encoded) == encoded
-
-
-async def test_a_sentence_without_the_placeholder_is_used_as_it_is() -> None:
-    """A pack that forgot `{apps}` still gets its sentence; the names go
-    after it, so neither is lost."""
-    model = FakeModel()
-    stt = LocalWhisper(build=lambda: model, vocabulary=["Chrome"], prompt="Open the app.")
-
-    await stt.transcribe(silence())
-
-    assert model.calls[0][1]["initial_prompt"] == "Open the app. Chrome"
+    assert model.hf_tokenizer.encoded == []
 
 
 # --------------------------------------------------------------------------

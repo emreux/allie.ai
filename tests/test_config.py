@@ -201,7 +201,9 @@ def test_no_address_by_default(config_home: Path) -> None:
 
 def test_the_live_table_defaults_to_the_session_policy_of_the_plan(config_home: Path) -> None:
     """Plan.md 4.6: barge-in on, a minute of silence closes the session,
-    ten minutes of resumption, transcripts on, the adapter's own voice."""
+    transcripts on, the adapter's own voice - and four minutes of resumption,
+    not the ten D5 wrote: Gemini refuses the handle at five (measured
+    2026-09-21), so a longer window only buys a failed open."""
     live = load_settings().live
 
     assert (
@@ -210,7 +212,7 @@ def test_the_live_table_defaults_to_the_session_policy_of_the_plan(config_home: 
         live.idle_close_seconds,
         live.resume_minutes,
         live.transcripts,
-    ) == ("", True, 60.0, 10.0, True)
+    ) == ("", True, 60.0, 4.0, True)
 
 
 def test_the_server_s_turn_detection_is_left_to_the_server_by_default(config_home: Path) -> None:

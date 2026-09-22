@@ -17,9 +17,10 @@ is ours to send (the server's own detector is switched off) and is what
 makes the final come: measured 2026-09-14, without it a sentence sometimes
 never finalised. The session takes an `audio_transcription_config` - the
 expected language (the protocol's `hint`; none given, the engine detects the
-language itself, which is section 3.12's `auto` mode for free) and a custom
-vocabulary, the app names `LocalWhisper` gets as a prompt, with no token
-window to fit them into.
+language itself, which is section 3.12's `auto` mode for free). It also takes
+a custom vocabulary, which this product no longer sends: what reaches this
+recogniser is the yes or no of a confirmation window (D3, D10), and the words
+of that are the pack's, not a machine's list of applications.
 
 Why Live and not the batch `gemini-3.5-transcribe`: the free tier allows
 that one **25 requests a day** and three a minute; the Live model is
@@ -51,7 +52,7 @@ so under the setting, and nowhere else does anything change.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from google import genai
@@ -62,14 +63,7 @@ from loguru import logger
 # dropped or refused socket looks like from here.
 from websockets.exceptions import WebSocketException
 
-from assistant.stt.base import (
-    SAMPLE_RATE,
-    Audio,
-    STTProvider,
-    Transcript,
-    buffered_stream,
-    to_pcm16,
-)
+from assistant.stt.base import SAMPLE_RATE, Audio, STTProvider, Transcript, to_pcm16
 
 __all__ = [
     "CHUNK_SECONDS",
@@ -126,20 +120,17 @@ class GeminiSTT:
     """Google's live transcriber, with an optional engine behind it."""
 
     id = "gemini"
-    supports_streaming = False
 
     def __init__(
         self,
         api_key: str,
         *,
         model: str = DEFAULT_MODEL,
-        vocabulary: Iterable[str] = (),
         fallback: STTProvider | None = None,
         timeout_seconds: float = TIMEOUT_SECONDS,
         client: Any | None = None,
     ) -> None:
         self._model = model
-        self._vocabulary = list(vocabulary)
         self._fallback = fallback
         self._timeout = timeout_seconds
         # No retry options: the SDK then makes one attempt, and a refusal
@@ -161,9 +152,8 @@ class GeminiSTT:
         if load is not None:
             await load()
         logger.info(
-            "recogniser: {}, {} vocabulary, fallback {}",
+            "recogniser: {}, fallback {}",
             self._model,
-            len(self._vocabulary),
             getattr(self._fallback, "id", "none"),
         )
 
@@ -177,11 +167,6 @@ class GeminiSTT:
                 return Transcript(text="", language=hint or "")
             return await self._fallback.transcribe(pcm, hint=hint)
         return _transcript(finals, hint)
-
-    def transcribe_stream(
-        self, pcm_chunks: AsyncIterator[Audio], *, hint: str | None = None
-    ) -> AsyncIterator[Transcript]:
-        return buffered_stream(self, pcm_chunks, hint=hint)
 
     async def _ask(self, pcm: Audio, hint: str | None) -> list[Any]:
         """One session: the audio in, the final transcriptions out."""
@@ -221,7 +206,6 @@ class GeminiSTT:
         return types.LiveConnectConfig(
             input_audio_transcription=types.AudioTranscriptionConfig(
                 language_codes=[hint] if hint else None,
-                custom_vocabulary=self._vocabulary or None,
             ),
             # The start and end of speech are ours to say - the microphone's
             # own detector already decided them - and the end is what makes

@@ -54,7 +54,6 @@ from assistant.store.normalize import normalize_search
 from assistant.tools.registry import Tool, tool
 
 __all__ = [
-    "PROMPT_NAMES",
     "SETTINGS_PAGES",
     "TEXT",
     "AppCatalog",
@@ -69,14 +68,6 @@ __all__ = [
     "spoken_form",
     "start_menu_folders",
 ]
-
-# How many of the catalogue's names are *offered* to the recogniser. What it
-# takes is measured in tokens where the tokenizer is (`stt/local_whisper.py`,
-# `PROMPT_TOKENS`); this is only the upper bound of the list handed over, so
-# that a machine with hundreds of apps does not make it encode them all. Until
-# 2026-09-13 this was 40 and the prompt was the forty *shortest* names -
-# `Run`, `dfrgui`, `services` - and neither PyCharm nor FortiClient was in it.
-PROMPT_NAMES = 120
 
 # What a name carries on the shortcut and nobody says: a version (`PyCharm
 # 2026.2.1`, `Python 3.13`), a year (`Word 2016`), a parenthesised tail
@@ -348,32 +339,6 @@ class AppCatalog:
 
     def names(self) -> list[str]:
         return [entry.name for entry in self._entries]
-
-    def spoken_names(self, limit: int = PROMPT_NAMES, *, first: Iterable[str] = ()) -> list[str]:
-        """The names most worth telling the recogniser about, as people say
-        them, each once.
-
-        `first` is what this user has asked to open before, in their own
-        words (`AuditRepo.names_asked`): each is resolved the way `open_app`
-        resolves it, and the apps found lead the list - the window is short
-        (`stt/local_whisper.py`), and the apps someone opens are the ones
-        they will say again. Then products - a name with a capital letter in
-        it, in every language the catalogue has been seen in; `dfrgui`,
-        `services`, `computer` are what the machine calls its own utilities -
-        and among them the shorter first, because a short name is one people
-        say.
-        """
-        distinct: dict[str, None] = {}
-        for said in first:
-            found = self.find(said)
-            if found is not None:
-                distinct.setdefault(found.spoken, None)
-        rest: dict[str, None] = {}
-        for entry in self._entries:
-            if entry.spoken not in distinct:
-                rest.setdefault(entry.spoken, None)
-        ranked = sorted(rest, key=lambda name: (name == name.lower(), len(name)))
-        return [*distinct, *ranked][:limit]
 
     def find(self, spoken: str) -> AppEntry | None:
         """The app the user meant by `spoken`, or `None`.

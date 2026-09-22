@@ -25,16 +25,20 @@ a hallucinated credit over the trailing silence scores 0.9 next to a real
 sentence at 0.05 - and reported to the state machine as one number.
 
 **The recogniser is told what to expect.** Section 3.4's free trick:
-`initial_prompt` is context for the decoder. It is the locale pack's sentence
-(`[stt] prompt`) with the names of the installed apps where its `{apps}` is -
-a sentence rather than a list, because the decoder is being shown what
-speech in that language looks like, and with the names *as people say them*
-(`tools/system.py`, `AppCatalog.spoken_names`). The library keeps the *last*
-223 tokens of a long prompt, which would cut the sentence's own words off the
-front, so the fit is done here, once, when the model and its tokenizer are
-loaded: names go in, in the offered order, while the whole stays under
-`PROMPT_TOKENS`. Until 2026-09-13 the prompt was the forty shortest names -
-`Run`, `dfrgui`, `services` - and PyCharm was not among them.
+`initial_prompt` is context for the decoder, and what it is given is whatever
+the caller says the next utterance will be - `app.confirm_prompt`, the yes and
+no words of the user's pack (D3, D10). It arrives ready to use: nothing here
+fits, trims or renders it.
+
+Until 2026-09-22 this file fitted a *vocabulary* into the prompt instead - the
+names of the installed applications, in the order the user had opened them,
+as many as 120 tokens held - because the pipeline it came from sent every
+sentence the user spoke through this decoder. The live model hears those
+sentences now, and a prompt of application names cost the confirmation window
+about 0.8 s of decode (measured 2026-09-13: roughly 0.65 s per hundred tokens)
+to bias it towards words nobody says in it. The budget is worth remembering
+all the same: the library keeps only the *last* 223 tokens of a prompt, so a
+pack that writes an essay loses the front of it.
 
 **One decode, so many tokens, and a loop is not words.** The library's
 default retries a decode it doubts at five rising temperatures. Measured
@@ -55,16 +59,15 @@ from __future__ import annotations
 import asyncio
 import math
 import threading
-from collections.abc import AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from loguru import logger
 
-from assistant.stt.base import NO_SPEECH_CEILING, SAMPLE_RATE, Audio, Transcript, buffered_stream
+from assistant.stt.base import NO_SPEECH_CEILING, SAMPLE_RATE, Audio, Transcript
 
 __all__ = [
     "COMPRESSION_CEILING",
-    "PROMPT_TOKENS",
     "TOKENS_AT_LEAST",
     "TOKENS_PER_SECOND",
     "LocalWhisper",
@@ -79,16 +82,6 @@ DEFAULT_MODEL_SIZE = "small"
 # playback and the state machine responsive while the model works.
 DEFAULT_CPU_THREADS = 4
 
-# How much of the decoder's prompt window the prompt may fill. The window is
-# 223 tokens (`max_length // 2 - 1` in the library), and every token of it
-# costs: measured 2026-09-13 on the target CPU, about 0.65 s per hundred
-# tokens of prompt (no prompt 2.25 s, 87 tokens 3.02 s, 198 tokens 3.55 s
-# for the same two-second sentence). This buys about thirty names for the
-# price the forty-name list of before paid, and the names come in the order
-# they are worth (`AppCatalog.spoken_names`). Fitting it here rather than
-# letting the library cut it keeps the pack's own words in front.
-PROMPT_TOKENS = 120
-
 # How many tokens the decoder may write for an utterance: this many at
 # least, plus this many per second of audio. Turkish speech decodes at about
 # five tokens a second (14 tokens in 2.8 s, measured 2026-09-13); twice that
@@ -99,9 +92,6 @@ TOKENS_PER_SECOND = 10
 # A segment whose text compresses better than this is the decoder repeating
 # itself, not speech. The library's own default for the same judgement.
 COMPRESSION_CEILING = 2.4
-
-# The placeholder in the pack's sentence where the names go.
-APPS = "{apps}"
 
 # `WhisperModel`, kept as `Any` so this module has no import-time dependency on
 # the vendor package - see `_load_whisper`.
@@ -119,10 +109,6 @@ class LocalWhisper:
 
     id = "local_whisper"
 
-    # Phase 5 windows the audio and turns this on; until then the caller gets
-    # `buffered_stream`, which is honest about producing nothing until the end.
-    supports_streaming = False
-
     def __init__(
         self,
         *,
@@ -130,7 +116,6 @@ class LocalWhisper:
         device: str = "cpu",
         compute_type: str = "int8",
         cpu_threads: int = DEFAULT_CPU_THREADS,
-        vocabulary: Iterable[str] = (),
         prompt: str = "",
         build: ModelFactory | None = None,
     ) -> None:
@@ -138,13 +123,10 @@ class LocalWhisper:
         self._device = device
         self._compute_type = compute_type
         self._cpu_threads = cpu_threads
-        # The names the decoder is told to expect, in the order they are
-        # worth telling, and the pack's sentence to put them in. The prompt
-        # itself is fitted when the model loads (`_fit_prompt`): `None` rather
-        # than "" when there is nothing to say, the library's own way.
-        self._names = [term.strip() for term in vocabulary if term.strip()]
-        self._template = prompt.strip()
-        self._prompt: str | None = None
+        # What the decoder is told the next utterance will be
+        # (`app.confirm_prompt`). `None` rather than "" when there is nothing
+        # to say: the library's own way of meaning no prompt at all.
+        self._prompt: str | None = prompt.strip() or None
         self._build = build if build is not None else self._load_whisper
         self._model: Model | None = None
         # Held while the model is built. Two turns starting at once would
@@ -157,13 +139,6 @@ class LocalWhisper:
 
     async def transcribe(self, pcm: Audio, *, hint: str | None = None) -> Transcript:
         return await asyncio.to_thread(self._transcribe_now, pcm, hint)
-
-    def transcribe_stream(
-        self, pcm_chunks: AsyncIterator[Audio], *, hint: str | None = None
-    ) -> AsyncIterator[Transcript]:
-        # Whisper has no use for a fragment: it needs the whole utterance to
-        # decide what the first word was.
-        return buffered_stream(self, pcm_chunks, hint=hint)
 
     # ----------------------------------------------------------------------
     # Everything below this line runs in a worker thread.
@@ -180,35 +155,8 @@ class LocalWhisper:
                     raise ModelUnavailableError(
                         f"the speech model {self._model_size!r} could not be loaded: {failure}"
                     ) from failure
-                self._prompt = self._fit_prompt(self._model.hf_tokenizer)
+                logger.info("recogniser prompt: {!r}", self._prompt)
             return self._model
-
-    def _fit_prompt(self, tokenizer: Any) -> str | None:
-        """The pack's sentence with as many names as `PROMPT_TOKENS` holds.
-
-        Names are tried in the offered order and the count is the real
-        tokenizer's, so the budget is a budget and not a guess. Without a
-        sentence the names are a comma list, as before; a sentence without
-        `{apps}` gets them after it; nothing at all is `None`.
-        """
-        template = self._template if APPS in self._template else f"{self._template} {APPS}".strip()
-
-        def render(names: list[str]) -> str:
-            return template.replace(APPS, ", ".join(names)).strip()
-
-        def tokens(text: str) -> int:
-            return len(tokenizer.encode(text, add_special_tokens=False).ids)
-
-        kept: list[str] = []
-        for name in self._names:
-            if tokens(render([*kept, name])) > PROMPT_TOKENS:
-                break
-            kept.append(name)
-        if not kept and not self._template:
-            return None
-        prompt = render(kept)
-        logger.info("recogniser prompt: {} names, {} tokens", len(kept), tokens(prompt))
-        return prompt
 
     def _transcribe_now(self, pcm: Audio, hint: str | None) -> Transcript:
         # `language=None` is what asks Whisper to detect the language itself.
@@ -241,7 +189,6 @@ class LocalWhisper:
             # Each segment already begins with its own separating space, so
             # joining with another one would double every gap.
             text="".join(segment.text for segment in heard).strip(),
-            is_final=True,
             confidence=_confidence(heard),
             language=info.language or "",
             no_speech_probability=_no_speech(heard, decoded, kept_seconds=info.duration_after_vad),
