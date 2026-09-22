@@ -17,8 +17,8 @@ import pytest
 from google.genai import errors, types
 from loguru import logger
 
-from assistant.tts.base import TTSProvider, VoiceInfo
-from assistant.tts.gemini_tts import DEFAULT_MODEL, SAMPLE_RATE, VOICES, GeminiTTS
+from allie.tts.base import TTSProvider, VoiceInfo
+from allie.tts.gemini_tts import DEFAULT_MODEL, SAMPLE_RATE, VOICES, GeminiTTS
 from tests.test_tts import DAVID, TOLGA, fragments
 
 

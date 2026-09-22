@@ -37,10 +37,10 @@ import asyncio
 
 from loguru import logger
 
-from assistant.agent.core import Confirm, ToolRunner, decline
-from assistant.agent.limits import DUPLICATE_CALL, TOOL_LIMIT_REACHED, TOOL_TIMED_OUT, Limits
-from assistant.live.base import ProviderError, ToolCall
-from assistant.tools.registry import ToolRegistry, tool
+from allie.agent.core import Confirm, ToolRunner, decline
+from allie.agent.limits import DUPLICATE_CALL, TOOL_LIMIT_REACHED, TOOL_TIMED_OUT, Limits
+from allie.live.base import ProviderError, ToolCall
+from allie.tools.registry import ToolRegistry, tool
 from tests.live_contract import FakeLiveSession
 
 

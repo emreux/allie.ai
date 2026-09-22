@@ -18,15 +18,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from loguru import logger
 
-from assistant.announce.queue import Announcement, AnnounceQueue
-from assistant.scheduler.runner import (
+from allie.announce.queue import Announcement, AnnounceQueue
+from allie.scheduler.runner import (
     GRACE_SECONDS,
     LATE_LIMIT_SECONDS,
     Scheduler,
     next_occurrence,
 )
-from assistant.store.db import open_database
-from assistant.store.repos import ReminderRepo
+from allie.store.db import open_database
+from allie.store.repos import ReminderRepo
 
 # A fixed zone, so that the weekday arithmetic below does not depend on
 # the machine the tests run on. Turkey has no clock change.

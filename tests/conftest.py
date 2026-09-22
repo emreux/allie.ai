@@ -4,7 +4,7 @@ Two things in this project are global by nature: the Credential Manager and
 the settings directory. A test that used the real ones would read the
 developer's own key and write into their own `%APPDATA%`, so both are
 redirected here - the keyring to a backend held in memory, the settings to a
-temporary directory through `LIVE_ASSISTANT_CONFIG_DIR`.
+temporary directory through `ALLIE_CONFIG_DIR`.
 
 The keyring backend is a real `KeyringBackend`, not a stand-in for the library.
 The calls under test are the calls production makes; only the vault is fake.
@@ -59,5 +59,5 @@ def vault() -> Iterator[MemoryKeyring]:
 @pytest.fixture
 def config_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Points the settings directory at a temporary one for this test only."""
-    monkeypatch.setenv("LIVE_ASSISTANT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ALLIE_CONFIG_DIR", str(tmp_path))
     return tmp_path

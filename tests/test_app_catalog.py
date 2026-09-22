@@ -19,8 +19,8 @@ from typing import Any
 
 import pytest
 
-from assistant.tools import system
-from assistant.tools.system import (
+from allie.tools import system
+from allie.tools.system import (
     LISTING_COMMAND,
     AppCatalog,
     AppEntry,

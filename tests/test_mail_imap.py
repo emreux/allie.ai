@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from assistant.config import (
+from allie.config import (
     KEYRING_SERVICE,
     LiveSettings,
     LocaleSettings,
@@ -30,8 +30,8 @@ from assistant.config import (
     load_settings,
     save_settings,
 )
-from assistant.tools import mail
-from assistant.tools.mail import (
+from allie.tools import mail
+from allie.tools.mail import (
     DEFAULT_MAILS,
     MAIL_CUT,
     MAIL_ENTRY,
@@ -48,7 +48,7 @@ from assistant.tools.mail import (
     read_latest_emails_for,
     search_emails_for,
 )
-from assistant.tools.registry import Tool
+from allie.tools.registry import Tool
 from tests.conftest import MemoryKeyring
 
 HOST, PORT, USER, PASSWORD = "imap.example.test", 993, "emre@example.test", "app-password"
@@ -524,7 +524,7 @@ async def test_without_a_mailbox_both_say_how_to_set_one_up() -> None:
 
     assert await latest.run() == NOT_SET_UP
     assert await search.run(query="x") == NOT_SET_UP
-    assert "live-assistant mail login" in NOT_SET_UP
+    assert "allie mail login" in NOT_SET_UP
 
 
 async def test_a_failure_is_a_sentence_that_tells_the_model_what_to_say() -> None:
@@ -644,7 +644,7 @@ async def test_a_refused_password_is_the_servers_reason() -> None:
 
 
 def test_mail_login_is_a_command_of_its_own() -> None:
-    from assistant.__main__ import build_parser
+    from allie.__main__ import build_parser
 
     parsed = build_parser().parse_args(["mail", "login"])
 
@@ -656,8 +656,8 @@ def test_mail_login_is_a_command_of_its_own() -> None:
 def test_mail_login_stores_the_password_in_the_vault_and_the_rest_in_the_file(
     config_home: Path, vault: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from assistant import setup_wizard
-    from assistant.__main__ import main
+    from allie import setup_wizard
+    from allie.__main__ import main
     from tests.test_cli import ScriptedTerminal
 
     save_settings(Settings(live=LiveSettings(primary="gemini:x"), locale=LocaleSettings(code="tr")))
@@ -695,8 +695,8 @@ def test_mail_login_stores_the_password_in_the_vault_and_the_rest_in_the_file(
 def test_mail_login_refused_is_a_sentence_and_nothing_is_stored(
     config_home: Path, vault: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from assistant import setup_wizard
-    from assistant.__main__ import main
+    from allie import setup_wizard
+    from allie.__main__ import main
     from tests.test_cli import ScriptedTerminal
 
     ScriptedTerminal.answers = {"mail_host": "h", "mail_user": "u", "mail_password": "p"}

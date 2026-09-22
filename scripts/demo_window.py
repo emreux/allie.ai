@@ -1,7 +1,7 @@
 """The window on its own, for looking at (plan.md D20, task W1).
 
 No assistant, no microphone, no session: the window is put up the way
-`live-assistant run` puts it up, and this script plays the state machine -
+`allie run` puts it up, and this script plays the state machine -
 each state for three seconds, a turn now and then, a made-up sound level
 while the user is "heard" and while the assistant "speaks", one notice,
 the wizard's page once with a question of each kind. Ctrl+C in the
@@ -27,10 +27,10 @@ import contextlib
 import math
 import time
 
-from assistant import locales
-from assistant.app import State, Turn
-from assistant.ui.orb import SILENCE_DBFS
-from assistant.ui.window import Window
+from allie import locales
+from allie.app import State, Turn
+from allie.ui.orb import SILENCE_DBFS
+from allie.ui.window import Window
 
 STATES = (
     State.IDLE,
@@ -91,7 +91,7 @@ async def play(window: Window, seconds: float) -> None:
 
 
 async def wizard_once(window: Window) -> None:
-    from assistant.setup_wizard import Option
+    from allie.setup_wizard import Option
 
     window.wizard(True)
     window.say("The assistant answers through an AI provider, using your own API key.")

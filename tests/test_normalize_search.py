@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from assistant.store.normalize import normalize_search
+from allie.store.normalize import normalize_search
 
 
 @pytest.mark.parametrize("spelling", ["IŞIK", "Işık", "ışık", "isik", "ISIK", "İSİK"])

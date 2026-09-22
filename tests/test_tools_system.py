@@ -14,11 +14,11 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
-from assistant import shell
-from assistant.tools import system
-from assistant.tools.registry import Tool
-from assistant.tools.store import Install, Listing
-from assistant.tools.system import (
+from allie import shell
+from allie.tools import system
+from allie.tools.registry import Tool
+from allie.tools.store import Install, Listing
+from allie.tools.system import (
     SETTINGS_PAGES,
     AppCatalog,
     AppEntry,

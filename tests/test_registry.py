@@ -3,7 +3,7 @@
 The registry is the seam that keeps the provider list out of the code
 (design.md section 3.2): a catalogue entry, a key from the Credential Manager,
 and an adapter comes back. What it must never do is fail vaguely - "KeyError:
-'gemini'" tells the owner nothing, while "no API key stored, run live-assistant
+'gemini'" tells the owner nothing, while "no API key stored, run allie
 setup" tells them exactly what to do next.
 
 One adapter is registered (plan.md L1.1, Gemini Live), so every entry the
@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from assistant.config import store_api_key
-from assistant.live.base import LiveProvider, ModelInfo
-from assistant.live.gemini_live import GeminiLive
-from assistant.live.registry import (
+from allie.config import store_api_key
+from allie.live.base import LiveProvider, ModelInfo
+from allie.live.gemini_live import GeminiLive
+from allie.live.registry import (
     ADAPTERS,
     MissingAPIKeyError,
     ProviderEntry,
@@ -171,7 +171,7 @@ def test_an_explicit_key_is_used_as_given(
 def test_without_a_stored_key_the_error_says_what_to_run(
     vault: MemoryKeyring, keys_handed_over: list[str]
 ) -> None:
-    with pytest.raises(MissingAPIKeyError, match="live-assistant setup"):
+    with pytest.raises(MissingAPIKeyError, match="allie setup"):
         create_provider("x", catalog=recording_catalog())
 
     assert keys_handed_over == []

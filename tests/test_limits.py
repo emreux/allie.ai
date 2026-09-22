@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from assistant.agent.limits import DUPLICATE_CALL, TOOL_LIMIT_REACHED, Limits, TurnGuard
-from assistant.config import LimitSettings
-from assistant.live.base import ToolCall
+from allie.agent.limits import DUPLICATE_CALL, TOOL_LIMIT_REACHED, Limits, TurnGuard
+from allie.config import LimitSettings
+from allie.live.base import ToolCall
 
 
 def call(tool: str = "clock", **arguments: object) -> ToolCall:

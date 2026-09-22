@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from assistant.messaging.contacts import (
+from allie.messaging.contacts import (
     CONTACTS_FILE_NAME,
     AddressBook,
     Contact,
@@ -112,7 +112,7 @@ def test_no_file_is_an_empty_book_and_no_error(tmp_path: Path) -> None:
 def test_the_default_path_is_beside_the_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("LIVE_ASSISTANT_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("ALLIE_CONFIG_DIR", str(tmp_path))
     (tmp_path / CONTACTS_FILE_NAME).write_text('[[contact]]\nname = "Ada"\n', encoding="utf-8")
 
     assert AddressBook.load().names() == ["Ada"]

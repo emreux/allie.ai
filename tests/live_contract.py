@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
-from assistant.live.base import (
+from allie.live.base import (
     AudioChunk,
     AuthenticationError,
     Closed,

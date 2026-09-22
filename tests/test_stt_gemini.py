@@ -22,10 +22,10 @@ from google.genai import errors, types
 from loguru import logger
 from websockets.exceptions import ConnectionClosedError
 
-from assistant.app import Heard, hear
-from assistant.stt import gemini_stt
-from assistant.stt.base import SAMPLE_RATE, Audio, STTProvider, Transcript
-from assistant.stt.gemini_stt import (
+from allie.app import Heard, hear
+from allie.stt import gemini_stt
+from allie.stt.base import SAMPLE_RATE, Audio, STTProvider, Transcript
+from allie.stt.gemini_stt import (
     CHUNK_SECONDS,
     DEFAULT_MODEL,
     FINAL_SECONDS_AT_LEAST,

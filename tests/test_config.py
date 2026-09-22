@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from assistant.agent.limits import Limits
-from assistant.config import (
+from allie.agent.limits import Limits
+from allie.config import (
     KEYRING_SERVICE,
     AudioSettings,
     LimitSettings,
@@ -63,16 +63,16 @@ def test_the_environment_variable_moves_the_whole_config_directory(config_home: 
 def test_settings_land_in_appdata_under_a_single_assistant_folder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("LIVE_ASSISTANT_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("ALLIE_CONFIG_DIR", raising=False)
 
-    assert config_dir() == Path(os.environ["APPDATA"]) / "live-assistant"
+    assert config_dir() == Path(os.environ["APPDATA"]) / "allie"
 
 
 @WINDOWS_ONLY
 def test_data_and_logs_are_local_not_roaming(monkeypatch: pytest.MonkeyPatch) -> None:
     """A database and a log file must not follow the user to another machine."""
-    monkeypatch.delenv("LIVE_ASSISTANT_CONFIG_DIR", raising=False)
-    local = Path(os.environ["LOCALAPPDATA"]) / "live-assistant"
+    monkeypatch.delenv("ALLIE_CONFIG_DIR", raising=False)
+    local = Path(os.environ["LOCALAPPDATA"]) / "allie"
 
     assert data_dir() == local
     assert log_dir() == local / "Logs"
@@ -115,7 +115,7 @@ def test_the_input_device_round_trips_through_the_file(config_home: Path) -> Non
 
 
 def test_a_kernel_streaming_device_line_round_trips_through_the_file(config_home: Path) -> None:
-    """What `live-assistant mic` stores is the device line as PortAudio prints it,
+    """What `allie mic` stores is the device line as PortAudio prints it,
     and a Bluetooth headset's kernel-streaming line carries a driver path with
     backslashes and a line break. It must come back byte for byte, since
     `sounddevice` is matched against it exactly."""
@@ -142,7 +142,7 @@ def test_no_tool_is_unblocked_by_default(config_home: Path) -> None:
 
 
 def test_a_file_written_before_there_was_an_audio_table_still_loads(config_home: Path) -> None:
-    """Every `config.toml` `live-assistant setup` wrote before 2026-09-05 has no
+    """Every `config.toml` `allie setup` wrote before 2026-09-05 has no
     `[audio]` table. It means what it always meant: the system default."""
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text('[live]\nprimary = "gemini:x"\n', encoding="utf-8")
@@ -390,7 +390,7 @@ def test_the_environment_can_override_a_setting(
 ) -> None:
     """So a second model can be tried without editing the file."""
     save_settings(Settings(live=LiveSettings(primary="gemini:one")))
-    monkeypatch.setenv("LIVE_ASSISTANT_LIVE__PRIMARY", "gemini:two")
+    monkeypatch.setenv("ALLIE_LIVE__PRIMARY", "gemini:two")
 
     assert load_settings().live.primary == "gemini:two"
 
@@ -418,7 +418,7 @@ def test_no_key_stored_reads_as_none(vault: MemoryKeyring) -> None:
 
 
 def test_deleting_a_key_that_was_never_there_is_not_an_error(vault: MemoryKeyring) -> None:
-    """`live-assistant purge` must not fail on a provider the user never configured."""
+    """`allie purge` must not fail on a provider the user never configured."""
     delete_api_key("gemini")
 
     assert load_api_key("gemini") is None

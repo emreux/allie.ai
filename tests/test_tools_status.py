@@ -13,10 +13,10 @@ import threading
 
 import pytest
 
-from assistant.machine import Battery, CpuTimes, Disk, Memory, Network, Win32Machine, cpu_percent
-from assistant.tools import status
-from assistant.tools.registry import Tool
-from assistant.tools.status import PARTS, system_status_for
+from allie.machine import Battery, CpuTimes, Disk, Memory, Network, Win32Machine, cpu_percent
+from allie.tools import status
+from allie.tools.registry import Tool
+from allie.tools.status import PARTS, system_status_for
 
 GIB = 2**30
 

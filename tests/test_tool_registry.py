@@ -13,8 +13,8 @@ from typing import Annotated, Literal
 
 import pytest
 
-from assistant.live.base import ToolSpec
-from assistant.tools.registry import Tool, ToolRegistry, build_spec, tool
+from allie.live.base import ToolSpec
+from allie.tools.registry import Tool, ToolRegistry, build_spec, tool
 
 
 @tool(risk="safe")

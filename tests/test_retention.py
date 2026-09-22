@@ -16,17 +16,17 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from assistant.config import (
+from allie.config import (
     RetentionSettings,
     Settings,
     config_path,
     load_settings,
     save_settings,
 )
-from assistant.live.base import ToolCall
-from assistant.store.db import open_database
-from assistant.store.repos import AuditRepo, NotesRepo
-from assistant.store.retention import AUDIT_DAYS, SECONDS_PER_DAY, blank_old_audit_summaries
+from allie.live.base import ToolCall
+from allie.store.db import open_database
+from allie.store.repos import AuditRepo, NotesRepo
+from allie.store.retention import AUDIT_DAYS, SECONDS_PER_DAY, blank_old_audit_summaries
 
 NOW = 1_800_000_000.0
 A_PAGE = "Title: Weather - Rain until Thursday, then sun."

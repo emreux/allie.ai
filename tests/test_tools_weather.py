@@ -16,8 +16,8 @@ from typing import Any
 import httpx
 import pytest
 
-from assistant.tools.registry import Tool
-from assistant.tools.weather import (
+from allie.tools.registry import Tool
+from allie.tools.weather import (
     FORECAST,
     GEOCODING,
     MAX_DAYS_AHEAD,

@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from assistant.live import probe as probe_module
-from assistant.live.base import (
+from allie.live import probe as probe_module
+from allie.live.base import (
     AudioChunk,
     Closed,
     LiveEvent,
@@ -37,7 +37,7 @@ from assistant.live.base import (
     ToolCallEvent,
     TurnComplete,
 )
-from assistant.live.probe import (
+from allie.live.probe import (
     CANONICAL_TOOL_TEST,
     NO_TOOL_CALL,
     PROBE_SECONDS,
@@ -48,8 +48,8 @@ from assistant.live.probe import (
     remember,
     remembered,
 )
-from assistant.store.db import open_database
-from assistant.store.repos import SettingsRepo
+from allie.store.db import open_database
+from allie.store.repos import SettingsRepo
 from tests.live_contract import FakeLiveProvider, FakeLiveSession
 
 QUESTION = "What time is it in Istanbul?"
@@ -315,7 +315,7 @@ def test_the_clock_is_the_machine_s_unless_the_caller_says_otherwise(
 
 
 def test_a_verdict_survives_the_connection_being_reopened(tmp_path: Path) -> None:
-    """The point of the table: the wizard writes, a later `live-assistant run` reads."""
+    """The point of the table: the wizard writes, a later `allie run` reads."""
     path = tmp_path / "assistant.db"
     first = open_database(path)
     remember(SettingsRepo(first), "gemini", "x", ProbeResult(ok=True, first_token_ms=1.0), now=5)

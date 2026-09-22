@@ -36,12 +36,12 @@ import keyring
 from google import genai
 from google.genai import types
 
-from assistant import __main__ as cli
-from assistant import app, locales
-from assistant.config import KEYRING_SERVICE, load_settings
-from assistant.live.base import SessionConfig, ToolSpec
-from assistant.live.gemini_live import _connect_config, _declare
-from assistant.ui.status import StatusLine
+from allie import __main__ as cli
+from allie import app, locales
+from allie.config import KEYRING_SERVICE, load_settings
+from allie.live.base import SessionConfig, ToolSpec
+from allie.live.gemini_live import _connect_config, _declare
+from allie.ui.status import StatusLine
 
 COUNT_MODEL = "gemini-3.8-flash"
 GREETING = "Merhaba."

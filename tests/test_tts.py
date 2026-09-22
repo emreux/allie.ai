@@ -20,8 +20,8 @@ import time
 from collections.abc import AsyncIterator, Coroutine, Sequence
 from typing import Any
 
-from assistant.tts.base import MIN_SENTENCE_CHARS, TTSProvider, VoiceInfo, sentences
-from assistant.tts.sapi import AUDIO_FORMAT, SAMPLE_RATE, SapiTTS, language_code
+from allie.tts.base import MIN_SENTENCE_CHARS, TTSProvider, VoiceInfo, sentences
+from allie.tts.sapi import AUDIO_FORMAT, SAMPLE_RATE, SapiTTS, language_code
 
 TOLGA = VoiceInfo(
     id=r"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens\MSTTS_V110_trTR_Tolga",

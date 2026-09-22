@@ -1,6 +1,6 @@
 """The product's own numbers, from a real run (plan.md section 7, L1.9).
 
-`live-assistant run`, with a stopwatch on the state machine's hooks. Nothing
+`allie run`, with a stopwatch on the state machine's hooks. Nothing
 in `src/` changes and nothing is stood in for: the real microphone, the real
 doorman, the real session, the real sound card. What is measured is what the
 user feels, and it is printed once the run ends (Ctrl+C), in the shape the
@@ -35,9 +35,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from assistant import app
-from assistant.__main__ import main as run
-from assistant.app import LiveAssistant, State, Turn
+from allie import app
+from allie.__main__ import main as run
+from allie.app import LiveAssistant, State, Turn
 
 # How much of a transcript one summary line carries.
 SHOWN_CHARS = 40

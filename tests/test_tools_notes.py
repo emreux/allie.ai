@@ -14,12 +14,12 @@ from collections.abc import Iterator
 
 import pytest
 
-from assistant.agent.core import Confirm
-from assistant.agent.policy import DECLINED, dispatch
-from assistant.live.base import ToolCall
-from assistant.store.db import open_database
-from assistant.store.repos import NotesRepo
-from assistant.tools.notes import (
+from allie.agent.core import Confirm
+from allie.agent.policy import DECLINED, dispatch
+from allie.live.base import ToolCall
+from allie.store.db import open_database
+from allie.store.repos import NotesRepo
+from allie.tools.notes import (
     EMPTY,
     MAX_NOTE_CHARS,
     NONE_STORED,
@@ -28,7 +28,7 @@ from assistant.tools.notes import (
     delete_note_for,
     search_notes_for,
 )
-from assistant.tools.registry import Tool, ToolRegistry
+from allie.tools.registry import Tool, ToolRegistry
 
 
 class FakeConfirm:

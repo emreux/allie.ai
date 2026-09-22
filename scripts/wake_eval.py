@@ -31,7 +31,7 @@ RATE = 16_000
 WINDOW = 2 * RATE
 HOP = 1280 * 4  # LiveKit's own frame is 1280 samples; four of them: 320 ms
 DEBOUNCE_SECONDS = 2.0
-SHIPPED = Path(str(resources.files("assistant.wake") / "hey_friday.onnx"))
+SHIPPED = Path(str(resources.files("allie.wake") / "hey_friday.onnx"))
 
 
 def record(path: Path, seconds: float) -> None:

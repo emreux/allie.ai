@@ -18,9 +18,9 @@ from typing import Any
 
 import pytest
 
-from assistant import shell
-from assistant.tools.registry import Tool
-from assistant.tools.store import (
+from allie import shell
+from allie.tools.registry import Tool
+from allie.tools.store import (
     INSTALL_WAIT_SECONDS,
     SEARCH_SECONDS,
     TEXT,
@@ -32,7 +32,7 @@ from assistant.tools.store import (
     parse_search,
     parse_show,
 )
-from assistant.tools.system import AppCatalog, AppEntry
+from allie.tools.system import AppCatalog, AppEntry
 
 # What `winget search --source msstore --name ChatGPT` printed on 2026-09-13.
 SEARCHED = """\

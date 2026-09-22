@@ -30,17 +30,17 @@ from typing import Any, ClassVar
 import pytest
 from loguru import logger
 
-from assistant import __main__ as cli
-from assistant import app, locales, logs, setup_wizard
-from assistant.__main__ import BUILTIN_TOOLS, TEXT, build_parser, main, use_utf8
-from assistant.agent import core
-from assistant.agent.limits import Limits
-from assistant.agent.policy import NO_SUCH_TOOL
-from assistant.agent.prompts import SEARCH_RULE, SYSTEM_PROMPT
-from assistant.app import State, Turn, confirm_prompt
-from assistant.audio import capture
-from assistant.audio import wake as wake_module
-from assistant.config import (
+from allie import __main__ as cli
+from allie import app, locales, logs, setup_wizard
+from allie.__main__ import BUILTIN_TOOLS, TEXT, build_parser, main, use_utf8
+from allie.agent import core
+from allie.agent.limits import Limits
+from allie.agent.policy import NO_SUCH_TOOL
+from allie.agent.prompts import SEARCH_RULE, SYSTEM_PROMPT
+from allie.app import State, Turn, confirm_prompt
+from allie.audio import capture
+from allie.audio import wake as wake_module
+from allie.config import (
     KEYRING_SERVICE,
     AudioSettings,
     LimitSettings,
@@ -57,19 +57,19 @@ from assistant.config import (
     save_settings,
     store_api_key,
 )
-from assistant.live import probe
-from assistant.live.base import ProviderError, SessionConfig, ToolCall, Usage
-from assistant.live.probe import ProbeResult, remember, remembered
-from assistant.messaging.contacts import CONTACTS_FILE_NAME
-from assistant.store import db
-from assistant.store.memory import MEMORY_FILE_NAME
-from assistant.store.repos import AuditRepo, SettingsRepo, UsageRepo
-from assistant.store.retention import SECONDS_PER_DAY
-from assistant.stt import gemini_stt, local_whisper
-from assistant.tools import system
-from assistant.tools.system import AppCatalog, AppEntry
-from assistant.ui import status
-from assistant.usage.tracker import UsageTracker
+from allie.live import probe
+from allie.live.base import ProviderError, SessionConfig, ToolCall, Usage
+from allie.live.probe import ProbeResult, remember, remembered
+from allie.messaging.contacts import CONTACTS_FILE_NAME
+from allie.store import db
+from allie.store.memory import MEMORY_FILE_NAME
+from allie.store.repos import AuditRepo, SettingsRepo, UsageRepo
+from allie.store.retention import SECONDS_PER_DAY
+from allie.stt import gemini_stt, local_whisper
+from allie.tools import system
+from allie.tools.system import AppCatalog, AppEntry
+from allie.ui import status
+from allie.usage.tracker import UsageTracker
 from tests.conftest import MemoryKeyring
 
 MODEL = "gemini-3.8-live"
@@ -88,7 +88,7 @@ def own_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @pytest.fixture
 def configured(config_home: Path, vault: MemoryKeyring) -> Path:
-    """A machine `live-assistant setup` has already been run on."""
+    """A machine `allie setup` has already been run on."""
     save_settings(
         Settings(
             live=LiveSettings(primary=f"gemini:{MODEL}"),
@@ -144,7 +144,7 @@ def test_run_can_be_asked_for_the_tray() -> None:
 
 
 def test_telegram_login_is_a_command_of_its_own() -> None:
-    """`live-assistant telegram login` (2026-09-15); a bare `telegram` is a usage error."""
+    """`allie telegram login` (2026-09-15); a bare `telegram` is a usage error."""
     parsed = build_parser().parse_args(["telegram", "login"])
 
     assert (parsed.command, parsed.telegram_command) == ("telegram", "login")
@@ -427,7 +427,7 @@ def other_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Adds a second entry to the shipped catalogue, with an adapter that
     builds without a network - the OpenAI one is L2's, and nothing here
     depends on which it is."""
-    from assistant.live import registry
+    from allie.live import registry
 
     shipped = registry.load_catalog()
     entry = registry.ProviderEntry(id="other", adapter="other", display_name="Other")
@@ -691,7 +691,7 @@ def test_the_session_config_is_read_afresh_at_every_open(
 ) -> None:
     """The prompt carries the time (4.2) and the user's facts (3.7), and
     both move between one session and the next."""
-    from assistant.tools import reminders
+    from allie.tools import reminders
 
     main(["run", "--terminal"])
     [parts] = wiring.built
@@ -812,11 +812,11 @@ def test_every_tool_of_phase_two_is_on_offer(configured: Path, wiring: Wiring) -
 
 def test_a_tool_file_beside_the_settings_is_on_offer(configured: Path, wiring: Wiring) -> None:
     """Section 3.9 (13 Sep 2026): the owner's own tools, read from
-    `%APPDATA%\\live-assistant\\tools`, join the same registry as everything else."""
+    `%APPDATA%\\allie\\tools`, join the same registry as everything else."""
     folder = configured / "tools"
     folder.mkdir()
     (folder / "mine.py").write_text(
-        "from assistant.tools.registry import tool\n"
+        "from allie.tools.registry import tool\n"
         "\n"
         "\n"
         '@tool(risk="safe")\n'
@@ -850,7 +850,7 @@ def test_the_speech_model_is_told_the_words_the_window_accepts(
 def test_send_message_asks_its_question_in_the_language_of_the_pack(
     configured: Path, wiring: Wiring
 ) -> None:
-    from assistant.tools import messaging as messaging_tools
+    from allie.tools import messaging as messaging_tools
 
     main(["run", "--terminal"])
 
@@ -939,7 +939,7 @@ def test_gemini_as_recogniser_without_a_gemini_key_is_one_sentence(
     assert main(["run", "--terminal"]) == 1
 
     printed = capsys.readouterr().out
-    assert "gemini" in printed and "live-assistant setup" in printed
+    assert "gemini" in printed and "allie setup" in printed
     assert "speech model" not in wiring.happened
     assert wiring.recognisers == []
 
@@ -952,8 +952,8 @@ def test_with_the_setting_the_voice_is_gemini_with_windows_behind_it(
     Google refuses, and the pack's local preference for that engine. It
     reads the gate's questions and the reminders (D3, D4); the model speaks
     for itself."""
-    from assistant.tts.gemini_tts import GeminiTTS
-    from assistant.tts.sapi import SapiTTS
+    from allie.tts.gemini_tts import GeminiTTS
+    from allie.tts.sapi import SapiTTS
 
     configured_with(tts=TTSSettings(provider="gemini", model="gemini-3.1-flash-tts-preview"))
 
@@ -986,12 +986,12 @@ def test_gemini_as_voice_without_a_gemini_key_is_one_sentence(
     assert main(["run", "--terminal"]) == 1
 
     printed = capsys.readouterr().out
-    assert "gemini" in printed and "[tts]" in printed and "live-assistant setup" in printed
+    assert "gemini" in printed and "[tts]" in printed and "allie setup" in printed
     assert "speech model" not in wiring.happened
 
 
 def test_without_the_setting_the_voice_is_windows(configured: Path, wiring: Wiring) -> None:
-    from assistant.tts.sapi import SapiTTS
+    from allie.tts.sapi import SapiTTS
 
     main(["run", "--terminal"])
 
@@ -1022,7 +1022,7 @@ def test_who_answers_a_tool_s_question_comes_with_the_turn_and_reaches_the_gate(
     """The gate is built before the state machine, so who to ask cannot be
     bound into it; each call brings its own, and the gate hands it to
     `policy.dispatch` unchanged."""
-    from assistant.agent import policy
+    from allie.agent import policy
 
     handed: list[Any] = []
 
@@ -1070,7 +1070,7 @@ def test_what_the_user_asked_to_be_kept_is_in_front_of_every_session(
 ) -> None:
     """Section 3.7: the file is read at startup and the prompt every session
     opens with carries it - behind the frozen prompt, which stays as it is."""
-    from assistant.agent.prompts import SYSTEM_PROMPT
+    from allie.agent.prompts import SYSTEM_PROMPT
 
     remembered_by_hand(
         configured, '[assistant]\nname = "Ada"\n\n[user]\nfacts = ["Bana Emre de."]\n'
@@ -1091,8 +1091,8 @@ def test_the_prompt_is_the_frozen_rules_the_pack_s_language_rule_and_the_time(
     naming the language the user speaks (D19 - measured 2026-09-18: without
     it "Saat kaç" is heard as Hindi); the time last (4.2), the one line that
     changes between sessions."""
-    from assistant.agent.prompts import SYSTEM_PROMPT
-    from assistant.tools.reminders import NOW_LINE
+    from allie.agent.prompts import SYSTEM_PROMPT
+    from allie.tools.reminders import NOW_LINE
 
     main(["run", "--terminal"])
 
@@ -1106,7 +1106,7 @@ def test_the_prompt_is_the_frozen_rules_the_pack_s_language_rule_and_the_time(
 def test_a_pack_without_a_language_rule_adds_no_line(configured: Path, wiring: Wiring) -> None:
     """`en.toml` names no language (ADR-001): the prompt's own mirroring
     rule is all there is, and the frozen prompt is followed by the time."""
-    from assistant.agent.prompts import SYSTEM_PROMPT
+    from allie.agent.prompts import SYSTEM_PROMPT
 
     configured_with(locale=LocaleSettings(code="en"))
 
@@ -1135,7 +1135,7 @@ def test_forget_asks_its_question_in_the_language_of_the_pack(
     configured: Path, wiring: Wiring
 ) -> None:
     """The first question of phase 2 a user actually hears (2.3, 2.10)."""
-    from assistant.tools import memory as memory_tools
+    from allie.tools import memory as memory_tools
 
     main(["run", "--terminal"])
 
@@ -1460,7 +1460,7 @@ class FakeTray:
 
 @pytest.fixture
 def trays(monkeypatch: pytest.MonkeyPatch) -> type[FakeTray]:
-    from assistant.ui import tray
+    from allie.ui import tray
 
     FakeTray.built = []
     monkeypatch.setattr(tray, "Tray", FakeTray)
@@ -1595,7 +1595,7 @@ class FakeWindow:
 
 @pytest.fixture
 def windows(monkeypatch: pytest.MonkeyPatch) -> type[FakeWindow]:
-    from assistant.ui import window
+    from allie.ui import window
 
     FakeWindow.built = []
     monkeypatch.setattr(window, "Window", FakeWindow)
@@ -1760,7 +1760,7 @@ def test_a_fixable_failure_is_a_notice_on_the_window_and_waits_for_a_button(
 ) -> None:
     """A key that is gone is a sentence on the window, not an exit: the
     settings button is the way to fix it. Here the button pressed is quit."""
-    from assistant.live.registry import MissingAPIKeyError
+    from allie.live.registry import MissingAPIKeyError
 
     wiring.stop = MissingAPIKeyError("no API key stored for 'gemini'")
     pressed: list[str] = []
@@ -1792,7 +1792,7 @@ def test_without_a_mail_table_the_mail_tools_are_on_offer_but_not_set_up(
     """The tools are always on the list, so that the model can tell the
     user what to run; without `[mail]` and a stored password they open
     nothing."""
-    from assistant.tools.mail import NOT_SET_UP
+    from allie.tools.mail import NOT_SET_UP
 
     main(["run", "--terminal"])
 
@@ -1804,8 +1804,8 @@ def test_without_a_mail_table_the_mail_tools_are_on_offer_but_not_set_up(
 def test_with_a_mail_table_and_a_password_the_mailbox_is_the_one_named(
     configured: Path, wiring: Wiring, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from assistant.tools import mail
-    from assistant.tools.mail import MAIL_ENTRY, ImapMailbox
+    from allie.tools import mail
+    from allie.tools.mail import MAIL_ENTRY, ImapMailbox
 
     configured_with(mail=mail_settings("imap.example.test", "emre@example.test", mailbox="Archive"))
     store_api_key(MAIL_ENTRY, "app-password")
@@ -2018,7 +2018,7 @@ class FakeTelegramLogin:
 
     async def sign_in(self, phone: str, code: str, *, code_hash: str) -> str:
         if code != "12345":
-            from assistant.messaging.telegram import LoginError
+            from allie.messaging.telegram import LoginError
 
             raise LoginError("The phone code entered was invalid")
         return "Emre"
@@ -2035,7 +2035,7 @@ class FakeTelegramLogin:
 
 @pytest.fixture
 def telegram_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    from assistant.messaging import telegram
+    from allie.messaging import telegram
 
     monkeypatch.setattr(telegram, "_login_client", FakeTelegramLogin)
 
@@ -2074,7 +2074,7 @@ def test_telegram_login_stores_the_id_in_the_file_and_the_secrets_in_the_vault(
 def test_telegram_login_asks_in_the_language_of_the_pack(
     configured: Path, terminal: type[ScriptedTerminal], telegram_client: None
 ) -> None:
-    from assistant.messaging import telegram
+    from allie.messaging import telegram
 
     terminal.answers = {"telegram_api_id": None}
 
@@ -2277,11 +2277,11 @@ class FakeRunKey:
 
 @pytest.fixture
 def run_key(monkeypatch: pytest.MonkeyPatch) -> type[FakeRunKey]:
-    from assistant import autostart
+    from allie import autostart
 
     FakeRunKey.values = {}
     monkeypatch.setattr(autostart, "WindowsRegistry", FakeRunKey)
-    monkeypatch.setattr(autostart, "command_line", lambda: '"C:\\x\\live-assistant.exe" run --tray')
+    monkeypatch.setattr(autostart, "command_line", lambda: '"C:\\x\\allie.exe" run --tray')
     return FakeRunKey
 
 
@@ -2299,8 +2299,8 @@ def test_autostart_on_writes_the_run_key_and_says_what_it_wrote(
 ) -> None:
     assert main(["autostart", "on"]) == 0
 
-    command = '"C:\\x\\live-assistant.exe" run --tray'
-    assert run_key.values == {"live-assistant": command}
+    command = '"C:\\x\\allie.exe" run --tray'
+    assert run_key.values == {"allie": command}
     printed = unwrapped(capsys.readouterr().out)
     assert unwrapped(said("autostart_on").format(command=command)) == printed
 
@@ -2312,7 +2312,7 @@ def test_autostart_off_clears_it_and_status_says_which(
     capsys.readouterr()
 
     assert main(["autostart", "status"]) == 0
-    assert '"C:\\x\\live-assistant.exe" run --tray' in capsys.readouterr().out
+    assert '"C:\\x\\allie.exe" run --tray' in capsys.readouterr().out
 
     assert main(["autostart", "off"]) == 0
     assert run_key.values == {}
@@ -2334,7 +2334,7 @@ def test_autostart_speaks_the_machines_language_before_setup(
 
 
 def mail_settings(host: str, user: str, *, mailbox: str = "INBOX") -> Any:
-    from assistant.config import MailSettings
+    from allie.config import MailSettings
 
     return MailSettings(host=host, user=user, mailbox=mailbox)
 
@@ -2375,7 +2375,7 @@ def test_doctor_reports_the_installation_and_never_a_key(
     folder = configured / "tools"
     folder.mkdir()
     (folder / "mine.py").write_text(
-        "from assistant.tools.registry import tool\n\n\n"
+        "from allie.tools.registry import tool\n\n\n"
         '@tool(risk="safe")\nasync def start_my_project() -> str:\n'
         '    """Starts the owner\'s project."""\n    return "started"\n',
         encoding="utf-8",
@@ -2392,13 +2392,13 @@ def test_doctor_reports_the_installation_and_never_a_key(
             mail=mail_settings("imap.example.test", "emre@example.test"),
         )
     )
-    from assistant.config import TelegramSettings
+    from allie.config import TelegramSettings
 
     loaded = load_settings()
     loaded.telegram = TelegramSettings(api_id=123456)
     save_settings(loaded)
-    command = '"C:\\x\\live-assistant.exe" run --tray'
-    run_key.values["live-assistant"] = command
+    command = '"C:\\x\\allie.exe" run --tray'
+    run_key.values["allie"] = command
 
     assert main(["doctor"]) == 0
 

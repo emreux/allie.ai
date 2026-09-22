@@ -1,6 +1,6 @@
 """`tools/local.py`: the owner's own tools, read from a folder outside the repository.
 
-The folder is `%APPDATA%\\live-assistant\\tools`; a test never touches it and writes
+The folder is `%APPDATA%\\allie\\tools`; a test never touches it and writes
 its files into `tmp_path` instead. What is asserted is the contract the
 composition root relies on: every `Tool` in every file, in a fixed order; a
 file that will not import skipped with a warning rather than a crash; nothing
@@ -15,12 +15,12 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from assistant.tools.local import load_local_tools, local_tools_dir
-from assistant.tools.registry import Tool, ToolRegistry
-from assistant.tools.system import get_current_time
+from allie.tools.local import load_local_tools, local_tools_dir
+from allie.tools.registry import Tool, ToolRegistry
+from allie.tools.system import get_current_time
 
 TWO_TOOLS = '''
-from assistant.tools.registry import tool
+from allie.tools.registry import tool
 
 
 @tool(risk="safe")
@@ -36,7 +36,7 @@ async def second_thing() -> str:
 '''
 
 ONE_TOOL = '''
-from assistant.tools.registry import tool
+from allie.tools.registry import tool
 
 
 @tool(risk="safe")
@@ -46,7 +46,7 @@ async def {name}() -> str:
 '''
 
 NOT_ONLY_TOOLS = '''
-from assistant.tools.registry import tool
+from allie.tools.registry import tool
 
 LIMIT = 3
 

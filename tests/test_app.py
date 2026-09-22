@@ -40,12 +40,12 @@ import numpy as np
 import pytest
 from loguru import logger
 
-from assistant import app
-from assistant.agent.core import Confirm, ToolRunner
-from assistant.agent.limits import Limits
-from assistant.agent.policy import DECLINED, dispatch
-from assistant.announce.queue import AnnounceQueue
-from assistant.app import (
+from allie import app
+from allie.agent.core import Confirm, ToolRunner
+from allie.agent.limits import Limits
+from allie.agent.policy import DECLINED, dispatch
+from allie.announce.queue import AnnounceQueue
+from allie.app import (
     CONFIRM_WINDOW_SECONDS,
     IDLE_CLOSE_SECONDS,
     MAX_OPEN_FAILURES,
@@ -57,9 +57,9 @@ from assistant.app import (
     Turn,
     read_answer,
 )
-from assistant.audio.player import PlaybackError
-from assistant.audio.wake import CHIME_RATE, chime
-from assistant.live.base import (
+from allie.audio.player import PlaybackError
+from allie.audio.wake import CHIME_RATE, chime
+from allie.live.base import (
     AudioChunk,
     AuthenticationError,
     Closed,
@@ -78,13 +78,13 @@ from assistant.live.base import (
     Usage,
     UsageReport,
 )
-from assistant.locales import Locale
-from assistant.store.db import open_database
-from assistant.store.repos import UsageRepo
-from assistant.stt.base import SAMPLE_RATE, Audio, Transcript
-from assistant.tools.registry import ToolRegistry, tool
-from assistant.tts.base import VoiceInfo
-from assistant.usage.tracker import Pricing, UsageTracker
+from allie.locales import Locale
+from allie.store.db import open_database
+from allie.store.repos import UsageRepo
+from allie.stt.base import SAMPLE_RATE, Audio, Transcript
+from allie.tools.registry import ToolRegistry, tool
+from allie.tts.base import VoiceInfo
+from allie.usage.tracker import Pricing, UsageTracker
 from tests.live_contract import FakeLiveProvider, FakeLiveSession
 
 TOLGA = VoiceInfo(id=r"HKLM\...\TR-TR_TOLGA", display_name="Microsoft Tolga", language="tr")

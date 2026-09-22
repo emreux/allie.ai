@@ -18,8 +18,8 @@ from collections.abc import Iterator
 import numpy as np
 import pytest
 
-from assistant.audio.resample import Resampler
-from assistant.stt.base import SAMPLE_RATE, Audio
+from allie.audio.resample import Resampler
+from allie.stt.base import SAMPLE_RATE, Audio
 
 
 def tone(hertz: float, rate: int, seconds: float = 1.0, amplitude: float = 0.5) -> Audio:

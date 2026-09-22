@@ -28,8 +28,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from assistant import shell
-from assistant.messaging.whatsapp import (
+from allie import shell
+from allie.messaging.whatsapp import (
     APP_HOME,
     IMAGE,
     IMAGES,

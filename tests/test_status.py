@@ -12,7 +12,7 @@ every other sentence in the product (section 3.12).
 changes; what was heard, what was answered and what it cost scroll past above
 it, which is the only record the user gets in phase 1.
 
-**A terminal that is not a terminal still works.** `live-assistant run > run.log`
+**A terminal that is not a terminal still works.** `allie run > run.log`
 redirects the output to a file, and a status line that only knew how to draw
 itself on a console would take the whole assistant down with it.
 
@@ -33,11 +33,11 @@ from io import StringIO
 import pytest
 from rich.console import Console
 
-from assistant.app import State, Turn
-from assistant.audio.capture import DEFAULT_TOGGLE_HOTKEY, QUIET_DBFS
-from assistant.live.base import Usage
-from assistant.locales import Locale
-from assistant.ui.status import TEXT, SessionMinutes, StatusLine, label_key, spell
+from allie.app import State, Turn
+from allie.audio.capture import DEFAULT_TOGGLE_HOTKEY, QUIET_DBFS
+from allie.live.base import Usage
+from allie.locales import Locale
+from allie.ui.status import TEXT, SessionMinutes, StatusLine, label_key, spell
 
 TURKISH = Locale(
     code="tr",
@@ -433,7 +433,7 @@ def test_the_line_does_not_start_a_thread_to_redraw_itself(screen: Screen) -> No
 
 
 def test_output_that_is_a_file_rather_than_a_console_still_gets_the_turns() -> None:
-    """`live-assistant run > run.log`. Nothing here may depend on a cursor that can
+    """`allie run > run.log`. Nothing here may depend on a cursor that can
     be moved back to the start of a line."""
     written = Screen(terminal=False)
 
@@ -453,7 +453,7 @@ def test_output_that_is_a_file_rather_than_a_console_still_gets_the_turns() -> N
 def test_the_line_is_a_screen_and_a_level_costs_it_nothing(screen: Screen) -> None:
     """`run` knows the line and the window as one `Screen` (D20); the
     line takes the sound's level and does nothing with it."""
-    from assistant.ui.status import Screen as ScreenProtocol
+    from allie.ui.status import Screen as ScreenProtocol
 
     with line(screen) as shown_line:
         face: ScreenProtocol = shown_line

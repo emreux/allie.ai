@@ -14,8 +14,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from assistant.store.db import open_database
-from assistant.store.repos import MIN_QUERY_CHARS, Note, NotesRepo, query_terms
+from allie.store.db import open_database
+from allie.store.repos import MIN_QUERY_CHARS, Note, NotesRepo, query_terms
 
 
 @pytest.fixture

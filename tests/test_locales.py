@@ -21,21 +21,21 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from assistant import __main__ as cli
-from assistant import app, locales, setup_wizard
-from assistant.agent import policy
-from assistant.live.probe import QUESTION
-from assistant.locales import FALLBACK_CODE, available, iso_code, load, system_code
-from assistant.messaging import telegram
-from assistant.scheduler import runner as scheduler
-from assistant.tools import mail as mail_tools
-from assistant.tools import memory as memory_tools
-from assistant.tools import messaging as messaging_tools
-from assistant.tools import notes as notes_tools
-from assistant.tools import reminders as reminder_tools
-from assistant.tools import store as store_tools
-from assistant.tools import system as system_tools
-from assistant.ui import status, tray, window
+from allie import __main__ as cli
+from allie import app, locales, setup_wizard
+from allie.agent import policy
+from allie.live.probe import QUESTION
+from allie.locales import FALLBACK_CODE, available, iso_code, load, system_code
+from allie.messaging import telegram
+from allie.scheduler import runner as scheduler
+from allie.tools import mail as mail_tools
+from allie.tools import memory as memory_tools
+from allie.tools import messaging as messaging_tools
+from allie.tools import notes as notes_tools
+from allie.tools import reminders as reminder_tools
+from allie.tools import store as store_tools
+from allie.tools import system as system_tools
+from allie.ui import status, tray, window
 
 PACKAGED = Path(locales.__file__).parent
 

@@ -21,10 +21,10 @@ from typing import Any
 import pytest
 from PIL import Image
 
-from assistant import locales
-from assistant.app import State
-from assistant.ui import status, tray
-from assistant.ui.tray import ICON_SIZE, TEXT, MenuEntry, Tray, draw_icon, system_icon
+from allie import locales
+from allie.app import State
+from allie.ui import status, tray
+from allie.ui.tray import ICON_SIZE, TEXT, MenuEntry, Tray, draw_icon, system_icon
 
 CENTRE = (ICON_SIZE // 2, ICON_SIZE // 2)
 FOLDER = Path(r"C:\Users\somebody\AppData\Roaming\assistant")

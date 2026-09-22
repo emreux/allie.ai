@@ -15,8 +15,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from assistant.store.db import open_database
-from assistant.store.repos import NotesRepo
+from allie.store.db import open_database
+from allie.store.repos import NotesRepo
 
 
 @pytest.fixture

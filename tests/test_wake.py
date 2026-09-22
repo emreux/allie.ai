@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from assistant.audio import wake as module
-from assistant.audio.wake import (
+from allie.audio import wake as module
+from allie.audio.wake import (
     CHIME_RATE,
     DEBOUNCE_SECONDS,
     HOP_SECONDS,
@@ -21,11 +21,11 @@ from assistant.audio.wake import (
     chime,
     wake_model_path,
 )
-from assistant.stt.base import SAMPLE_RATE, Audio
+from allie.stt.base import SAMPLE_RATE, Audio
 
 HOP = round(HOP_SECONDS * SAMPLE_RATE)
 WINDOW = round(WINDOW_SECONDS * SAMPLE_RATE)
-SHIPPED = Path(str(resources.files("assistant.wake") / "hey_friday.onnx"))
+SHIPPED = Path(str(resources.files("allie.wake") / "hey_friday.onnx"))
 
 
 # --------------------------------------------------------------------------

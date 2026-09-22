@@ -1,4 +1,4 @@
-"""The questions of `live-assistant setup`, without a terminal.
+"""The questions of `allie setup`, without a terminal.
 
 The wizard is the only place where a key the user typed exists in memory, so
 the tests that matter are about what happens to it: it is checked before it is
@@ -16,7 +16,7 @@ answers that request from a class attribute, so a test can say which of
 its models call tools and which only talk.
 
 Since 2026-09-15 the last question is which microphone to listen through,
-and `live-assistant mic` asks that one question on its own. The device list is
+and `allie mic` asks that one question on its own. The device list is
 handed in, so no test touches PortAudio.
 
 The live product (plan.md L1.6) added three questions between the model and
@@ -43,9 +43,9 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from assistant import locales
-from assistant.audio.capture import MicrophoneInfo, Microphones
-from assistant.config import (
+from allie import locales
+from allie.audio.capture import MicrophoneInfo, Microphones
+from allie.config import (
     KEYRING_SERVICE,
     AudioSettings,
     LiveSettings,
@@ -58,7 +58,7 @@ from assistant.config import (
     save_settings,
     store_api_key,
 )
-from assistant.live.base import (
+from allie.live.base import (
     LiveEvent,
     ModelInfo,
     OutputText,
@@ -68,9 +68,9 @@ from assistant.live.base import (
     ToolCallEvent,
     TurnComplete,
 )
-from assistant.live.probe import NO_TOOL_CALL, QUESTION, ProbeResult, remembered
-from assistant.live.registry import ADAPTERS, ProviderEntry
-from assistant.setup_wizard import (
+from allie.live.probe import NO_TOOL_CALL, QUESTION, ProbeResult, remembered
+from allie.live.registry import ADAPTERS, ProviderEntry
+from allie.setup_wizard import (
     TEXT,
     Option,
     TerminalPrompter,
@@ -78,9 +78,9 @@ from assistant.setup_wizard import (
     run_setup,
     wording,
 )
-from assistant.store import db
-from assistant.store.db import open_database
-from assistant.store.repos import SettingsRepo
+from allie.store import db
+from allie.store.db import open_database
+from allie.store.repos import SettingsRepo
 from tests.conftest import MemoryKeyring
 from tests.live_contract import FakeLiveSession
 
@@ -240,7 +240,7 @@ NO_MICROPHONE = Microphones(default=None, devices=())
 def laptop_microphones(monkeypatch: pytest.MonkeyPatch) -> None:
     """What the wizard finds when nobody hands it a list: the laptop above,
     never PortAudio."""
-    monkeypatch.setattr("assistant.setup_wizard.available_microphones", lambda: LAPTOP)
+    monkeypatch.setattr("allie.setup_wizard.available_microphones", lambda: LAPTOP)
 
 
 def complete_run(**overrides: str | list[str | None] | None) -> ScriptedPrompter:
@@ -681,7 +681,7 @@ async def test_the_probe_falls_back_to_the_english_question(
 async def test_the_verdict_on_the_chosen_model_is_written_down(
     config_home: Path, vault: MemoryKeyring, verdicts: sqlite3.Connection
 ) -> None:
-    """So that `live-assistant run` need not ask the same question for a week."""
+    """So that `allie run` need not ask the same question for a week."""
     await run_setup(complete_run(model="smart"), catalog=fake_catalog(), database=verdicts)
 
     found = remembered(SettingsRepo(verdicts), "gemini", "smart")
@@ -746,7 +746,7 @@ async def test_walking_away_from_the_probe_s_verdict_writes_nothing(
 
 
 def test_the_failed_verdict_has_the_reason_of_section_3_2() -> None:
-    """What the probe writes down is what `live-assistant run` will read a week
+    """What the probe writes down is what `allie run` will read a week
     later; the word is the one the design names."""
     assert ProbeResult(ok=False, reason=NO_TOOL_CALL).reason == "no_tool_call_emitted"
 
@@ -1025,7 +1025,7 @@ async def test_walking_away_at_the_microphone_writes_nothing(
 async def test_mic_changes_the_microphone_and_keeps_the_rest(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
-    """`live-assistant mic` is the one question again, for the day the headset
+    """`allie mic` is the one question again, for the day the headset
     comes out: it rewrites `[audio]` and nothing else in the file."""
     save_settings(
         Settings(
@@ -1202,7 +1202,7 @@ async def test_an_interrupted_question_is_not_an_answer(
 #
 # Everything above hands the wizard a scripted prompter, which is the right
 # way to test what it asks and what it does with the answers - and is exactly
-# why the terminal itself went untested until somebody ran `live-assistant setup`.
+# why the terminal itself went untested until somebody ran `allie setup`.
 # These two drive the real one, through a pipe instead of a keyboard.
 # --------------------------------------------------------------------------
 
@@ -1272,7 +1272,7 @@ class PageAnswers:
 async def test_the_wizard_runs_through_the_window_and_leaves_the_same_settings(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
-    from assistant.ui.window import Window, WindowPrompter
+    from allie.ui.window import Window, WindowPrompter
 
     answers: dict[str, str | None] = {
         "locale": "tr",
@@ -1325,7 +1325,7 @@ async def test_the_wizard_runs_through_the_window_and_leaves_the_same_settings(
 async def test_walking_away_from_the_window_s_page_is_the_wizard_s_cancel(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
-    from assistant.ui.window import Window, WindowPrompter
+    from allie.ui.window import Window, WindowPrompter
 
     def panel(view: Any, window: Any) -> PageAnswers:
         return PageAnswers(view, window, {"locale": None})

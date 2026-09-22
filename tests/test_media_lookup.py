@@ -23,11 +23,11 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 
-from assistant.media import youtube
-from assistant.media.deezer import Deezer
-from assistant.media.spotify import APP_HOME, WEB_HOME, Spotify, app_installed
-from assistant.media.track import SearchError
-from assistant.media.youtube import YouTube, YouTubeMusic
+from allie.media import youtube
+from allie.media.deezer import Deezer
+from allie.media.spotify import APP_HOME, WEB_HOME, Spotify, app_installed
+from allie.media.track import SearchError
+from allie.media.youtube import YouTube, YouTubeMusic
 
 MAIN = threading.current_thread()
 

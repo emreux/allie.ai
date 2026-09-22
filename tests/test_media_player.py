@@ -27,15 +27,15 @@ from pathlib import Path
 
 import pytest
 
-from assistant import shell
-from assistant.config import MediaSettings
-from assistant.media.player import NOT_PLAYING, Player
-from assistant.media.spotify import Spotify
-from assistant.media.track import Recording, SearchError, Track
-from assistant.media.window import Browser, MediaWindow
-from assistant.tools.media import open_media_for, play_music_for, play_video_for
-from assistant.tools.registry import Tool
-from assistant.tools.system import AppCatalog, AppEntry, open_app_for
+from allie import shell
+from allie.config import MediaSettings
+from allie.media.player import NOT_PLAYING, Player
+from allie.media.spotify import Spotify
+from allie.media.track import Recording, SearchError, Track
+from allie.media.window import Browser, MediaWindow
+from allie.tools.media import open_media_for, play_music_for, play_video_for
+from allie.tools.registry import Tool
+from allie.tools.system import AppCatalog, AppEntry, open_app_for
 
 MAIN = threading.current_thread()
 

@@ -9,8 +9,8 @@ from typing import ClassVar
 
 import pytest
 
-from assistant.messaging.contacts import AddressBook, Contact
-from assistant.messaging.telegram import (
+from allie.messaging.contacts import AddressBook, Contact
+from allie.messaging.telegram import (
     NO_SUCH_USER,
     NOT_LOGGED_IN,
     SAID,
@@ -23,7 +23,7 @@ from assistant.messaging.telegram import (
     TelegramError,
     login,
 )
-from assistant.tools.messaging import NoRecipientError
+from allie.tools.messaging import NoRecipientError
 
 AHMET = Person(id=1, name="Ahmet Yılmaz", username="ahmetyilmaz", phone="905320000000")
 AYSE = Person(id=2, name="Ayşe Demir", username="", phone="")
@@ -93,7 +93,7 @@ async def test_without_a_client_nothing_is_configured_and_the_answer_says_how_to
     channel = Telegram(BOOK, client=None)
 
     assert channel.configured is False
-    with pytest.raises(NoRecipientError, match="live-assistant telegram login"):
+    with pytest.raises(NoRecipientError, match="allie telegram login"):
         await channel.resolve("Ahmet")
     with pytest.raises(NoRecipientError, match=NOT_LOGGED_IN):
         await channel.send(AHMET, "hi")
@@ -246,7 +246,7 @@ async def test_sent_is_said_with_the_persons_name() -> None:
         (TelegramError("peer_flood"), "people it does not know"),
         (TelegramError("privacy"), "Ahmet Yılmaz's privacy settings"),
         (TelegramError("network"), "could not be reached"),
-        (TelegramError("not_authorized"), "live-assistant telegram login"),
+        (TelegramError("not_authorized"), "allie telegram login"),
         (TelegramError("rpc", reason="CHAT_WRITE_FORBIDDEN"), "CHAT_WRITE_FORBIDDEN"),
     ],
 )
@@ -443,7 +443,7 @@ def test_the_real_client_is_built_without_telethon_being_imported() -> None:
     `media/now_playing.py`: a broken install must not stop the assistant."""
     import sys
 
-    from assistant.messaging.telegram import TelethonClient
+    from allie.messaging.telegram import TelethonClient
 
     for name in [module for module in sys.modules if module.startswith("telethon")]:
         del sys.modules[name]

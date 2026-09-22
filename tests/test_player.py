@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 from loguru import logger
 
-from assistant.audio.player import (
+from allie.audio.player import (
     BLOCK_FRAMES,
     BYTES_PER_FRAME,
     LivePlayback,
@@ -33,7 +33,7 @@ from assistant.audio.player import (
     Speaker,
     SystemSpeaker,
 )
-from assistant.stt.base import LEVEL_FLOOR_DBFS
+from allie.stt.base import LEVEL_FLOOR_DBFS
 
 RATE = 16_000
 BLOCK = BLOCK_FRAMES * BYTES_PER_FRAME

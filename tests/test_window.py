@@ -23,14 +23,14 @@ from typing import Any
 
 import pytest
 
-from assistant import config, locales
-from assistant.app import State, Turn
-from assistant.audio.capture import QUIET_DBFS
-from assistant.setup_wizard import TEXT as WIZARD_TEXT
-from assistant.setup_wizard import Option
-from assistant.ui import orb, status
-from assistant.ui import window as window_ui
-from assistant.ui.window import (
+from allie import config, locales
+from allie.app import State, Turn
+from allie.audio.capture import QUIET_DBFS
+from allie.setup_wizard import TEXT as WIZARD_TEXT
+from allie.setup_wizard import Option
+from allie.ui import orb, status
+from allie.ui import window as window_ui
+from allie.ui.window import (
     ACCENT,
     BACKGROUND,
     QUIET,
@@ -561,8 +561,8 @@ def test_the_window_wears_the_products_name_and_not_its_folders() -> None:
     entry and the environment variable keep the name the machine already
     has, or the settings and the key on it would be lost."""
     assert config.APP_TITLE == "Allie"
-    assert config.APP_NAME == "live-assistant"
-    assert config.KEYRING_SERVICE == "live-assistant"
+    assert config.APP_NAME == "allie"
+    assert config.KEYRING_SERVICE == "allie"
 
 
 def test_the_tick_is_sixty_frames_a_second() -> None:

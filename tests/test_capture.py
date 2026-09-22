@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 from loguru import logger
 
-from assistant.audio.capture import (
+from allie.audio.capture import (
     CHUNK_FRAMES,
     DEFAULT_TOGGLE_HOTKEY,
     ECHO_TAIL_SECONDS,
@@ -41,8 +41,8 @@ from assistant.audio.capture import (
     device_choice,
     duplex_for,
 )
-from assistant.audio.vad import PREROLL_SECONDS
-from assistant.stt.base import LEVEL_FLOOR_DBFS, SAMPLE_RATE, Audio, to_pcm16
+from allie.audio.vad import PREROLL_SECONDS
+from allie.stt.base import LEVEL_FLOOR_DBFS, SAMPLE_RATE, Audio, to_pcm16
 
 CTRL, ALT, SPACE, SHIFT = "ctrl", "alt", "space", "shift"
 
@@ -314,7 +314,7 @@ def wired(**extra: Any) -> tuple[HandsFree, FakeHotkey, FakeMicrophone, FakeEndp
 
 
 async def test_it_listens_from_the_moment_it_starts() -> None:
-    """`live-assistant run` means run: there is no other key to press, and a program
+    """`allie run` means run: there is no other key to press, and a program
     that starts deaf looks like one that failed to start (owner's decision,
     2026-09-11)."""
     talk, _, microphone, endpoint = wired()
@@ -669,7 +669,7 @@ def test_a_microphone_that_cannot_be_opened_fails_by_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A name that matches no device, or a device another program is holding:
-    the user can fix either, so `live-assistant run` says which in a sentence."""
+    the user can fix either, so `allie run` says which in a sentence."""
     module, _ = fake_sounddevice()
     monkeypatch.setitem(sys.modules, "sounddevice", module)
 
@@ -1016,7 +1016,7 @@ async def test_switching_off_closes_an_open_window_with_nothing() -> None:
 
 
 # --------------------------------------------------------------------------
-# The list `live-assistant mic` offers
+# The list `allie mic` offers
 # --------------------------------------------------------------------------
 
 # PortAudio's table on the development laptop, abridged: the one array behind

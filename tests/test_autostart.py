@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from assistant import autostart
-from assistant.autostart import (
+from allie import autostart
+from allie.autostart import (
     SCRIPT,
     VALUE_NAME,
     command_line,
@@ -75,9 +75,9 @@ def test_without_the_script_beside_it_the_one_on_the_path_is_taken(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
-    monkeypatch.setattr(autostart.shutil, "which", lambda name: r"C:\Tools\live-assistant.exe")
+    monkeypatch.setattr(autostart.shutil, "which", lambda name: r"C:\Tools\allie.exe")
 
-    assert command_line() == r'"C:\Tools\live-assistant.exe" run --tray'
+    assert command_line() == r'"C:\Tools\allie.exe" run --tray'
 
 
 def test_without_any_script_the_interpreter_runs_the_module(
@@ -105,9 +105,9 @@ def test_on_writes_the_command_under_the_assistants_name(
 
 
 def test_on_takes_a_command_of_the_callers_choosing(registry: FakeRegistry) -> None:
-    enable(registry, command='"D:\\x\\live-assistant.exe" run')
+    enable(registry, command='"D:\\x\\allie.exe" run')
 
-    assert registry.values[VALUE_NAME] == '"D:\\x\\live-assistant.exe" run'
+    assert registry.values[VALUE_NAME] == '"D:\\x\\allie.exe" run'
 
 
 def test_off_takes_it_away_and_is_no_error_when_it_was_never_there(

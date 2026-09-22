@@ -17,7 +17,7 @@ measured here is what the product will feel.
     uv run python scripts/spike_live.py --log spike.jsonl     # every server message, stamped
 
 Press Enter to hang up; the summary is printed whatever ended the session. The
-key comes from the Credential Manager - the `live-assistant` entry, or the old
+key comes from the Credential Manager - the `allie` entry, or the old
 product's `assistant` entry until `import` exists - and is never printed.
 
 Two clocks are compared for "when did you stop talking": the local detector
@@ -197,7 +197,7 @@ def _shown(text: str) -> str:
 
 def find_key() -> tuple[str, str]:
     """The Gemini key and where it came from. The key itself is never printed."""
-    from assistant.config import KEYRING_SERVICE, load_api_key
+    from allie.config import KEYRING_SERVICE, load_api_key
 
     key = load_api_key("gemini")
     if key:
@@ -208,15 +208,14 @@ def find_key() -> tuple[str, str]:
     if key:
         return key, "Credential Manager, service 'assistant' (the old product's entry)"
     raise SystemExit(
-        "no Gemini key in the Credential Manager: run the old product's setup, "
-        "or `live-assistant setup`"
+        "no Gemini key in the Credential Manager: run the old product's setup, or `allie setup`"
     )
 
 
 def default_device() -> str:
     """The microphone the product would use: this product's setting, else the old one's."""
     appdata = Path(os.environ.get("APPDATA", ""))
-    for product in ("live-assistant", "assistant"):
+    for product in ("allie", "assistant"):
         path = appdata / product / "config.toml"
         if not path.exists():
             continue
@@ -228,7 +227,7 @@ def default_device() -> str:
 
 
 def system_prompt(user_language: str = "") -> str:
-    from assistant.agent.prompts import BREVITY, LANGUAGE_RULE
+    from allie.agent.prompts import BREVITY, LANGUAGE_RULE
 
     parts = [SPIKE_PERSONALITY, BREVITY, LANGUAGE_RULE]
     if user_language:
@@ -245,7 +244,7 @@ def load_sentence(path: Path) -> Any:
     """A WAV file as 16 kHz mono float32, whatever it was written as."""
     import soundfile  # type: ignore[import-untyped]
 
-    from assistant.audio.resample import Resampler
+    from allie.audio.resample import Resampler
 
     data, rate = soundfile.read(str(path), dtype="float32")
     samples = np.asarray(data, dtype=np.float32)
@@ -399,7 +398,7 @@ class Spike:
         """The one tool, in Gemini's envelope, from the product's own `Tool`."""
         from google.genai import types
 
-        from assistant.tools.system import get_current_time
+        from allie.tools.system import get_current_time
 
         declared = []
         for tool in (get_current_time,):
@@ -427,7 +426,7 @@ class Spike:
 
     def judge(self, stamp: float, chunk: Any) -> None:
         """Feeds the detector and keeps two facts: are you talking, and when did you last."""
-        from assistant.audio.vad import FRAME_SAMPLES, SPEECH_THRESHOLD
+        from allie.audio.vad import FRAME_SAMPLES, SPEECH_THRESHOLD
 
         self.vad_buffer = np.concatenate((self.vad_buffer, chunk))
         while len(self.vad_buffer) >= FRAME_SAMPLES:
@@ -457,7 +456,7 @@ class Spike:
         """Microphone blocks to the server, batched when the socket is slower than 20 ms."""
         from google.genai import types
 
-        from assistant.stt.gemini_stt import to_pcm16
+        from allie.stt.gemini_stt import to_pcm16
 
         while True:
             stamp, chunk = await self.mic_queue.get()
@@ -846,9 +845,9 @@ class Spike:
         from google.genai import errors
         from websockets.exceptions import ConnectionClosed, WebSocketException
 
-        from assistant.audio.capture import SystemMicrophone, device_choice
-        from assistant.audio.player import SystemSpeaker
-        from assistant.audio.vad import SileroVAD
+        from allie.audio.capture import SystemMicrophone, device_choice
+        from allie.audio.player import SystemSpeaker
+        from allie.audio.vad import SileroVAD
 
         self.loop = asyncio.get_running_loop()
         if self.a.log is not None:

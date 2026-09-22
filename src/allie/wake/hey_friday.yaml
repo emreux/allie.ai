@@ -1,0 +1,67 @@
+# The wake word of allie.ai (plan.md D21), trained with
+# livekit-wakeword 0.2.1 from its configs/prod.yaml. Piper VITS is en-US
+# only: the spellings below are how a Turkish speaker says "Friday".
+#
+#   apt-get install -y espeak-ng
+#   pip install "livekit-wakeword[train,export]"
+#   livekit-wakeword setup --config hey_friday.yaml
+#   livekit-wakeword run hey_friday.yaml
+#   -> output/hey_friday/hey_friday.onnx, output/hey_friday/hey_friday_eval.json
+model_name: hey_friday
+target_phrases: ["hey friday", "hey fryday", "hey fri day", "hey fridey"]
+
+n_samples: 25000
+n_samples_val: 5000
+n_background_samples: 2000
+n_background_samples_val: 500
+tts_batch_size: 50
+
+# What must NOT wake it: the word alone, and what sounds like it.
+custom_negative_phrases:
+  - "friday"
+  - "fryday"
+  - "hey fred"
+  - "hey freddy"
+  - "hey friend"
+  - "hey fry"
+  - "hey five"
+  - "hey freeway"
+  - "hey frida"
+  - "hey fine day"
+  - "good friday"
+  - "next friday"
+  - "on friday"
+  - "hey fire"
+  - "hey ferry"
+
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [0.75, 1.0, 1.25]
+slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]
+
+data_dir: ./data
+output_dir: ./output
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 16
+  rounds: 3
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+model:
+  model_type: conv_attention
+  model_size: medium
+
+steps: 100000
+learning_rate: 0.0001
+weight_decay: 0.01
+label_smoothing: 0.05
+max_negative_weight: 3000
+target_fp_per_hour: 0.1
+
+batch_n_per_class:
+  positive: 50
+  adversarial_negative: 50
+  ACAV100M_sample: 1024
+  background_noise: 50

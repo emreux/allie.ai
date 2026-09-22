@@ -22,10 +22,10 @@ from typing import Any
 
 import pytest
 
-from assistant.agent.prompts import ANNOUNCED_PREFIX
-from assistant.announce.queue import Announcement, AnnounceQueue
-from assistant.app import LiveAssistant, State, Turn
-from assistant.live.base import TurnComplete
+from allie.agent.prompts import ANNOUNCED_PREFIX
+from allie.announce.queue import Announcement, AnnounceQueue
+from allie.app import LiveAssistant, State, Turn
+from allie.live.base import TurnComplete
 from tests.test_app import (
     FakeCapture,
     FakeSpeaker,

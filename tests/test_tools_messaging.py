@@ -11,9 +11,9 @@ from collections.abc import Sequence
 
 import pytest
 
-from assistant.messaging.contacts import AddressBook, Contact
-from assistant.messaging.whatsapp import MAX_TEXT_CHARS, Outcome
-from assistant.tools.messaging import (
+from allie.messaging.contacts import AddressBook, Contact
+from allie.messaging.whatsapp import MAX_TEXT_CHARS, Outcome
+from allie.tools.messaging import (
     MATCHED,
     NO_CHANNEL,
     NO_CONTACT,
@@ -25,7 +25,7 @@ from assistant.tools.messaging import (
     WhatsAppChannel,
     send_message_for,
 )
-from assistant.tools.registry import Tool
+from allie.tools.registry import Tool
 
 AHMET = Contact(name="Ahmet Yılmaz", aliases=("Ahmet",), phone="905320000000")
 MEHMET = Contact(name="Mehmet Kaya", aliases=("Mehmet",))  # no number

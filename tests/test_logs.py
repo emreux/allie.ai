@@ -27,11 +27,11 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from assistant import logs
-from assistant.app import Turn
-from assistant.config import config_dir
-from assistant.live.base import Usage
-from assistant.logs import keep_secret, log_path, log_turn, setup_logging
+from allie import logs
+from allie.app import Turn
+from allie.config import config_dir
+from allie.live.base import Usage
+from allie.logs import keep_secret, log_path, log_turn, setup_logging
 
 KEY = "AIzaSyD-notarealkeyatall-000000000000000"
 
@@ -84,7 +84,7 @@ def test_nothing_writes_on_the_terminal_any_more(tmp_path: Path) -> None:
 
 
 def test_the_directory_is_made_on_the_first_run(tmp_path: Path) -> None:
-    """Nothing creates `%LOCALAPPDATA%\\live-assistant\\logs` before this does."""
+    """Nothing creates `%LOCALAPPDATA%\\allie\\logs` before this does."""
     path = setup_logging(path=tmp_path / "never" / "existed" / "assistant.log")
     logger.info("something happened")
 
@@ -134,7 +134,7 @@ def test_a_turn_writes_down_what_it_spent(log: Path) -> None:
 
 def test_a_turn_writes_down_how_many_tools_ran_and_what_it_cost(log: Path) -> None:
     """The same number the turn's row in `usage_log` carries (2.4), so that
-    the log and `live-assistant cost` never disagree about a turn."""
+    the log and `allie cost` never disagree about a turn."""
     log_turn(
         Turn(heard="saat kaç", said="Üç.", usage=Usage(300, 10), tool_calls=2, cost_usd=0.0004)
     )

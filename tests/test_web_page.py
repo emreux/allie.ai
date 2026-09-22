@@ -15,9 +15,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from assistant.tools.registry import Tool
-from assistant.tools.untrusted import wrap
-from assistant.tools.web import (
+from allie.tools.registry import Tool
+from allie.tools.untrusted import wrap
+from allie.tools.web import (
     CLIPBOARD_ADDRESS,
     CLIPBOARD_EMPTY,
     MAX_CLIPBOARD_CHARS,
@@ -25,7 +25,7 @@ from assistant.tools.web import (
     fetch_page_for,
     read_clipboard_for,
 )
-from assistant.web.page import (
+from allie.web.page import (
     MAX_PAGE_CHARS,
     Page,
     PageError,

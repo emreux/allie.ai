@@ -19,11 +19,11 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from assistant.agent.core import Confirm, decline
-from assistant.agent.policy import DECLINED, dispatch
-from assistant.live.base import ToolCall
-from assistant.store import memory as store
-from assistant.store.memory import (
+from allie.agent.core import Confirm, decline
+from allie.agent.policy import DECLINED, dispatch
+from allie.live.base import ToolCall
+from allie.store import memory as store
+from allie.store.memory import (
     FACTS_PROMPT,
     MAX_FACT_CHARS,
     MAX_FACTS,
@@ -33,9 +33,9 @@ from assistant.store.memory import (
     UserMemory,
     memory_path,
 )
-from assistant.tools import memory as tools
-from assistant.tools.memory import forget_for, remember_for
-from assistant.tools.registry import ToolRegistry
+from allie.tools import memory as tools
+from allie.tools.memory import forget_for, remember_for
+from allie.tools.registry import ToolRegistry
 
 BASE = "You are an assistant."
 EMRE = "Bana Emre diye hitap et."
@@ -72,7 +72,7 @@ async def through_the_gate(
 
 
 def test_the_file_lives_beside_the_settings(config_home: Path) -> None:
-    """`%APPDATA%\\live-assistant\\memory.toml`: data, roaming, editable, no key."""
+    """`%APPDATA%\\allie\\memory.toml`: data, roaming, editable, no key."""
     assert memory_path() == config_home / "memory.toml"
 
 

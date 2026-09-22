@@ -1,4 +1,4 @@
-# live-assistant
+# Allie
 
 A Windows desktop voice assistant on live speech-to-speech models, running on
 your own API key and in your own language.
@@ -21,9 +21,9 @@ than everything it does.
 
 ```
 uv sync
-uv run live-assistant setup     # provider, key, model, language, voice, microphone
-uv run live-assistant run       # the window; --terminal for a status line, --tray for the icon
-uv run live-assistant doctor    # who answers, what leaves this machine, where the files are
+uv run allie setup     # provider, key, model, language, voice, microphone
+uv run allie run       # the window; --terminal for a status line, --tray for the icon
+uv run allie doctor    # who answers, what leaves this machine, where the files are
 ```
 
 Ctrl+Alt+H stops and starts listening, and cuts an answer short. Ctrl+C quits.
@@ -38,7 +38,7 @@ from the Store, and what it remembers about you. Anything that could matter is
 read back to you and waits for a spoken yes.
 
 The session opens when you start speaking and closes after a minute of silence,
-because a live model bills by the minute while it is open. `live-assistant cost`
+because a live model bills by the minute while it is open. `allie cost`
 reports what the turns used.
 
 ## What leaves this machine

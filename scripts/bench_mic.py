@@ -19,7 +19,7 @@ distance and the echo, waits for you between them, loads Whisper once, and
 prints the four side by side at the end - which is the only way any of these
 numbers mean anything.
 
-`--device` picks the microphone the way `live-assistant run --device` does - words
+`--device` picks the microphone the way `allie run --device` does - words
 from its name, or an index, defaulting to `[audio] input_device` in the
 settings - so what is measured here is the microphone the assistant will
 actually listen through. `--list-devices` prints the choices.
@@ -59,7 +59,7 @@ own sentences replace it. This mode records them the way `bench_stt.py` wants
 them: you type the sentence first, exactly as you are about to say it, then
 say it; the text file is written from what was typed and the recording is
 cut where the detector last heard speech, plus the tail the endpoint would
-keep. Through the same microphone `live-assistant run` opens - a fixture taken
+keep. Through the same microphone `allie run` opens - a fixture taken
 through Windows' effects path measures a signal the assistant never hears.
 
 Nothing is written to disk - except by `--takes`, which writes only into the
@@ -80,24 +80,24 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from assistant.app import Heard, hear
-from assistant.audio.capture import (
+from allie.app import Heard, hear
+from allie.audio.capture import (
     ECHO_TAIL_SECONDS,
     MicrophoneUnavailableError,
     SystemMicrophone,
     device_choice,
 )
-from assistant.audio.vad import (
+from allie.audio.vad import (
     FRAME_SAMPLES,
     SILENCE_SECONDS,
     SPEECH_THRESHOLD,
     Endpoint,
     SileroVAD,
 )
-from assistant.stt.base import NO_SPEECH_CEILING, SAMPLE_RATE, Audio, Transcript
+from allie.stt.base import NO_SPEECH_CEILING, SAMPLE_RATE, Audio, Transcript
 
 if TYPE_CHECKING:
-    from assistant.stt.local_whisper import LocalWhisper
+    from allie.stt.local_whisper import LocalWhisper
 
 SPOKEN = "Bir, iki, üç. Bu cümle mikrofonun ne duyduğunu ölçmek için okunuyor."
 
@@ -235,7 +235,7 @@ def verdict(take: Take, *, quiet: bool) -> None:
 
 async def whisper() -> LocalWhisper:
     """The recogniser, loaded once however many takes are read back."""
-    from assistant.stt.local_whisper import LocalWhisper
+    from allie.stt.local_whisper import LocalWhisper
 
     speech = LocalWhisper()
     await speech.load()
@@ -285,11 +285,11 @@ async def read_back(take: Take, *, language: str, speech: LocalWhisper | None = 
 def stt_language() -> str:
     """The language to expect, from the settings if there are any.
 
-    The same chain `live-assistant run` uses. A script that hardcoded one would be
+    The same chain `allie run` uses. A script that hardcoded one would be
     the language constant section 3.12 exists to prevent.
     """
-    from assistant import locales
-    from assistant.config import is_configured, load_settings
+    from allie import locales
+    from allie.config import is_configured, load_settings
 
     settings = load_settings()
     code = settings.locale.code if is_configured() else locales.system_code()
@@ -297,8 +297,8 @@ def stt_language() -> str:
 
 
 def configured_device() -> str:
-    """The microphone `live-assistant run` would open, from the settings if any."""
-    from assistant.config import load_settings
+    """The microphone `allie run` would open, from the settings if any."""
+    from allie.config import load_settings
 
     return load_settings().audio.input_device
 
@@ -317,8 +317,8 @@ async def echo(*, device: int | str | None = None, floor: Take | None = None) ->
     part of the answer and the room holds the rest, and both arrive after the
     speaker has already been told it is finished.
     """
-    from assistant.audio.player import SystemSpeaker
-    from assistant.tts.sapi import SapiTTS
+    from allie.audio.player import SystemSpeaker
+    from allie.tts.sapi import SapiTTS
 
     tts = SapiTTS()
     voices = await tts.list_voices(None)
@@ -474,7 +474,7 @@ class Split:
 def split(pcm: Audio, *, endpoint: Endpoint, silence: float, name: str) -> Split:
     """Feeds one recording to the endpoint the way the microphone would -
     20 ms blocks, then the silence after it - and notes what came out."""
-    from assistant.audio.capture import CHUNK_FRAMES
+    from allie.audio.capture import CHUNK_FRAMES
 
     endpoint.reset()
     audio = np.concatenate((pcm, np.zeros(round(TAIL_SECONDS * SAMPLE_RATE), dtype=np.float32)))
@@ -509,7 +509,7 @@ def trimmed(pcm: Audio) -> Audio | None:
 
 def slug(said: str) -> str:
     """A file stem from the first words of the sentence: folded, ASCII, short."""
-    from assistant.store.normalize import normalize_search
+    from allie.store.normalize import normalize_search
 
     words = re.sub(r"[^a-z0-9]+", " ", normalize_search(said)).split()
     return "-".join(words[:3]) or "take"
@@ -604,8 +604,8 @@ def fixtures_mode(directory: Path) -> int:
 def main() -> int:
     # The transcript below is in whatever language was spoken, and Windows
     # hands a redirected stream its legacy code page - which has no `ğ` in it.
-    # The same fix `live-assistant run` makes, through the same function.
-    from assistant.__main__ import use_utf8
+    # The same fix `allie run` makes, through the same function.
+    from allie.__main__ import use_utf8
 
     use_utf8(sys.stdout)
     use_utf8(sys.stderr)
@@ -670,7 +670,7 @@ def main() -> int:
         print("or by its index. Words survive a Bluetooth headset connecting; an index does not.")
         return 0
 
-    # The same choice `live-assistant run` makes, so that what is measured here is
+    # The same choice `allie run` makes, so that what is measured here is
     # the microphone the assistant will actually listen through.
     device = device_choice(args.device if args.device is not None else configured_device())
 
@@ -683,7 +683,7 @@ def main() -> int:
             )
         return _measure(args, device)
     except MicrophoneUnavailableError as problem:
-        # The same sentence `live-assistant run` would print, for the same reason:
+        # The same sentence `allie run` would print, for the same reason:
         # a name that matched nothing, or a device that would not open, is the
         # user's to fix, and a traceback says nothing about how.
         print(f"Cannot record: {problem}")

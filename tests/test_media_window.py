@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from assistant import shell
-from assistant.media.window import HTTPS_CHOICE, Browser, MediaWindow, default_browser
+from allie import shell
+from allie.media.window import HTTPS_CHOICE, Browser, MediaWindow, default_browser
 
 MAIN = threading.current_thread()
 CHROME = Browser(

@@ -31,7 +31,7 @@ from google.genai import errors, types
 from loguru import logger
 from websockets.exceptions import ConnectionClosedError
 
-from assistant.live.base import (
+from allie.live.base import (
     AudioChunk,
     AuthenticationError,
     Closed,
@@ -51,7 +51,7 @@ from assistant.live.base import (
     Usage,
     UsageReport,
 )
-from assistant.live.gemini_live import DEFAULT_MODEL, INPUT_MIME, OUTPUT_RATE, GeminiLive
+from allie.live.gemini_live import DEFAULT_MODEL, INPUT_MIME, OUTPUT_RATE, GeminiLive
 from tests.live_contract import (
     COMPLAINT,
     Adapter,

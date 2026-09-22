@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from assistant.audio import volume as module
-from assistant.audio.volume import SystemVolume, to_percent, to_scalar
+from allie.audio import volume as module
+from allie.audio.volume import SystemVolume, to_percent, to_scalar
 
 
 class FakeEndpoint:

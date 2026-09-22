@@ -11,8 +11,8 @@ import threading
 
 import pytest
 
-from assistant.tools import media
-from assistant.tools.media import KEYS, media_control, set_volume_for
+from allie.tools import media
+from allie.tools.media import KEYS, media_control, set_volume_for
 
 
 @pytest.fixture

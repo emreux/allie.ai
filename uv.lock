@@ -8,6 +8,85 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "allie"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "anyascii" },
+    { name = "comtypes" },
+    { name = "faster-whisper" },
+    { name = "google-genai" },
+    { name = "httpx" },
+    { name = "keyring" },
+    { name = "livekit-wakeword" },
+    { name = "loguru" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "platformdirs" },
+    { name = "pydantic-settings" },
+    { name = "pynput" },
+    { name = "pystray" },
+    { name = "python-dateutil" },
+    { name = "pywin32" },
+    { name = "questionary" },
+    { name = "rich" },
+    { name = "selectolax" },
+    { name = "sounddevice" },
+    { name = "soundfile" },
+    { name = "telethon" },
+    { name = "websockets" },
+    { name = "winrt-windows-media-control" },
+    { name = "ytmusicapi" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+    { name = "types-python-dateutil" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anyascii", specifier = ">=0.3.3" },
+    { name = "comtypes", specifier = ">=1.4.17" },
+    { name = "faster-whisper", specifier = ">=1.2.1" },
+    { name = "google-genai", specifier = ">=2.20.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "keyring", specifier = ">=25.7.0" },
+    { name = "livekit-wakeword", specifier = ">=0.2.1" },
+    { name = "loguru", specifier = ">=0.7.3" },
+    { name = "numpy", specifier = ">=2.5.2" },
+    { name = "pillow", specifier = ">=12.3.0" },
+    { name = "platformdirs", specifier = ">=4.11.4" },
+    { name = "pydantic-settings", specifier = ">=2.15.0" },
+    { name = "pynput", specifier = ">=1.8.2" },
+    { name = "pystray", specifier = ">=0.19.5" },
+    { name = "python-dateutil", specifier = ">=2.9.0.post0" },
+    { name = "pywin32", specifier = ">=312" },
+    { name = "questionary", specifier = ">=2.1.1" },
+    { name = "rich", specifier = ">=15.0.0" },
+    { name = "selectolax", specifier = ">=0.4.11" },
+    { name = "sounddevice", specifier = ">=0.5.6" },
+    { name = "soundfile", specifier = ">=0.14.0" },
+    { name = "telethon", specifier = ">=1.45.0" },
+    { name = "websockets", specifier = ">=16.1.1" },
+    { name = "winrt-windows-media-control", specifier = ">=3.2.1" },
+    { name = "ytmusicapi", specifier = ">=1.12.2" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=2.3.1" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pytest-asyncio", specifier = ">=1.4.0" },
+    { name = "ruff", specifier = ">=0.16.4" },
+    { name = "types-python-dateutil", specifier = ">=2.9.0.20260807" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -766,85 +845,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6c/f0/89eb11dffbe9279ff37144dec786927314502ae0b114f1449dc78c458aab/librt-0.15.0-cp315-cp315t-win32.whl", hash = "sha256:c16d15ee371643ab48dc8248a3e680ebbeca573a13af2c3dd0c985b142d77162", size = 104313, upload-time = "2026-08-07T10:49:12.305Z" },
     { url = "https://files.pythonhosted.org/packages/6d/4a/1f1978c200f563beda63c36adff2d65bbecb81e365e8e69e572f5f70fbc6/librt-0.15.0-cp315-cp315t-win_amd64.whl", hash = "sha256:dbd605739f228912dc49027cb764456b9757750bdc2b6b7773164db7096c6fd1", size = 126889, upload-time = "2026-08-07T10:49:13.881Z" },
     { url = "https://files.pythonhosted.org/packages/38/a6/800800bfed7b1fb10fc3f3d557785c3854e80d3f7a9800d784b176a1fc2d/librt-0.15.0-cp315-cp315t-win_arm64.whl", hash = "sha256:84d244b00604d17df3fc7736c327892d6bba66181254aa4087be807b6c342bdc", size = 110700, upload-time = "2026-08-07T10:49:15.499Z" },
-]
-
-[[package]]
-name = "live-assistant"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "anyascii" },
-    { name = "comtypes" },
-    { name = "faster-whisper" },
-    { name = "google-genai" },
-    { name = "httpx" },
-    { name = "keyring" },
-    { name = "livekit-wakeword" },
-    { name = "loguru" },
-    { name = "numpy" },
-    { name = "pillow" },
-    { name = "platformdirs" },
-    { name = "pydantic-settings" },
-    { name = "pynput" },
-    { name = "pystray" },
-    { name = "python-dateutil" },
-    { name = "pywin32" },
-    { name = "questionary" },
-    { name = "rich" },
-    { name = "selectolax" },
-    { name = "sounddevice" },
-    { name = "soundfile" },
-    { name = "telethon" },
-    { name = "websockets" },
-    { name = "winrt-windows-media-control" },
-    { name = "ytmusicapi" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-    { name = "types-python-dateutil" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anyascii", specifier = ">=0.3.3" },
-    { name = "comtypes", specifier = ">=1.4.17" },
-    { name = "faster-whisper", specifier = ">=1.2.1" },
-    { name = "google-genai", specifier = ">=2.20.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "keyring", specifier = ">=25.7.0" },
-    { name = "livekit-wakeword", specifier = ">=0.2.1" },
-    { name = "loguru", specifier = ">=0.7.3" },
-    { name = "numpy", specifier = ">=2.5.2" },
-    { name = "pillow", specifier = ">=12.3.0" },
-    { name = "platformdirs", specifier = ">=4.11.4" },
-    { name = "pydantic-settings", specifier = ">=2.15.0" },
-    { name = "pynput", specifier = ">=1.8.2" },
-    { name = "pystray", specifier = ">=0.19.5" },
-    { name = "python-dateutil", specifier = ">=2.9.0.post0" },
-    { name = "pywin32", specifier = ">=312" },
-    { name = "questionary", specifier = ">=2.1.1" },
-    { name = "rich", specifier = ">=15.0.0" },
-    { name = "selectolax", specifier = ">=0.4.11" },
-    { name = "sounddevice", specifier = ">=0.5.6" },
-    { name = "soundfile", specifier = ">=0.14.0" },
-    { name = "telethon", specifier = ">=1.45.0" },
-    { name = "websockets", specifier = ">=16.1.1" },
-    { name = "winrt-windows-media-control", specifier = ">=3.2.1" },
-    { name = "ytmusicapi", specifier = ">=1.12.2" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=2.3.1" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "pytest-asyncio", specifier = ">=1.4.0" },
-    { name = "ruff", specifier = ">=0.16.4" },
-    { name = "types-python-dateutil", specifier = ">=2.9.0.20260807" },
 ]
 
 [[package]]

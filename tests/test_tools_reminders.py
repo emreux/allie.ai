@@ -16,13 +16,13 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from dateutil.tz import tzlocal
 
-from assistant.agent.core import Confirm
-from assistant.agent.policy import DECLINED, dispatch
-from assistant.live.base import ToolCall
-from assistant.store.db import open_database
-from assistant.store.repos import ReminderRepo
-from assistant.tools.registry import Tool, ToolRegistry
-from assistant.tools.reminders import (
+from allie.agent.core import Confirm
+from allie.agent.policy import DECLINED, dispatch
+from allie.live.base import ToolCall
+from allie.store.db import open_database
+from allie.store.repos import ReminderRepo
+from allie.tools.registry import Tool, ToolRegistry
+from allie.tools.reminders import (
     EMPTY,
     MAX_REMINDER_CHARS,
     NONE_PENDING,

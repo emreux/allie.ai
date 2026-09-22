@@ -19,11 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from assistant.agent.limits import Limits
-from assistant.live.base import Usage
-from assistant.store.db import open_database
-from assistant.store.repos import UsageRepo
-from assistant.usage.tracker import (
+from allie.agent.limits import Limits
+from allie.live.base import Usage
+from allie.store.db import open_database
+from allie.store.repos import UsageRepo
+from allie.usage.tracker import (
     PRICING_FILE_NAME,
     Price,
     Pricing,

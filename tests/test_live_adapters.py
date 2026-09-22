@@ -41,8 +41,8 @@ from pathlib import Path
 
 import pytest
 
-from assistant.live import registry
-from assistant.live.base import (
+from allie.live import registry
+from allie.live.base import (
     AudioChunk,
     AuthenticationError,
     Closed,

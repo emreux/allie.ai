@@ -1,5 +1,5 @@
 [project]
-name = "live-assistant"
+name = "allie"
 version = "0.1.0"                       # L0: the baseline copied from windows-voice-assistant; the live loop is L1 (docs/plan.md)
 description = "A Windows desktop voice assistant on live speech-to-speech models, running on your own API key."
 readme = "README.md"
@@ -40,16 +40,17 @@ dependencies = [
 ]
 
 [project.scripts]
-live-assistant = "assistant.__main__:main"
+allie = "allie.__main__:main"
 
 [build-system]
 requires = ["uv_build>=0.12.6,<0.13.0"]
 build-backend = "uv_build"
 
-# The product is `live-assistant`; the package stays `assistant` so that
-# every module copied from the old repository imports unchanged (plan.md D2).
+# The product, the package and the repository are one name since 2026-09-22
+# (plan.md D2): `allie`, in `allie.ai`. The modules copied from the old
+# repository were renamed with it.
 [tool.uv.build-backend]
-module-name = "assistant"
+module-name = "allie"
 
 [dependency-groups]
 dev = [

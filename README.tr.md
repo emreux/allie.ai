@@ -1,4 +1,4 @@
-# live-assistant
+# Allie
 
 Canlı konuş-konuş modelleri üzerinde çalışan, kendi API anahtarınla ve kendi
 dilinde konuşan bir Windows masaüstü sesli asistanı.
@@ -21,9 +21,9 @@ her şeyi değil.
 
 ```
 uv sync
-uv run live-assistant setup     # sağlayıcı, anahtar, model, dil, ses, mikrofon
-uv run live-assistant run       # pencere; --terminal durum satırı, --tray simge
-uv run live-assistant doctor    # kim cevaplıyor, bu makineden ne çıkıyor, dosyalar nerede
+uv run allie setup     # sağlayıcı, anahtar, model, dil, ses, mikrofon
+uv run allie run       # pencere; --terminal durum satırı, --tray simge
+uv run allie doctor    # kim cevaplıyor, bu makineden ne çıkıyor, dosyalar nerede
 ```
 
 Ctrl+Alt+H dinlemeyi durdurur ve başlatır, ayrıca süren cevabı keser. Ctrl+C çıkar.
@@ -39,7 +39,7 @@ bekler.
 
 Oturum sen konuşmaya başlayınca açılır ve bir dakikalık sessizlikten sonra
 kapanır: canlı model açık kaldığı sürece dakika başına ücretlendirir.
-`live-assistant cost` turların ne harcadığını gösterir.
+`allie cost` turların ne harcadığını gösterir.
 
 ## Bu makineden ne çıkıyor
 

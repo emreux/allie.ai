@@ -14,8 +14,8 @@ import ast
 import inspect
 from pathlib import Path
 
-from assistant.agent import prompts
-from assistant.agent.prompts import (
+from allie.agent import prompts
+from allie.agent.prompts import (
     ANNOUNCED_PREFIX,
     BREVITY,
     LANGUAGE_FALLBACK,

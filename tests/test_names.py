@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from assistant.store.names import CLOSE_ENOUGH, NEAR_ENOUGH, PREFIX_CHARS, NameIndex
+from allie.store.names import CLOSE_ENOUGH, NEAR_ENOUGH, PREFIX_CHARS, NameIndex
 
 
 @dataclass(frozen=True, slots=True)

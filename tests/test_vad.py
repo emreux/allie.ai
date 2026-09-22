@@ -21,14 +21,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from assistant.audio.vad import (
+from allie.audio.vad import (
     CONTEXT_SAMPLES,
     FRAME_SAMPLES,
     Endpoint,
     SileroVAD,
     VoiceDetector,
 )
-from assistant.stt.base import SAMPLE_RATE, Audio
+from allie.stt.base import SAMPLE_RATE, Audio
 
 # A frame of four samples, so that a test can spell out a whole conversation as
 # a list of probabilities. The real one is 512; nothing here depends on which.

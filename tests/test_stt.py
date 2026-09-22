@@ -29,8 +29,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-from assistant.stt.base import SAMPLE_RATE, Audio, STTProvider
-from assistant.stt.local_whisper import (
+from allie.stt.base import SAMPLE_RATE, Audio, STTProvider
+from allie.stt.local_whisper import (
     COMPRESSION_CEILING,
     TOKENS_AT_LEAST,
     TOKENS_PER_SECOND,
@@ -349,7 +349,7 @@ async def test_loading_the_model_leaves_the_event_loop_free() -> None:
 
 
 async def test_nothing_is_loaded_until_something_is_said() -> None:
-    """Constructing the provider must stay cheap: `live-assistant --help` and the
+    """Constructing the provider must stay cheap: `allie --help` and the
     setup wizard both import this module and neither needs a model."""
     built = 0
 
@@ -397,7 +397,7 @@ async def test_two_turns_at_once_do_not_load_two_models() -> None:
 
 async def test_a_model_that_cannot_be_loaded_fails_by_name() -> None:
     """No network on the first run, a broken cache: the user can fix these, so
-    `live-assistant run` has to be able to say so instead of printing a traceback."""
+    `allie run` has to be able to say so instead of printing a traceback."""
 
     def broken() -> Any:
         raise OSError("connection refused while fetching the weights")

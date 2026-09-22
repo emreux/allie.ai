@@ -1,0 +1,328 @@
+# Add your language.
+#
+# Copy this file to <code>.toml - `de.toml`, `es.toml`, `ja.toml` - translate
+# the values, and open a pull request. That is the whole procedure: nothing
+# else in the project has to change for a new language to work, and this file
+# is not offered as a language itself because its name starts with `_`.
+#
+# You do not have to translate everything. A key you leave out is answered in
+# English, so a half-finished pack is usable rather than broken. What you must
+# not change are the key names on the left and the {placeholders} inside the
+# sentences - both are filled in by the code, and a renamed one becomes an
+# error in front of the user.
+
+# Your language's ISO 639-1 code. It has to match the file name: `de.toml`
+# says `code = "de"`.
+code = "xx"
+
+# Your language's name, written in your language. It is shown in the setup
+# wizard's menu, where somebody who does not read English has to find it.
+name = "Your language"
+
+[stt]
+# What the speech recogniser is told to expect. Usually the same as `code`,
+# and separate from it on purpose: this is the language people *speak* to the
+# assistant, not the one it shows them.
+language = "xx"
+
+[speech]
+# The words the assistant listens for after asking "shall I?" - the ones
+# people actually say, in your language. Whole words, any case. A word from
+# `no_words` anywhere in the answer wins over one from `yes_words`, so keep
+# the two lists apart. Leave the table out and the English words are used.
+#
+# These are also what the recogniser of the confirmation window is told to
+# expect before it listens (`app.confirm_prompt`), which is why the list is
+# worth keeping short and worth keeping to words people really say: the live
+# model hears everything else itself.
+yes_words = ["yes", "ok", "okay", "confirm"]
+no_words = ["no", "cancel", "stop"]
+# What the assistant says while a tool is taking its time - "one moment,
+# let me check" - so that a second or two of silence does not feel like
+# one. Short, in your language, ending in a pause; list two or three and
+# they are said in turn. Leave it out and the English one is used.
+filler = ["One moment, let me check..."]
+
+[live]
+# Two hints for the live speech model (plan.md D19). `language_code` is the
+# BCP-47 code of your language - `de-DE`, `es-ES`, `ja-JP` - and is given to
+# the session so that the recogniser behind the model and its voice expect
+# your language; `user_language_rule` is one English sentence for the
+# system prompt naming the language you speak. Without them a short or
+# quiet sentence can be heard as another language and answered in it.
+# Leave both empty to let the server and the prompt use their defaults.
+language_code = "xx-XX"
+user_language_rule = "The user speaks <your language>. A short or quiet utterance is <your language> unless it is unmistakably another language; never switch languages on a guess."
+
+[probe]
+# The one question the setup wizard puts to a model to find out whether it
+# calls a tool: a model that answers this by calling the clock tool passes,
+# one that answers from memory does not. Keep it a question about the time
+# in some city, in your language - the same request then also shows the
+# model understands your language. Leave the table out and the English
+# question is used.
+question = "What time is it in Istanbul?"
+
+[tts.voice]
+# The preferred voice per speech engine, matched against the voices actually
+# installed on the machine. It is a preference, not an identifier: when it is
+# missing, any other voice for your language is used instead. Leave it out if
+# Windows ships no voice for your language - the assistant will read in
+# whatever voice it can find.
+#
+# `allie setup` lists what is installed, and phase 3 adds more engines
+# here (azure, elevenlabs) with their own identifiers.
+sapi = "Name as Windows lists it"
+# The voice Google's synthesiser reads with when `[tts] provider = "gemini"`
+# is set. Its thirty voices - Kore, Charon, Puck, Zephyr and the rest - read
+# every language, so pick the one whose sound suits yours.
+gemini = "Kore"
+
+[ui]
+# Everything the assistant says in words rather than in speech: the setup
+# wizard, and the three things that can go wrong in a turn. Below is the
+# English it falls back to - translate the right-hand side only.
+welcome = "The assistant answers through an AI provider, using your own API key."
+provider = "Which provider do you want to use?"
+only_provider = "Provider: {name} - the only one this version can talk to."
+no_provider = "This version cannot build any provider in the catalogue."
+locale = "Which language should the assistant speak?"
+key_url = "You can create a key at {url}"
+api_key = "Paste your API key (nothing is shown as you type)"
+api_key_keep = "Paste your API key, or press Enter to keep the one already stored"
+key_needed = "This provider needs a key before it will answer."
+checking_key = "Checking the key..."
+# Asked for a server the catalogue has no address for, and said while a
+# server that needs no key is tried.
+base_url = "The server's address - the OpenAI-compatible base URL, ending in /v1"
+checking_server = "Checking that the server answers..."
+bad_key = "That key did not work - mistyped, revoked, or out of credit."
+provider_unreachable = "The provider could not be reached. Check the connection and try again."
+loading_models = "Asking which models the key can reach..."
+no_models = "The key works, but it reaches no model. Check the provider's console."
+model = "Which model should answer?"
+# The tool-use test of design.md 3.2: the chosen model is sent one question
+# with one tool, and is only accepted if it calls the tool. {ms} is how long
+# its first token took; {problem} is the provider's own words.
+probing_tools = "Checking whether the model calls tools..."
+tools_ok = "The model calls tools - first token in {ms} ms."
+tools_failed = "This model does not call tools, and most of what the assistant does depends on that. Choose another model."
+probe_refused = "The model could not be tested: {problem}. Choose another model, or try again."
+# The last question of setup, and the whole of `allie mic`. {name} is the
+# device Windows has chosen at that moment, as PortAudio names it; {microphone}
+# is the label of the choice that was just stored.
+voice = "Which voice should the model speak in? Leave it empty for the model's own."
+hears = "Who hears your yes or no when a tool asks first?"
+hears_local = "Whisper, on this machine - nothing leaves it"
+hears_gemini = "Google's recogniser, with the same key - those two words go to Google"
+reads = "Who reads the questions and the reminders out loud?"
+reads_sapi = "Windows' own voice - nothing leaves this machine"
+reads_gemini = "Google's voice, with the same key - those sentences go to Google"
+microphone = "Which microphone should the assistant listen through?"
+windows_microphone = "Whatever Windows has chosen (right now: {name})"
+no_microphones = "No microphone was found."
+microphone_raw = "That path has no echo cancellation: on speakers the assistant will hear itself and cut itself off. The same microphone's Windows WASAPI or MME entry is safer."
+microphone_saved = "Microphone: {microphone}. Settings: {path}"
+saved = "Ready. Settings: {path} - the key itself is in the Windows Credential Manager."
+cancelled = "Setup cancelled. Nothing was changed."
+
+# Spoken out loud, so keep them short and easy to hear (item 1.10).
+unreachable = "I could not reach the provider. Will you try again?"
+key_invalid = "Your API key is not being accepted any more. You need to renew it."
+took_too_long = "That took too long. Will you try again?"
+# Read after a tool's question ("... will be deleted. Shall I?"), so the
+# user knows only a yes or a no is being listened for; the second one when
+# the answer had neither.
+confirm_hint = "Say yes or no."
+confirm_again = "I did not catch that. Yes, or no?"
+# Said before a session opens once a spending limit is passed, and instead
+# of one when the user asked to be stopped at the limit.
+daily_over = "You have gone over today's spending limit."
+monthly_over = "You have gone over this month's spending limit."
+spend_stopped = "The spending limit has been passed, so I am not asking the model."
+# Said in the local voice at the wake word when [wake] greeting = "sentence".
+wake_greeting = "I am listening."
+# Asked before something the user asked to be remembered is forgotten again;
+# {fact} is the fact itself. "Say yes or no." is added after it.
+forget_confirm = "'{fact}' will be forgotten."
+# Asked before one of the user's notes is deleted; {text} is the note as it
+# was written. "Say yes or no." is added after it.
+note_delete_confirm = "The note '{text}' will be deleted."
+# Asked before a reminder is cancelled; {text} is the reminder as the user
+# gave it. "Say yes or no." is added after it.
+reminder_cancel_confirm = "The reminder '{text}' will be cancelled."
+# Said by the reminder scheduler on its own, with no model involved: a
+# reminder said late, and one sentence for the reminders that went by
+# while the assistant was not running. {minutes} is how late it is,
+# {count} how many went by, {text} the reminder itself.
+reminder_late = "A reminder from {minutes} minutes ago: {text}"
+reminder_missed_one = "While I was off, one reminder went by: {text}"
+reminder_missed_many = "While I was off, {count} reminders went by. The last was: {text}"
+# Asked before an app is downloaded from the Microsoft Store; {name} is the
+# app as the Store lists it and {publisher} who made it. The second sentence
+# is the word used for a publisher the Store did not name.
+store_install_confirm = "'{name}' ({publisher}) will be downloaded from the Microsoft Store."
+unknown_publisher = "unknown publisher"
+# Asked before a message is sent; {text} is the message word for word,
+# {contact} the person as the user said them, {app} the app's name (WhatsApp
+# or Telegram). "Say yes or no." is added after it.
+send_message_confirm = "The message '{text}' will be sent to {contact} on {app}."
+# `allie telegram login`: the questions in the order they are asked, and
+# the two sentences at the end. {name} is the account's own name; {reason}
+# is Telegram's own explanation, in English.
+telegram_api_id = "Your Telegram api_id (a number). Create one at https://my.telegram.org under 'API development tools'"
+telegram_api_hash = "Your Telegram api_hash (nothing is shown as you type)"
+telegram_phone = "The phone number of your Telegram account, with the country code (+90...)"
+telegram_code = "The code Telegram just sent to your Telegram app (not by SMS)"
+telegram_password = "Your Telegram two-step verification password (nothing is shown)"
+telegram_logged_in = "Logged in to Telegram as {name}. The session is in the Credential Manager."
+telegram_login_failed = "Telegram login failed: {reason}"
+# Added to a risky tool's question when the same thing was done, or may have
+# been, a moment ago. {ago} is filled with one of the two spans below.
+duplicate_done = "You already did this {ago} ago."
+duplicate_uncertain = "You tried this {ago} ago, and the outcome is not known."
+seconds_ago = "{count} seconds"
+minutes_ago = "{count} minutes"
+
+# Shown on screen while the assistant runs (item 1.11). The status line holds
+# the state and the hotkey together on one line, so keep these short.
+paused = "Not listening. Press {toggle} to listen again. Ctrl+C stops."
+hands_free = "Listening - just talk. {toggle} stops listening (and cuts an answer short). Ctrl+C stops everything."
+loading_speech = "Loading the speech model..."
+# Shown while the tool-use test of 3.2 is repeated at startup, once a week.
+checking_model = "Checking whether the model calls tools..."
+state_off = "off"
+state_idle = "ready"
+# Behind the wake word (D21): only the phrase is listened for.
+state_sleeping = "asleep"
+state_user_speaking = "hearing you"
+state_confirming = "waiting for a yes or no"
+state_speaking = "speaking"
+state_announcing = "reminding"
+state_reconnecting = "reconnecting"
+you_said = "you"
+it_said = "assistant"
+turn_cost = "{input} in, {output} out"
+# The session and the meter beside the state: a live model bills by the
+# minute while a session is open. {minutes} is a whole number.
+session_open = "session open"
+session_closed = "session closed"
+session_minutes = "{minutes} min this run"
+# Said once when the server heard the microphone too quietly; {level} and
+# {quiet} are dBFS numbers written by the code.
+microphone_quiet = "The microphone is quiet: {level} dBFS reached the server, under {quiet} dBFS. Raise its level or boost in Windows' sound settings."
+
+# Said once, by the command line itself, when it can or cannot start.
+not_set_up = "Nothing is set up yet. Run 'allie setup' first."
+cannot_start = "The assistant cannot start: {problem}"
+stopped = "Stopped."
+# Said at startup when the tool-use test failed; the assistant runs anyway.
+model_no_tools = "The model does not call tools, and most of what the assistant does depends on that. Run 'allie setup' to choose another."
+
+# Shown by `allie cost`: two small tables, today and this month, one row
+# per model. The amounts are written by the code as `$0.0004`.
+cost_none = "No usage recorded yet."
+cost_today = "today"
+cost_month = "this month"
+cost_model = "model"
+cost_turns = "turns"
+cost_tokens = "in / out / cached"
+cost_spent = "spent"
+cost_total = "total"
+cost_unpriced = "{count} turns of {model} have no price in pricing.toml and are not in the total."
+
+# Shown by `allie purge --all`: what will go, what stays, and the one
+# word that is asked for before anything is deleted. The word is `yes` in
+# every language; the sentence names it.
+purge_will_delete = "This will delete everything the assistant recorded:"
+purge_file = "  file: {path}"
+purge_secret = "  Credential Manager entry: {name}"
+purge_keeps = "config.toml and contacts.toml stay: you wrote those."
+purge_confirm = "Type yes to delete all of it:"
+purge_cancelled = "Nothing was deleted."
+purge_done = "Deleted {count} items."
+purge_nothing = "There is nothing to delete."
+
+# The tray icon (`run --tray`): its menu, and the tooltip of an idle
+# microphone that is off. The states themselves use the `state_*` labels.
+tray_not_listening = "not listening"
+tray_stop_listening = "Stop listening"
+tray_start_listening = "Start listening"
+tray_open_settings = "Open the settings folder"
+tray_quit = "Quit"
+tray_show_window = "Show the window"
+
+# The window (`run` without `--terminal`, D20): what it says beside the
+# status line's and the tray's words, and the wizard's page on it.
+window_loading = "Starting..."
+window_settings = "Settings"
+window_setting_up = "Settings are being changed; the assistant starts again afterwards."
+wizard_continue = "Continue"
+wizard_cancel = "Cancel"
+wizard_filter = "Type to filter the list"
+
+# `allie autostart on | off | status`: the Run key of your own sign-in.
+autostart_on = "The assistant will start when you sign in, as: {command}"
+autostart_off = "The assistant will no longer start when you sign in."
+autostart_status_on = "Starts when you sign in, as: {command}"
+autostart_status_off = "Does not start when you sign in. 'allie autostart on' changes that."
+
+# Asked and said by `allie mail login`: the IMAP server, the address,
+# an app password, and how it went.
+mail_host = "The IMAP server of your mail account (imap.gmail.com, outlook.office365.com)"
+mail_user = "The address you sign in with"
+mail_password = "An app password for IMAP - not your account password (nothing is shown as you type)"
+mail_logged_in = "Signed in to {host} as {user}: {count} messages in {mailbox}. The password is in the Credential Manager."
+mail_login_failed = "Mail login failed: {reason}"
+
+# `allie doctor`: one screen of labels. Values - paths, numbers,
+# names - are written by the code; a key is never one of them.
+doctor_pack = "language pack: {name} ({code})"
+doctor_who_answers = "Who answers"
+doctor_model = "  model: {model} ({provider})"
+doctor_key_stored = "  API key: stored in the Credential Manager"
+doctor_key_missing = "  API key: none stored - run 'allie setup'"
+doctor_key_not_needed = "  API key: not needed"
+doctor_verdict_ok = "  tool calling: passed, checked {days} days ago"
+doctor_verdict_failed = "  tool calling: FAILED, checked {days} days ago - most tools will not work"
+doctor_verdict_none = "  tool calling: not checked yet (checked at the next start)"
+doctor_stt_local = "  recogniser: Whisper '{size}', on this machine"
+doctor_stt_gemini = "  recogniser: Google ({model}), Whisper '{size}' behind it"
+doctor_tts_sapi = "  voice: Windows ({voice})"
+doctor_tts_gemini = "  voice: Google ({model}), Windows behind it"
+doctor_leaves = "What leaves this machine"
+doctor_voice_stays = "  your voice: stays here"
+doctor_voice_goes = "  your voice: goes to Google (the recogniser)"
+doctor_text_goes = "  what you said, as text: goes to {provider}"
+doctor_content_goes = "  pages, clipboard text and mail you ask about: go to {provider}"
+doctor_answer_stays = "  what the assistant says: stays here"
+doctor_answer_goes = "  what the assistant says: goes to Google (the voice)"
+doctor_weather = "  a place you ask the weather for: goes to Open-Meteo"
+doctor_store = "  the name of an app you do not have: goes to the Microsoft Store"
+doctor_messages = "  a message: the WhatsApp app on this PC, or Telegram's servers as you"
+doctor_where = "Where things are"
+doctor_settings = "  settings: {path}"
+doctor_contacts = "  contacts: {path} ({count} people)"
+doctor_contacts_none = "  contacts: {path} (not written yet)"
+doctor_memory = "  memory: {path} ({count} facts)"
+doctor_tools_dir = "  your tools: {path}"
+doctor_database = "  database: {path} ({size})"
+doctor_database_none = "  database: {path} (not created yet)"
+doctor_log = "  log: {path}"
+doctor_tools = "Tools"
+doctor_builtin = "  built in: {count}"
+doctor_local = "  your own: {count} ({names})"
+doctor_local_none = "  your own: none"
+doctor_limits = "Limits"
+doctor_per_turn = "  per turn: {calls} tool calls, {tokens} output tokens, {seconds} s"
+doctor_spend_warn = "  spend: ${daily} a day, ${monthly} a month - a warning past either"
+doctor_spend_stop = "  spend: ${daily} a day, ${monthly} a month - the model is not asked past either"
+doctor_retention = "  what a tool answered is kept in the audit for {days} days"
+doctor_retention_forever = "  what a tool answered is kept in the audit for good"
+doctor_set_up = "Set up"
+doctor_mail = "  mail: {user} at {host} ({mailbox})"
+doctor_mail_none = "  mail: not set up ('allie mail login')"
+doctor_telegram = "  telegram: logged in (api_id {api_id})"
+doctor_telegram_none = "  telegram: not set up ('allie telegram login')"
+doctor_autostart_on = "  starts when you sign in: yes ({command})"
+doctor_autostart_off = "  starts when you sign in: no ('allie autostart on')"

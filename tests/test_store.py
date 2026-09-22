@@ -27,12 +27,12 @@ from typing import Any
 
 import pytest
 
-from assistant.config import data_dir
-from assistant.live.base import ToolCall, Usage
-from assistant.store import migrations
-from assistant.store.db import DB_FILE, database_path, open_database
-from assistant.store.migrations import MIGRATIONS, migrate, schema_version
-from assistant.store.repos import (
+from allie.config import data_dir
+from allie.live.base import ToolCall, Usage
+from allie.store import migrations
+from allie.store.db import DB_FILE, database_path, open_database
+from allie.store.migrations import MIGRATIONS, migrate, schema_version
+from allie.store.repos import (
     SUMMARY_CHARS,
     AuditRepo,
     EarlierCall,

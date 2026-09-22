@@ -14,9 +14,9 @@ import math
 
 import pytest
 
-from assistant.app import State
-from assistant.ui import orb
-from assistant.ui.orb import (
+from allie.app import State
+from allie.ui import orb
+from allie.ui.orb import (
     ATTACK_SECONDS,
     BREATH_SECONDS,
     CAPS,

@@ -27,8 +27,8 @@ from typing import Any
 
 import pytest
 
-from assistant.agent.core import Confirm
-from assistant.agent.policy import (
+from allie.agent.core import Confirm
+from allie.agent.policy import (
     DECLINED,
     DISABLED,
     DUPLICATE_WINDOW_SECONDS,
@@ -38,11 +38,11 @@ from assistant.agent.policy import (
     TEXT,
     dispatch,
 )
-from assistant.live.base import ToolCall, ToolSpec
-from assistant.store.db import open_database
-from assistant.store.repos import AuditRepo
-from assistant.stt.base import Transcript
-from assistant.tools.registry import Tool, ToolRegistry, tool
+from allie.live.base import ToolCall, ToolSpec
+from allie.store.db import open_database
+from allie.store.repos import AuditRepo
+from allie.stt.base import Transcript
+from allie.tools.registry import Tool, ToolRegistry, tool
 from tests.test_app import FakeCapture, FakeSTT, assistant_with, speech
 
 TURN = "turn-1"
@@ -163,7 +163,7 @@ async def test_a_message_does_not_go_on_no_and_goes_on_yes_and_the_user_hears_al
     the question carries the contact, the app and the text the model
     chose, word for word - the injection defence for the one tool whose
     wrong argument reaches another person."""
-    from assistant.tools.messaging import send_message_for
+    from allie.tools.messaging import send_message_for
 
     class Ada:
         name = "Ada Lovelace"

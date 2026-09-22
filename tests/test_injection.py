@@ -30,11 +30,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from assistant.agent.core import Confirm, ToolRunner
-from assistant.agent.policy import DECLINED, dispatch
-from assistant.agent.prompts import SYSTEM_PROMPT, UNTRUSTED_RULE
-from assistant.app import CONFIRM_WINDOW_SECONDS, LiveAssistant
-from assistant.live.base import (
+from allie.agent.core import Confirm, ToolRunner
+from allie.agent.policy import DECLINED, dispatch
+from allie.agent.prompts import SYSTEM_PROMPT, UNTRUSTED_RULE
+from allie.app import CONFIRM_WINDOW_SECONDS, LiveAssistant
+from allie.live.base import (
     Closed,
     InputText,
     LiveEvent,
@@ -43,11 +43,11 @@ from assistant.live.base import (
     ToolCallEvent,
     TurnComplete,
 )
-from assistant.tools.mail import Email, read_latest_emails_for
-from assistant.tools.registry import ToolRegistry, tool
-from assistant.tools.untrusted import wrap
-from assistant.tools.web import fetch_page_for, read_clipboard_for
-from assistant.web.page import PageReader, read_html
+from allie.tools.mail import Email, read_latest_emails_for
+from allie.tools.registry import ToolRegistry, tool
+from allie.tools.untrusted import wrap
+from allie.tools.web import fetch_page_for, read_clipboard_for
+from allie.web.page import PageReader, read_html
 from tests.test_app import (
     FakeCapture,
     FakeSpeaker,

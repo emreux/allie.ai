@@ -12,9 +12,9 @@ import threading
 import pytest
 from loguru import logger
 
-from assistant import shell
-from assistant.tools.registry import Tool
-from assistant.tools.web import NO_WORDS, SEARCH_URL, search_web_for
+from allie import shell
+from allie.tools.registry import Tool
+from allie.tools.web import NO_WORDS, SEARCH_URL, search_web_for
 
 
 class Opened:

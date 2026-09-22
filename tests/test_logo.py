@@ -15,10 +15,10 @@ import inspect
 import pytest
 from PIL import Image
 
-from assistant.app import State
-from assistant.ui import logo
-from assistant.ui.logo import ICON_SIZES, MARK, SMALLEST_WITH_HAIRLINE, draw_logo
-from assistant.ui.orb import COLOURS
+from allie.app import State
+from allie.ui import logo
+from allie.ui.logo import ICON_SIZES, MARK, SMALLEST_WITH_HAIRLINE, draw_logo
+from allie.ui.orb import COLOURS
 
 
 def _pixel(image: Image.Image, at: tuple[int, int]) -> tuple[int, int, int, int]:
