@@ -26,10 +26,12 @@ from dataclasses import dataclass
 from assistant.app import State
 
 __all__ = [
+    "ATTACK_SECONDS",
     "BREATH_SECONDS",
     "CAPS",
     "COLOURS",
     "CORE",
+    "RELEASE_SECONDS",
     "RINGS",
     "SILENCE_DBFS",
     "SPEED",
@@ -75,13 +77,15 @@ class Ring:
 # The core disc's radius as a fraction of the orb's radius.
 CORE = 0.50
 
-# The mockup's five arcs, inside out (spec section 3's table).
+# The mockup's five arcs, inside out (spec section 3's table). The tints are
+# a shade stronger than the mockup's since task U1: the two outer arcs at
+# 0.6 and 0.45 sat too close to the background to read as a mechanism.
 RINGS: tuple[Ring, ...] = (
     Ring(radius=0.68, width=0.070, dashes=3, gap=0.25, speed=18.0, tint=1.0),
-    Ring(radius=0.82, width=0.020, dashes=36, gap=0.55, speed=-6.0, tint=0.85),
-    Ring(radius=0.98, width=0.040, dashes=5, gap=0.40, speed=10.0, tint=0.85),
-    Ring(radius=1.12, width=0.020, dashes=2, gap=0.35, speed=-14.0, tint=0.6),
-    Ring(radius=1.30, width=0.012, dashes=72, gap=0.60, speed=3.0, tint=0.45),
+    Ring(radius=0.82, width=0.020, dashes=36, gap=0.55, speed=-6.0, tint=0.90),
+    Ring(radius=0.98, width=0.040, dashes=5, gap=0.40, speed=10.0, tint=0.90),
+    Ring(radius=1.12, width=0.020, dashes=2, gap=0.35, speed=-14.0, tint=0.72),
+    Ring(radius=1.30, width=0.012, dashes=72, gap=0.60, speed=3.0, tint=0.58),
 )
 
 # The dots: (ring index, the dash whose start they sit on).
@@ -125,8 +129,13 @@ BLINK_LOW = 0.55
 SILENCE_DBFS = -90.0
 FLOOR_DBFS = -50.0
 CEILING_DBFS = -10.0
-ATTACK = 0.5
-RELEASE = 0.08
+# How long the swell takes to close the gap, as a time constant rather than
+# a share per frame: the window draws sixty frames a second now where it
+# drew thirty (task U1), and a share per frame would have made every swell
+# twice as fast with it. These two are the old 0.5 and 0.08 a frame at
+# thirty frames, read as seconds.
+ATTACK_SECONDS = 0.048
+RELEASE_SECONDS = 0.40
 
 
 def to_unit(dbfs: float) -> float:
@@ -137,7 +146,9 @@ def to_unit(dbfs: float) -> float:
 class Level:
     """The sound, smoothed for the eye: it rises at once and falls slowly,
     so that a word is a swell and not a flicker. `feed` is told the latest
-    block, `step` is asked once per frame."""
+    block, `step` is asked once per frame and told how long that frame was -
+    so that the same second of sound looks the same however fast the window
+    draws."""
 
     def __init__(self) -> None:
         self.target = 0.0
@@ -146,8 +157,9 @@ class Level:
     def feed(self, dbfs: float) -> None:
         self.target = to_unit(dbfs)
 
-    def step(self) -> float:
-        rate = ATTACK if self.target > self.value else RELEASE
+    def step(self, dt: float) -> float:
+        seconds = ATTACK_SECONDS if self.target > self.value else RELEASE_SECONDS
+        rate = 1.0 - math.exp(-max(dt, 0.0) / seconds)
         self.value += (self.target - self.value) * rate
         self.value = max(0.0, min(1.0, self.value))
         return self.value
@@ -183,7 +195,7 @@ class Orb:
             self.angles[index] = (self.angles[index] + speed * multiple * dt) % 360
 
         breath = 1 + BREATH * math.sin(2 * math.pi * self._seconds / BREATH_SECONDS)
-        scale = breath * (1 + SWELL * self.level.step())
+        scale = breath * (1 + SWELL * self.level.step(dt))
         alpha = 1.0
         if state is State.CONFIRMING:
             wave = 0.5 + 0.5 * math.sin(2 * math.pi * self._seconds / BLINK_SECONDS)

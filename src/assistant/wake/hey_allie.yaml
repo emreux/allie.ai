@@ -1,0 +1,84 @@
+# The "hey Allie" wake word of allie.ai (plan.md D21), trained with
+# livekit-wakeword 0.2.1 from its configs/prod.yaml. One model per name:
+# only the one the user chose in setup is ever loaded (`[wake] model`).
+#
+#   apt-get install -y espeak-ng
+#   pip install "livekit-wakeword[train,export]"
+#   livekit-wakeword setup --config hey_allie.yaml
+#   livekit-wakeword run hey_allie.yaml
+#   -> output/hey_allie/hey_allie.onnx, output/hey_allie/hey_allie_eval.json
+#
+# The hardest of the four, and the numbers say why (measured 2026-09-22):
+# "allie" is AE L IY - two syllables, no consonant cluster, fifty-eight
+# rhyming words in CMUDict - and the Turkish name "Ali" is AA L IY, one
+# vowel away. The "hey" in front is what keeps the two apart, so the
+# phrase is trained with both readings and the negatives are the words
+# that share its ending but not its beginning.
+#
+# Two spellings, not three: a wider decision boundary is the last thing
+# this phrase needs. "allie" AE L IY as an English speaker says it, "ali"
+# AA L IY as a Turkish one does. Both are in CMUDict, so the synthesiser
+# says exactly that. If the owner's ten-minute recording shows wakes on
+# the name Ali, the cure is a higher threshold first, a retrain without
+# the second spelling second.
+model_name: hey_allie
+target_phrases: ["hey allie", "hey ali"]
+
+n_samples: 25000
+n_samples_val: 5000
+n_background_samples: 2000
+n_background_samples_val: 500
+tts_batch_size: 50
+
+# What must NOT wake it: the name without "hey" (so the phrase is the
+# trigger, not the name), and words that share its ending. "alley" is a
+# homophone of "allie" and so is deliberately absent - a negative the
+# model cannot possibly separate only costs recall.
+custom_negative_phrases:
+  - "allie"
+  - "call allie"
+  - "tell allie"
+  - "hey valley"
+  - "hey rally"
+  - "hey holly"
+  - "hey sally"
+  - "hey callie"
+  - "hey jolly"
+  - "hey golly"
+  - "hey alexa"
+  - "hey alibi"
+  - "hey allied"
+  - "hey already"
+  - "hey family"
+
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [0.75, 1.0, 1.25]
+slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]
+
+data_dir: ./data
+output_dir: ./output
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 16
+  rounds: 3
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+model:
+  model_type: conv_attention
+  model_size: medium
+
+steps: 100000
+learning_rate: 0.0001
+weight_decay: 0.01
+label_smoothing: 0.05
+max_negative_weight: 3000
+target_fp_per_hour: 0.1
+
+batch_n_per_class:
+  positive: 50
+  adversarial_negative: 50
+  ACAV100M_sample: 1024
+  background_noise: 50

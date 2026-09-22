@@ -17,9 +17,11 @@ import pytest
 from assistant.app import State
 from assistant.ui import orb
 from assistant.ui.orb import (
+    ATTACK_SECONDS,
     BREATH_SECONDS,
     CAPS,
     COLOURS,
+    RELEASE_SECONDS,
     RINGS,
     SILENCE_DBFS,
     SPEED,
@@ -27,6 +29,9 @@ from assistant.ui.orb import (
     Orb,
     to_unit,
 )
+
+# One frame of the window's sixty a second (`ui/window.py::TICK_MS`).
+FRAME = 1 / 60
 
 
 def test_every_state_has_a_colour_and_a_speed() -> None:
@@ -110,12 +115,14 @@ def test_the_core_breathes_four_percent_on_a_four_second_cycle() -> None:
 
 
 def test_the_core_swells_with_the_level() -> None:
+    """Both breathe on the same clock, so what is left between them is the
+    swell alone - a quarter more at full level."""
     quiet, loud = Orb(), Orb()
     loud.level.feed(-10.0)
 
-    still = quiet.advance(State.USER_SPEAKING, 0.0).core_scale
     for _ in range(40):
-        swollen = loud.advance(State.USER_SPEAKING, 0.0).core_scale
+        still = quiet.advance(State.USER_SPEAKING, FRAME).core_scale
+        swollen = loud.advance(State.USER_SPEAKING, FRAME).core_scale
 
     assert swollen == pytest.approx(still * 1.25, abs=0.01)
 
@@ -155,29 +162,50 @@ def test_dbfs_maps_to_the_unit_range_between_minus_fifty_and_minus_ten(
 
 
 def test_the_level_rises_fast_and_falls_slowly() -> None:
+    """Half the way there in a thirtieth of a second, and a tenth as fast
+    on the way down."""
     level = Level()
     level.feed(-10.0)
-    rise = level.step()
+    rise = level.step(1 / 30)
 
     level.feed(SILENCE_DBFS)
-    fall = rise - level.step()
+    fall = rise - level.step(1 / 30)
 
-    assert rise == pytest.approx(0.5)
-    assert fall == pytest.approx(0.5 * 0.08)
+    assert rise == pytest.approx(0.5, abs=0.005)
+    assert fall == pytest.approx(0.5 * 0.08, abs=0.002)
+
+
+def test_the_level_goes_by_the_clock_and_not_by_the_frame() -> None:
+    """The window draws sixty frames a second now; the same tenth of a
+    second of sound must still look the same at thirty."""
+    coarse, fine = Level(), Level()
+    coarse.feed(-10.0)
+    fine.feed(-10.0)
+
+    for _ in range(3):
+        coarse.step(1 / 30)
+    for _ in range(6):
+        fine.step(1 / 60)
+
+    assert fine.value == pytest.approx(coarse.value, abs=0.01)
 
 
 def test_the_level_settles_on_its_target_and_never_leaves_the_range() -> None:
     level = Level()
     level.feed(-10.0)
     for _ in range(60):
-        value = level.step()
+        value = level.step(FRAME)
     assert value == pytest.approx(1.0, abs=0.001)
     assert 0.0 <= value <= 1.0
 
     level.feed(-200.0)
-    for _ in range(200):
-        value = level.step()
+    for _ in range(300):
+        value = level.step(FRAME)
     assert value == pytest.approx(0.0, abs=0.001)
+
+
+def test_the_swell_rises_far_faster_than_it_falls() -> None:
+    assert ATTACK_SECONDS < RELEASE_SECONDS / 5
 
 
 def test_silence_is_the_floor_the_hooks_send() -> None:

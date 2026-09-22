@@ -1,0 +1,76 @@
+# The "hey Jarvis" wake word of allie.ai (plan.md D21), trained with
+# livekit-wakeword 0.2.1 from its configs/prod.yaml. One model per name:
+# only the one the user chose in setup is ever loaded (`[wake] model`).
+#
+#   apt-get install -y espeak-ng
+#   pip install "livekit-wakeword[train,export]"
+#   livekit-wakeword setup --config hey_jarvis.yaml
+#   livekit-wakeword run hey_jarvis.yaml
+#   -> output/hey_jarvis/hey_jarvis.onnx, output/hey_jarvis/hey_jarvis_eval.json
+#
+# The spellings, and what the toolkit will really say (it expands a word
+# CMUDict does not know into known subwords before synthesis, checked
+# 2026-09-22): "jarvis" JH AA R V AH S, "jar vis" JH AA R + V IH S - the
+# clear i a Turkish speaker says - and "jarvus", which espeak reads by its
+# own rules. Turkish says the j of "jarvis" as in "jandarma" rather than
+# the English "dj"; the two are close enough that the augmented clips
+# cover the difference.
+model_name: hey_jarvis
+target_phrases: ["hey jarvis", "hey jar vis", "hey jarvus"]
+
+n_samples: 25000
+n_samples_val: 5000
+n_background_samples: 2000
+n_background_samples_val: 500
+tts_batch_size: 50
+
+# What must NOT wake it: the name without "hey" (so the phrase is the
+# trigger, not the name), and what sounds like the phrase.
+custom_negative_phrases:
+  - "jarvis"
+  - "call jarvis"
+  - "tell jarvis"
+  - "hey harvest"
+  - "hey service"
+  - "hey javelin"
+  - "hey travis"
+  - "hey davis"
+  - "hey mavis"
+  - "hey carver"
+  - "hey jarrett"
+  - "hey harvard"
+  - "hey java"
+  - "hey jasper"
+  - "hey garage"
+
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [0.75, 1.0, 1.25]
+slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]
+
+data_dir: ./data
+output_dir: ./output
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 16
+  rounds: 3
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+model:
+  model_type: conv_attention
+  model_size: medium
+
+steps: 100000
+learning_rate: 0.0001
+weight_decay: 0.01
+label_smoothing: 0.05
+max_negative_weight: 3000
+target_fp_per_hour: 0.1
+
+batch_n_per_class:
+  positive: 50
+  adversarial_negative: 50
+  ACAV100M_sample: 1024
+  background_noise: 50
