@@ -23,11 +23,13 @@ frozen prompt itself. Past the ceiling `remember` refuses and says so.
 Dropping the oldest quietly would be forgetting something the user said
 not to forget.
 
-**Only the two tools write it.** `remember` and `forget` (`tools/memory.py`)
-go through the gate like every tool (invariant 1); nothing else in the
-program writes here, so the file holds what the user asked for, in the
-words they used. A file that does not parse - a hand edit gone wrong - is
-a sentence at startup and is never written over.
+**Only the two tools write it** - and setup, the name alone. `remember`
+and `forget` (`tools/memory.py`) go through the gate like every tool
+(invariant 1), so the file holds what the user asked for, in the words
+they used; setup writes the name of the assistant the user chose there
+(plan.md D31), which is a thing they asked for too. A file that does not
+parse - a hand edit gone wrong - is a sentence at startup and is never
+written over.
 
 **The block is composed at every session** from what this holds, not once
 at startup. `__main__` reads it inside the `session_config` closure rather than

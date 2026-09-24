@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from allie.assistants import load_assistants
 from allie.audio import wake as module
 from allie.audio.wake import (
     CHIME_RATE,
@@ -25,41 +26,49 @@ from allie.stt.base import SAMPLE_RATE, Audio
 
 HOP = round(HOP_SECONDS * SAMPLE_RATE)
 WINDOW = round(WINDOW_SECONDS * SAMPLE_RATE)
-SHIPPED = Path(str(resources.files("allie.wake") / "hey_friday.onnx"))
+# One model per assistant (plan.md D31); each test below runs once per model.
+MODELS = [assistant.wake for assistant in load_assistants().values()]
+
+
+def shipped(name: str) -> Path:
+    return Path(str(resources.files("allie.wake") / f"{name}.onnx"))
 
 
 # --------------------------------------------------------------------------
-# The shipped model (F6a; skipped until the owner's training lands)
+# The shipped models (F6a)
 # --------------------------------------------------------------------------
 
 
-def test_the_shipped_model_loads_and_hears_nothing_in_silence() -> None:
-    """The one test that runs the real classifier: two seconds of nothing
-    must score under any threshold the owner would set."""
+@pytest.mark.parametrize("name", MODELS)
+def test_a_shipped_model_loads_and_hears_nothing_in_silence(name: str) -> None:
+    """The tests that run the real classifier: two seconds of nothing must
+    score under any threshold the owner would set."""
     wakeword = pytest.importorskip("livekit.wakeword")
-    if not SHIPPED.is_file():
-        pytest.skip("hey_friday.onnx is not trained yet (F6a, the owner's Colab run)")
-
-    model = wakeword.WakeWordModel(models=[str(SHIPPED)])
+    model = wakeword.WakeWordModel(models=[str(shipped(name))])
     silence = np.zeros(32_000, dtype=np.float32)
 
-    assert model.predict(silence)["hey_friday"] < 0.3
+    assert model.predict(silence)[name] < 0.3
 
 
-def test_the_batched_path_scores_exactly_as_the_toolkit_s_predict() -> None:
+@pytest.mark.parametrize("name", MODELS)
+def test_the_batched_path_scores_exactly_as_the_toolkit_s_predict(name: str) -> None:
     """`BatchedModel` runs the sixteen embeddings in one ONNX call (measured
     in F6a: 13 ms instead of 75) and must answer what `predict` answers."""
     wakeword = pytest.importorskip("livekit.wakeword")
-    if not SHIPPED.is_file():
-        pytest.skip("hey_friday.onnx is not trained yet (F6a, the owner's Colab run)")
-
-    model = wakeword.WakeWordModel(models=[str(SHIPPED)])
+    model = wakeword.WakeWordModel(models=[str(shipped(name))])
     window = (np.random.default_rng(0).standard_normal(WINDOW) * 0.02).astype(np.float32)
 
-    theirs = model.predict(window)["hey_friday"]
-    ours = BatchedModel(model, "hey_friday").predict(window)["hey_friday"]
+    theirs = model.predict(window)[name]
+    ours = BatchedModel(model, name).predict(window)[name]
 
     assert ours == pytest.approx(theirs, abs=1e-5)
+
+
+@pytest.mark.parametrize("name", MODELS)
+def test_a_shipped_model_is_found_by_its_stem(name: str) -> None:
+    path = shipped(name)
+
+    assert wake_model_path(name) == path
 
 
 # --------------------------------------------------------------------------
@@ -169,15 +178,6 @@ def test_the_chime_is_two_short_notes_at_the_speaker_s_rate() -> None:
     peak = float(np.abs(samples).max()) / 32767
     assert 0.15 <= peak <= 0.4  # around -12 dBFS, not a shock
     assert samples[0] == 0 and samples[-1] == 0  # faded, no click
-
-
-def test_a_shipped_model_is_found_by_its_stem_and_a_file_by_its_path(tmp_path: Path) -> None:
-    if not SHIPPED.is_file():
-        pytest.skip("hey_friday.onnx is not trained yet (F6a, the owner's Colab run)")
-    assert wake_model_path("hey_friday").name == "hey_friday.onnx"
-    own = tmp_path / "mine.onnx"
-    own.write_bytes(b"\x00")
-    assert wake_model_path(str(own)) == own
 
 
 def test_the_user_s_own_model_is_found_by_its_path(tmp_path: Path) -> None:

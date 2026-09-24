@@ -2,18 +2,23 @@
 
 The toolkit trains on synthetic speech and cannot take a recording as a
 positive; what a recording can do is set the threshold. So: `record` a
-clip at the pipeline's 16 kHz (say "hey Friday" once per clip, at the
-desk, across the room, over music), `score` a folder of them and one long
-recording of ordinary talk, and read off the threshold where every clip
-wakes it and the long one does not. `bench` times one prediction over a
-two-second window, both the toolkit's own `predict` (one embedding call
-per window, sixteen calls) and the batched path `audio/wake.py` takes (one
-call for all sixteen) - the number the detector's hop is sized against.
+clip at the pipeline's 16 kHz (say "hey Vesper" - the chosen assistant's
+phrase - once per clip, at the desk, across the room, over music), `score`
+a folder of them and one long recording of ordinary talk, and read off the
+threshold where every clip wakes it and the long one does not. `bench`
+times one prediction over a two-second window, both the toolkit's own
+`predict` (one embedding call per window, sixteen calls) and the batched
+path `audio/wake.py` takes (one call for all sixteen) - the number the
+detector's hop is sized against.
+
+`--model` is a stem this program ships or a path to an `.onnx`; left out,
+the one `[wake] model` names. `--threshold` left out is the one the model
+shipped with (`wake/assistants.toml`, plan.md D31).
 
     uv run python scripts/wake_eval.py record clips/desk-01.wav --seconds 3
     uv run python scripts/wake_eval.py record noise/talk-10min.wav --seconds 600
     uv run python scripts/wake_eval.py score --positives clips --negative noise/talk-10min.wav
-    uv run python scripts/wake_eval.py bench
+    uv run python scripts/wake_eval.py --model hey_allie bench
 """
 
 from __future__ import annotations
@@ -22,16 +27,18 @@ import argparse
 import sys
 import time
 import wave
-from importlib import resources
 from pathlib import Path
 
 import numpy as np
+
+from allie.assistants import threshold_for
+from allie.audio.wake import wake_model_path
+from allie.config import load_settings
 
 RATE = 16_000
 WINDOW = 2 * RATE
 HOP = 1280 * 4  # LiveKit's own frame is 1280 samples; four of them: 320 ms
 DEBOUNCE_SECONDS = 2.0
-SHIPPED = Path(str(resources.files("allie.wake") / "hey_friday.onnx"))
 
 
 def record(path: Path, seconds: float) -> None:
@@ -141,7 +148,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--model", type=Path, default=SHIPPED)
+    parser.add_argument("--model", default=None)
     commands = parser.add_subparsers(dest="command", required=True)
     rec = commands.add_parser("record")
     rec.add_argument("path", type=Path)
@@ -149,15 +156,17 @@ def main(argv: list[str]) -> int:
     sc = commands.add_parser("score")
     sc.add_argument("--positives", type=Path, required=True)
     sc.add_argument("--negative", type=Path)
-    sc.add_argument("--threshold", type=float, default=0.5)
+    sc.add_argument("--threshold", type=float, default=None)
     commands.add_parser("bench")
     args = parser.parse_args(argv)
+    model = args.model if args.model is not None else load_settings().wake.model
     if args.command == "record":
         record(args.path, args.seconds)
     elif args.command == "score":
-        score(args.model, args.positives, args.negative, args.threshold)
+        threshold = args.threshold if args.threshold is not None else threshold_for(model)
+        score(wake_model_path(model), args.positives, args.negative, threshold)
     else:
-        bench(args.model)
+        bench(wake_model_path(model))
     return 0
 
 

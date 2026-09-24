@@ -1,6 +1,6 @@
 """`allie setup` - the few questions phase 1 asks (design.md section 3.3).
 
-Provider, key, model, the language the assistant speaks, the model's voice,
+Which assistant, provider, key, model, the language the assistant speaks,
 who hears the yes or no of a confirmation, who reads the questions out loud,
 and the microphone it listens through. The fourteen step wizard of section
 3.3 - device tests, tool probe, latency measurement, a fallback model - is
@@ -47,6 +47,15 @@ The Windows audio engine's entries lead the list and a raw kernel-streaming
 choice is warned about (plan.md D18): that path has no echo cancellation,
 and the assistant hears itself through the speakers.
 
+**The assistant is asked first** (plan.md D31): Jarvis, Vesper, Allie or
+Friday, each a name, a voice and a wake phrase of its own
+(`wake/assistants.toml`). The answer is three settings - `[wake] model`,
+`[live] voice` by the provider's own name, and the name in `memory.toml`,
+the one file besides `config.toml` setup writes, so that the model knows
+what it is called. It replaced the free-text voice question: a voice now
+comes with a name. A threshold tuned by hand stays only when the same
+assistant is chosen again - it was measured for that model.
+
 **The local engines serve the gate window and the reminders** (plan.md D3,
 D4, D10). The model speaks for itself; Whisper or Google's recogniser hears
 the yes or no after a tool asks first, and Windows' or Google's voice reads
@@ -64,9 +73,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import questionary
+from loguru import logger
 from rich.console import Console
 
 from allie import locales
+from allie.assistants import Assistant, load_assistants
 from allie.audio.capture import (
     FULL_DUPLEX_HOST_APIS,
     MicrophoneInfo,
@@ -94,6 +105,7 @@ from allie.live.registry import (
     needs_base_url,
 )
 from allie.store.db import open_database
+from allie.store.memory import MemoryFileError, UserMemory
 from allie.store.repos import SettingsRepo
 
 __all__ = [
@@ -152,6 +164,11 @@ class Prompter(Protocol):
 # the other.
 TEXT: dict[str, str] = {
     "welcome": "The assistant answers through an AI provider, using your own API key.",
+    "assistant": (
+        "Which assistant do you want? Each has a name, a voice and a wake phrase of its own."
+    ),
+    "assistant_male": '{name} - a man\'s voice, wakes to "hey {name}"',
+    "assistant_female": '{name} - a woman\'s voice, wakes to "hey {name}"',
     "provider": "Which provider do you want to use?",
     "only_provider": "Provider: {name} - the only one this version can talk to.",
     "no_provider": "This version cannot build any provider in the catalogue.",
@@ -179,7 +196,6 @@ TEXT: dict[str, str] = {
     "probe_refused": (
         "The model could not be tested: {problem}. Choose another model, or try again."
     ),
-    "voice": "Which voice should the model speak in? Leave it empty for the model's own.",
     "hears": "Who hears your yes or no when a tool asks first?",
     "hears_local": "Whisper, on this machine - nothing leaves it",
     "hears_gemini": "Google's recogniser, with the same key - those two words go to Google",
@@ -233,16 +249,24 @@ async def run_setup(
     catalog: Mapping[str, ProviderEntry] | None = None,
     database: sqlite3.Connection | None = None,
     microphones: Microphones | None = None,
+    assistants: Mapping[str, Assistant] | None = None,
 ) -> int:
     """Asks the questions, then writes the answers. Returns a process exit code.
 
     `database` is where the verdict on the model goes; left out, the
     machine's own is opened for it at the end, and closed again.
     `microphones` is what the last question offers; left out, PortAudio is
-    asked.
+    asked. `assistants` is what the first one offers; left out, the
+    packaged catalogue.
     """
     try:
-        return await _ask(prompter, catalog, database, microphones)
+        return await _ask(
+            prompter,
+            catalog,
+            database,
+            microphones,
+            load_assistants() if assistants is None else assistants,
+        )
     except _WalkedAwayError:
         prompter.say("cancelled")
         return _GAVE_UP
@@ -279,6 +303,7 @@ async def _ask(
     catalog: Mapping[str, ProviderEntry] | None,
     database: sqlite3.Connection | None,
     microphones: Microphones | None,
+    assistants: Mapping[str, Assistant],
 ) -> int:
     entries = load_catalog() if catalog is None else catalog
     buildable = {
@@ -291,6 +316,7 @@ async def _ask(
         return _GAVE_UP
 
     prompter.say("welcome")
+    assistant = await _pick_assistant(prompter, assistants)
     provider_id, entry = await _pick_provider(prompter, buildable)
     locale = _answered(await prompter.choose("locale", _languages()))
     base_url = await _address(prompter, entry)
@@ -314,7 +340,6 @@ async def _ask(
     model, verdict = await _model_that_calls_tools(
         prompter, provider, models, question=_probe_question(locale)
     )
-    voice = _answered(await prompter.ask("voice")).strip()
     google = provider_id == "gemini" or load_api_key("gemini") is not None
     hears = await _pick_engine(prompter, "hears", ("local", "gemini"), google=google)
     reads = await _pick_engine(prompter, "reads", ("sapi", "gemini"), google=google)
@@ -322,7 +347,8 @@ async def _ask(
 
     # Everything above could still be abandoned; from here it is written down.
     # The tables setup asks part of keep the rest from the file: the session
-    # numbers of `[live]` and the engines' models are the owner's to tune.
+    # numbers of `[live]`, the engines' models and the greeting are the
+    # owner's to tune.
     if api_key:
         store_api_key(provider_id, api_key)
     kept = load_settings()
@@ -332,7 +358,17 @@ async def _ask(
                 update={
                     "primary": f"{provider_id}:{model}",
                     "base_url": base_url or "",
-                    "voice": voice,
+                    "voice": assistant.voice_for(provider_id),
+                }
+            ),
+            wake=kept.wake.model_copy(
+                update={
+                    "enabled": True,
+                    "model": assistant.wake,
+                    # Measured for one model, meaningless for another.
+                    "threshold": (
+                        kept.wake.threshold if kept.wake.model == assistant.wake else None
+                    ),
                 }
             ),
             locale=LocaleSettings(code=locale),
@@ -341,9 +377,35 @@ async def _ask(
             tts=kept.tts.model_copy(update={"provider": reads}),
         )
     )
+    _name(assistant.name)
     _remember(database, provider_id, model, verdict)
     prompter.say("saved", path=path)
     return _OK
+
+
+async def _pick_assistant(prompter: Prompter, assistants: Mapping[str, Assistant]) -> Assistant:
+    """Which of them (plan.md D31): each offered by its name and its voice,
+    in the words of the wizard's own language, like the engines' labels."""
+    said = wording()
+    options = [
+        Option(assistant.id, said[f"assistant_{assistant.gender}"].format(name=assistant.name))
+        for assistant in assistants.values()
+    ]
+    return assistants[_answered(await prompter.choose("assistant", options))]
+
+
+def _name(name: str) -> None:
+    """Tells the model what it is called: `memory.toml`'s `[assistant]
+    name`, which it reads at every session (D23). A file edited into
+    something that does not parse is never written over - `run` says so in
+    a sentence - and the name waits for the next setup."""
+    try:
+        memory = UserMemory.load()
+    except MemoryFileError as problem:
+        logger.warning("setup: the assistant's name was not written: {problem}", problem=problem)
+        return
+    if memory.name != name:
+        memory.rename(name)
 
 
 async def _pick_provider(

@@ -19,13 +19,16 @@ Since 2026-09-15 the last question is which microphone to listen through,
 and `allie mic` asks that one question on its own. The device list is
 handed in, so no test touches PortAudio.
 
-The live product (plan.md L1.6) added three questions between the model and
-the microphone: the model's voice (free text, empty for its own - D19), who
-hears the yes or no of a confirmation and who reads the questions out loud
-(D10: the local recogniser and the local voice serve only the gate window
-and the reminders now). And the microphone list puts the Windows audio
-engine first and warns on a raw kernel-streaming choice (D18): that path
-has no echo cancellation, and the assistant hears itself.
+The live product (plan.md L1.6) added two questions between the model and
+the microphone: who hears the yes or no of a confirmation and who reads the
+questions out loud (D10: the local recogniser and the local voice serve
+only the gate window and the reminders now). And the microphone list puts
+the Windows audio engine first and warns on a raw kernel-streaming choice
+(D18): that path has no echo cancellation, and the assistant hears itself.
+
+Since 2026-09-23 the first question is which assistant (D31): Jarvis,
+Vesper, Allie or Friday, a name, a voice and a wake phrase each. It took
+the place of L1.6's free-text voice question.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from allie import locales
+from allie.assistants import load_assistants
 from allie.audio.capture import MicrophoneInfo, Microphones
 from allie.config import (
     KEYRING_SERVICE,
@@ -53,6 +57,7 @@ from allie.config import (
     Settings,
     STTSettings,
     TTSSettings,
+    WakeSettings,
     config_path,
     load_settings,
     save_settings,
@@ -80,6 +85,7 @@ from allie.setup_wizard import (
 )
 from allie.store import db
 from allie.store.db import open_database
+from allie.store.memory import UserMemory, memory_path
 from allie.store.repos import SettingsRepo
 from tests.conftest import MemoryKeyring
 from tests.live_contract import FakeLiveSession
@@ -246,10 +252,10 @@ def laptop_microphones(monkeypatch: pytest.MonkeyPatch) -> None:
 def complete_run(**overrides: str | list[str | None] | None) -> ScriptedPrompter:
     """A prompter scripted to walk the wizard from end to end."""
     answers: dict[str, str | list[str | None] | None] = {
+        "assistant": "vesper",
         "locale": "tr",
         "api_key": GOOD_KEY,
         "model": "fast",
-        "voice": "",
         "hears": "local",
         "reads": "sapi",
         "microphone": "",
@@ -375,7 +381,7 @@ async def test_a_provider_that_needs_no_key_is_not_asked_for_one(
 ) -> None:
     """A local Ollama has nothing to authenticate with. The server is asked
     whether it answers, and nothing goes to the Credential Manager."""
-    prompter = ScriptedPrompter(locale="tr", model="fast", voice="", microphone="")
+    prompter = ScriptedPrompter(assistant="vesper", locale="tr", model="fast", microphone="")
 
     exit_code = await run_setup(prompter, catalog=local_catalog())
 
@@ -395,7 +401,7 @@ async def test_a_local_server_that_does_not_answer_ends_the_wizard(
     """There is no key to ask for again: the user starts the server and
     comes back. Nothing is written."""
     monkeypatch.setattr(FakeProvider, "down", True)
-    prompter = ScriptedPrompter(locale="tr")
+    prompter = ScriptedPrompter(assistant="vesper", locale="tr")
 
     exit_code = await run_setup(prompter, catalog=local_catalog())
 
@@ -543,7 +549,7 @@ async def test_a_stored_key_that_stopped_working_is_replaced(
     exit_code = await run_setup(prompter, catalog=fake_catalog())
 
     assert exit_code == 0
-    assert prompter.asked[:4] == ["locale", "api_key_keep", "api_key", "model"]
+    assert prompter.asked[:5] == ["assistant", "locale", "api_key_keep", "api_key", "model"]
     assert vault.vault == {(KEYRING_SERVICE, "gemini"): GOOD_KEY}
 
 
@@ -752,30 +758,144 @@ def test_the_failed_verdict_has_the_reason_of_section_3_2() -> None:
 
 
 # --------------------------------------------------------------------------
-# The voice, who hears the yes or no, who reads the questions (L1.6)
+# The assistant (D31): a name, a voice and a wake phrase
 # --------------------------------------------------------------------------
 
 
-async def test_the_voice_is_free_text_and_empty_means_the_model_s_own(
+async def test_the_four_assistants_are_offered_first_by_name_and_voice(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
-    """Plan.md D19: the owner's ear preferred the model's default, and no
-    adapter lists voices, so the question is a line to type - or to leave
-    empty, which is what `[live] voice = ""` means."""
-    prompter = complete_run(voice="  ")
+    """In the wizard's own language, like the engines' labels: the language
+    of last time, which is what the file says before the run."""
+    save_settings(Settings(locale=LocaleSettings(code="tr")))
+    prompter = complete_run()
 
     await run_setup(prompter, catalog=fake_catalog())
 
-    assert "voice" in prompter.asked
+    assert prompter.asked[0] == "assistant"
+    assert prompter.offered["assistant"] == ["jarvis", "vesper", "allie", "friday"]
+    male, female = turkish("assistant_male"), turkish("assistant_female")
+    assert prompter.labelled["assistant"] == [
+        male.format(name="Jarvis"),
+        male.format(name="Vesper"),
+        female.format(name="Allie"),
+        female.format(name="Friday"),
+    ]
+
+
+async def test_the_assistant_chosen_is_its_wake_word_its_voice_and_its_name(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """Vesper: "hey Vesper" wakes it, it speaks in the voice the catalogue
+    gives it on Gemini, and the model is told its name through memory.toml.
+    No threshold is written - the one the model shipped with is read."""
+    await run_setup(complete_run(assistant="vesper"), catalog=fake_catalog())
+
+    settings = load_settings()
+    assert (settings.wake.enabled, settings.wake.model) == (True, "hey_vesper")
+    assert settings.wake.threshold is None
+    assert settings.live.voice == load_assistants()["vesper"].voice_for("gemini")
+    assert settings.live.voice
+    assert UserMemory.load().name == "Vesper"
+
+
+@pytest.mark.parametrize("chosen", ["jarvis", "vesper", "allie", "friday"])
+async def test_every_assistant_is_set_up_the_same_way(
+    config_home: Path, vault: MemoryKeyring, chosen: str
+) -> None:
+    await run_setup(complete_run(assistant=chosen), catalog=fake_catalog())
+
+    assistant = load_assistants()[chosen]
+    settings = load_settings()
+    assert settings.wake.model == assistant.wake
+    assert settings.live.voice == assistant.voice_for("gemini")
+    assert UserMemory.load().name == assistant.name
+
+
+async def test_another_assistant_renames_the_one_there_was(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """The owner's memory.toml says Friday; choosing Vesper must not leave
+    a model that wakes to "hey Vesper" and calls itself Friday. The facts
+    stay where they were."""
+    UserMemory(name="Friday", facts=["Emre Patron"]).save()
+
+    await run_setup(complete_run(assistant="vesper"), catalog=fake_catalog())
+
+    memory = UserMemory.load()
+    assert (memory.name, memory.facts) == ("Vesper", ["Emre Patron"])
+
+
+async def test_a_memory_file_that_does_not_parse_is_not_written_over(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """`run` will say what is wrong with it; setup still writes its settings."""
+    broken = memory_path()
+    broken.parent.mkdir(parents=True, exist_ok=True)
+    broken.write_text("[assistant\nname = ", encoding="utf-8")
+
+    exit_code = await run_setup(complete_run(), catalog=fake_catalog())
+
+    assert exit_code == 0
+    assert broken.read_text(encoding="utf-8") == "[assistant\nname = "
+    assert load_settings().wake.model == "hey_vesper"
+
+
+async def test_a_provider_with_no_voice_for_the_assistant_speaks_in_its_own(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    await run_setup(
+        complete_run(provider="openrouter"), catalog=fake_catalog("gemini", "openrouter")
+    )
+
     assert load_settings().live.voice == ""
 
 
-async def test_a_voice_that_was_named_lands_in_the_settings(
+async def test_the_same_assistant_again_keeps_the_threshold_measured_for_it(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
-    await run_setup(complete_run(voice=" Kore "), catalog=fake_catalog())
+    """A threshold from the owner's own recordings belongs to the model it
+    was measured on; the greeting is theirs whatever they choose."""
+    save_settings(
+        Settings(
+            wake=WakeSettings(enabled=True, model="hey_vesper", threshold=0.7, greeting="none")
+        )
+    )
 
-    assert load_settings().live.voice == "Kore"
+    await run_setup(complete_run(assistant="vesper"), catalog=fake_catalog())
+
+    wake = load_settings().wake
+    assert (wake.threshold, wake.greeting) == (0.7, "none")
+
+
+async def test_another_assistant_starts_from_its_own_model_s_threshold(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    save_settings(
+        Settings(
+            wake=WakeSettings(enabled=True, model="hey_vesper", threshold=0.7, greeting="none")
+        )
+    )
+
+    await run_setup(complete_run(assistant="allie"), catalog=fake_catalog())
+
+    wake = load_settings().wake
+    assert (wake.model, wake.threshold, wake.greeting) == ("hey_allie", None, "none")
+
+
+async def test_walking_away_from_the_assistant_writes_nothing(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    exit_code = await run_setup(complete_run(assistant=None), catalog=fake_catalog())
+
+    assert exit_code != 0
+    assert not config_path().exists()
+    assert not memory_path().exists()
+
+
+# --------------------------------------------------------------------------
+# Who hears the yes or no, who reads the questions (L1.6)
+# --------------------------------------------------------------------------
 
 
 async def test_who_hears_the_yes_or_no_is_asked_when_google_is_at_hand(
@@ -848,14 +968,22 @@ async def test_a_google_key_stored_earlier_is_enough_to_offer_google(
 async def test_the_questions_come_in_the_plan_s_order(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
-    """Plan.md L1.6: provider, key, model, voice, who hears, who reads,
-    microphone - the microphone last, so that walking away there still
-    leaves nothing written."""
+    """Plan.md L1.6 and D31: the assistant first, then provider, key,
+    model, who hears, who reads, microphone - the microphone last, so that
+    walking away there still leaves nothing written."""
     prompter = complete_run()
 
     await run_setup(prompter, catalog=fake_catalog())
 
-    assert prompter.asked == ["locale", "api_key", "model", "voice", "hears", "reads", "microphone"]
+    assert prompter.asked == [
+        "assistant",
+        "locale",
+        "api_key",
+        "model",
+        "hears",
+        "reads",
+        "microphone",
+    ]
 
 
 async def test_setup_run_again_keeps_the_session_tuning_and_the_engines_models(
@@ -874,11 +1002,11 @@ async def test_setup_run_again_keeps_the_session_tuning_and_the_engines_models(
         )
     )
 
-    await run_setup(complete_run(model="smart", voice="Kore"), catalog=fake_catalog())
+    await run_setup(complete_run(model="smart", assistant="friday"), catalog=fake_catalog())
 
     settings = load_settings()
     assert settings.live.primary == "gemini:smart"
-    assert settings.live.voice == "Kore"
+    assert settings.live.voice == load_assistants()["friday"].voice_for("gemini")
     assert (settings.live.idle_close_seconds, settings.live.end_sensitivity) == (30.0, "HIGH")
     assert (settings.stt.provider, settings.stt.model) == ("local", "a-recogniser")
     assert (settings.tts.provider, settings.tts.model) == ("sapi", "a-voice")
@@ -1121,7 +1249,7 @@ async def test_a_key_that_reaches_no_model_stops_the_wizard(
     monkeypatch.setattr(FakeProvider, "models", [])
 
     exit_code = await run_setup(
-        ScriptedPrompter(locale="tr", api_key=GOOD_KEY), catalog=fake_catalog()
+        ScriptedPrompter(assistant="vesper", locale="tr", api_key=GOOD_KEY), catalog=fake_catalog()
     )
 
     assert exit_code != 0
@@ -1275,10 +1403,10 @@ async def test_the_wizard_runs_through_the_window_and_leaves_the_same_settings(
     from allie.ui.window import Window, WindowPrompter
 
     answers: dict[str, str | None] = {
+        "assistant": "vesper",
         "locale": "tr",
         "api_key": GOOD_KEY,
         "model": "smart",
-        "voice": "",
         "hears": "local",
         "reads": "sapi",
         "microphone": "",
@@ -1311,9 +1439,9 @@ async def test_the_wizard_runs_through_the_window_and_leaves_the_same_settings(
     assert vault.vault == {(KEYRING_SERVICE, "gemini"): GOOD_KEY}
     assert [kind for kind, _ in page.pages] == [
         "choose",
+        "choose",
         "secret",
         "choose",
-        "ask",
         "choose",
         "choose",
         "choose",
@@ -1328,7 +1456,7 @@ async def test_walking_away_from_the_window_s_page_is_the_wizard_s_cancel(
     from allie.ui.window import Window, WindowPrompter
 
     def panel(view: Any, window: Any) -> PageAnswers:
-        return PageAnswers(view, window, {"locale": None})
+        return PageAnswers(view, window, {"assistant": None})
 
     window = Window(
         locales.load("en"),

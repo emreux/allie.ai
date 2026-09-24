@@ -309,6 +309,11 @@ def test_a_file_written_before_there_was_a_web_table_searches_google(config_home
     assert load_settings().web.search_url == "https://www.google.com/search?q={query}"
 
 
+def test_the_look_up_model_is_the_one_the_free_key_may_search_with() -> None:
+    """D29: the 2.5 family is the free tier's only one with Google's search."""
+    assert WebSettings().look_up_model == "gemini-2.5-flash"
+
+
 def test_the_messaging_default_and_the_telegram_id_round_trip(config_home: Path) -> None:
     """`[messaging] default_app` and `[telegram] api_id` (2026-09-15). The
     hash and the session are secrets and never reach this file."""
@@ -475,13 +480,23 @@ def test_an_unknown_recogniser_is_refused() -> None:
 
 
 def test_the_wake_table_has_the_owner_s_defaults(config_home: Path) -> None:
-    """Off until the trained model ships (F6a, the owner's Colab run,
-    2026-09-21): a default that names a file that is not there would stop
-    every run. The rest is the owner's choice: the chime, `hey_friday`."""
+    """Off for a file setup has not written since the assistants arrived
+    (D31): setup turns it on with the model, the voice and the name of the
+    one chosen. No threshold of its own: the model's is read. The rest is
+    the owner's choice: the chime."""
     wake = load_settings().wake
 
     assert (wake.enabled, wake.model, wake.greeting) == (False, "hey_friday", "chime")
-    assert 0 < wake.threshold < 1
+    assert wake.threshold is None
+
+
+def test_a_threshold_left_out_stays_out_of_the_file(config_home: Path) -> None:
+    """So that the one the model shipped with is read at every start, and
+    a better number reaches the user with the next version."""
+    save_settings(Settings(wake=WakeSettings(enabled=True, model="hey_vesper")))
+
+    assert "threshold" not in config_path().read_text(encoding="utf-8")
+    assert load_settings().wake.threshold is None
 
 
 def test_the_wake_table_round_trips_through_the_file(config_home: Path) -> None:

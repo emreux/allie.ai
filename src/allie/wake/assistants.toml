@@ -1,0 +1,58 @@
+# The assistants this program offers (plan.md D31, 2026-09-23).
+#
+# Each is a name, a voice and a wake phrase of its own; `allie setup` asks
+# which one, first, and the answer sets `[wake] model`, `[live] voice` and
+# the name in memory.toml. Only the chosen one's classifier is loaded - the
+# others stay on disk. The order below is the order setup offers them in.
+#
+# Fields:
+#   name        what the assistant is called, and answers to
+#   gender      "male" or "female": what setup says about the voice
+#   wake        the classifier's stem - `<wake>.onnx` beside this file, trained
+#               from `<wake>.yaml` beside it
+#   threshold   the score that counts as the phrase, from the model's own
+#               eval: the highest recall under 0.1 false wakes an hour. Left
+#               out, it is 0.5. `[wake] threshold` in config.toml outranks it.
+#   voices      the voice by each provider's own name, keyed by the provider's
+#               id in providers.toml; a provider left out speaks in its default
+#
+# The Gemini voices were checked on 2026-09-23 against `gemini-3.8-live`: each
+# opened a session and spoke, and its measured pitch agreed with the gender
+# Google's voice list gives it (Charon 108 Hz, Orus 131 Hz; Aoede 173 Hz,
+# Kore 188 Hz).
+
+[jarvis]
+name = "Jarvis"
+gender = "male"
+wake = "hey_jarvis"
+# Kaggle run of 2026-09-23: recall 83.9 % at 0.077 false wakes an hour on
+# 25.9 hours of validation audio (89.6 % / 0.43 at 0.5).
+threshold = 0.77
+voices = { gemini = "Charon" }
+
+[vesper]
+name = "Vesper"
+gender = "male"
+wake = "hey_vesper"
+# Kaggle run of 2026-09-23: recall 85.9 % at 0.077 false wakes an hour on
+# 25.9 hours of validation audio (88.2 % / 0.27 at 0.5).
+threshold = 0.61
+voices = { gemini = "Orus" }
+
+[allie]
+name = "Allie"
+gender = "female"
+wake = "hey_allie"
+# Kaggle run of 2026-09-24: recall 88.6 % at 0.077 false wakes an hour on
+# 25.9 hours of validation audio (93.5 % / 0.23 at 0.5).
+threshold = 0.74
+voices = { gemini = "Aoede" }
+
+[friday]
+name = "Friday"
+gender = "female"
+wake = "hey_friday"
+# Kaggle run of 2026-09-23: recall 85.7 % at 0.077 false wakes an hour on
+# 25.9 hours of validation audio (90.5 % / 0.23 at 0.5).
+threshold = 0.72
+voices = { gemini = "Kore" }

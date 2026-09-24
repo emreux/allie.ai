@@ -48,6 +48,7 @@ from allie.media.youtube import SEARCH_SECONDS
 from allie.store.retention import AUDIT_DAYS
 from allie.tools.web import SEARCH_URL
 from allie.web.page import FETCH_SECONDS
+from allie.web.search import LOOK_UP_MODEL
 
 __all__ = [
     "CONFIG_DIR_ENV",
@@ -251,30 +252,31 @@ class LiveSettings(BaseModel):
 class WakeSettings(BaseModel):
     """The `[wake]` table (plan.md D21): the phrase the assistant sleeps
     behind. `model` is the stem of a classifier this program ships
-    (`allie/wake/<model>.onnx`) or an absolute path to one of the
-    user's own; `threshold` is the score that counts as the phrase, set
-    from the owner's own recordings (`scripts/wake_eval.py`); `greeting`
-    is what is done when it wakes - the chime, the pack's sentence in the
-    local voice, or nothing. `enabled = false` is the product as it was:
-    the doorman opens a session on any voice.
+    (`allie/wake/<model>.onnx`, one per assistant - D31) or an absolute
+    path to one of the user's own; setup writes the chosen assistant's.
+    `threshold` is the score that counts as the phrase: left out, the one
+    the model shipped with (`assistants.threshold_for`); written, the
+    user's own, measured on their voice and room (`scripts/wake_eval.py`).
+    `greeting` is what is done when it wakes - the chime, the pack's
+    sentence in the local voice, or nothing. `enabled = false` is the
+    product as it was: the doorman opens a session on any voice.
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    # Off until the trained classifier ships (F6a, the owner's Colab run,
-    # 2026-09-21): on, the default would name a file that is not there and
-    # every run would stop at the door. Flip to `True` with the model.
+    # Off for a file setup has not written since the assistants arrived
+    # (D31): setup switches it on with the model of the assistant chosen,
+    # together with its voice and its name. On by default, a file from
+    # before would wake to Friday's phrase in another assistant's voice.
     enabled: bool = False
     model: str = "hey_friday"
-    # A placeholder until the eval and the owner's clips say otherwise
-    # (F6a step 7).
-    threshold: float = 0.5
+    threshold: float | None = None
     greeting: Literal["chime", "sentence", "none"] = "chime"
 
     @field_validator("threshold")
     @classmethod
-    def _must_be_a_score(cls, value: float) -> float:
-        if not 0 < value < 1:
+    def _must_be_a_score(cls, value: float | None) -> float | None:
+        if value is not None and not 0 < value < 1:
             raise ValueError(f"expected a score between 0 and 1, got {value}")
         return value
 
@@ -408,19 +410,24 @@ class MediaSettings(BaseModel):
 
 
 class WebSettings(BaseModel):
-    """The `[web]` table: which search engine `search_web` opens.
+    """The `[web]` table: which search engine `search_web` opens, and which
+    model `look_up` and `x_trends` ask.
 
     `search_url` is the engine's own search address with `{query}` where
     the words go. Google when the line is not there; a user who would rather
     not be known to Google writes DuckDuckGo's address here and no code
-    changes (section 10). `timeout_seconds` is how long `fetch_page` waits
-    for a page before saying it did not answer.
+    changes (section 10). `timeout_seconds` is how long `fetch_page` and
+    `x_trends` wait for a page before saying it did not answer.
+    `look_up_model` is the Gemini model that searches Google before it
+    answers (D29): the free tier searches with the 2.5 family only, and the
+    day Google retires it, this is the line to change.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     search_url: str = SEARCH_URL
     timeout_seconds: float = FETCH_SECONDS
+    look_up_model: str = LOOK_UP_MODEL
 
 
 class MessagingSettings(BaseModel):

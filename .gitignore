@@ -47,6 +47,9 @@ debug_audio/
 
 # Models and large binaries
 *.onnx
+# ...except the wake-word classifiers the program ships (plan.md D21, D31):
+# under a megabyte each, trained for this program, and it cannot wake without them.
+!src/allie/wake/*.onnx
 *.bin
 *.pt
 *.gguf

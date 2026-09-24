@@ -3,14 +3,14 @@ section 7).
 
 Until now hands-free meant the doorman: any voice in the room opened a
 session, and a session costs money from the moment it opens (D5, D12). The
-owner wanted the film version instead - the assistant sleeps, "hey Friday"
+owner wanted the film version instead - the assistant sleeps, "hey Vesper"
 wakes it, and only then is anyone listened to. This module is the ear that
 stays open while it sleeps.
 
 **A small model, on this machine, and nothing leaves.** `livekit-wakeword`
 runs three ONNX graphs on the CPU: a mel spectrogram over the last two
 seconds, Google's speech embedding over that, and the classifier trained
-for the phrase (`allie/wake/hey_friday.onnx`, F6a). It answers with a
+for the phrase (`allie/wake/<model>.onnx`, one per assistant, D31). It answers with a
 score from 0 to 1 and understands no words. The model is stateless - the
 caller keeps the window - so `LiveKitWakeWord` keeps a two-second ring of
 the microphone's blocks and asks once every `HOP_SECONDS` of new audio;
@@ -24,7 +24,8 @@ of a core.
 **What "heard" means.** A score at or over the threshold, and not within
 `DEBOUNCE_SECONDS` of the last one - the phrase sits in the window for a
 few hops and would otherwise wake the assistant three times. The threshold
-is the owner's (`[wake] threshold`), set from their own recordings with
+ships with the model (`assistants.toml`, from its eval); `[wake]
+threshold` outranks it, set from the owner's own recordings with
 `scripts/wake_eval.py`.
 
 **The chime** is the greeting of D21: two short notes at the speaker's
