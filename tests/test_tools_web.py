@@ -14,7 +14,16 @@ from loguru import logger
 
 from allie import shell
 from allie.tools.registry import Tool
-from allie.tools.web import NO_WORDS, SEARCH_URL, search_web_for
+from allie.tools.web import (
+    LOOK_UP_PROMPT,
+    NO_QUESTION,
+    NO_WORDS,
+    OFFER_BROWSER,
+    SEARCH_URL,
+    look_up_for,
+    search_web_for,
+)
+from allie.web.search import QUOTA_USED, Found, SearchError
 
 
 class Opened:
@@ -111,3 +120,81 @@ async def test_the_browser_is_opened_off_the_event_loop(search_web: Tool, opened
     await search_web.run(query="x")
 
     assert opened.threads[0] is not threading.main_thread()
+
+
+class FakeSearch:
+    """Stands in for `GroundedSearch`: what it was asked, and what it answers."""
+
+    def __init__(self, found: Found | None = None, failure: SearchError | None = None) -> None:
+        self.found = found or Found(
+            answer="BIST 100 bugün 13.337 puanda.",
+            queries=("BIST 100 bugün",),
+            sources=("bloomberght.com",),
+        )
+        self.failure = failure
+        self.asked: list[str] = []
+
+    async def ask(self, prompt: str) -> Found:
+        self.asked.append(prompt)
+        if self.failure is not None:
+            raise self.failure
+        return self.found
+
+
+def test_look_up_is_a_safe_tool_that_needs_a_question() -> None:
+    tool = look_up_for(FakeSearch())
+
+    assert tool.risk == "safe"
+    assert tool.spec.name == "look_up"
+    assert tool.spec.parameters["required"] == ["question"]
+
+
+async def test_the_answer_comes_back_marked_as_content_with_its_sources() -> None:
+    said = await look_up_for(FakeSearch()).run(question="BIST 100 şu an kaç?")
+
+    assert said == (
+        '<untrusted source="search" searched="BIST 100 bugün">\n'
+        "BIST 100 bugün 13.337 puanda.\n"
+        "Sources: bloomberght.com\n"
+        "</untrusted>"
+    )
+
+
+async def test_the_question_reaches_the_search_inside_the_prompt() -> None:
+    fake = FakeSearch()
+
+    await look_up_for(fake).run(question="  BIST   kaç? ")
+
+    assert fake.asked == [LOOK_UP_PROMPT.format(question="BIST kaç?")]
+
+
+async def test_an_empty_question_searches_nothing() -> None:
+    fake = FakeSearch()
+
+    assert await look_up_for(fake).run(question="  ") == NO_QUESTION
+    assert fake.asked == []
+
+
+async def test_a_failed_search_is_said_and_the_browser_offered_not_opened(
+    opened: Opened,
+) -> None:
+    said = await look_up_for(FakeSearch(failure=SearchError(QUOTA_USED))).run(question="x")
+
+    assert said == f"{QUOTA_USED} {OFFER_BROWSER}"
+    assert opened.addresses == []
+
+
+async def test_an_answer_without_searches_or_sources_is_still_marked() -> None:
+    fake = FakeSearch(Found(answer="Bilmiyorum.", queries=(), sources=()))
+
+    said = await look_up_for(fake).run(question="x")
+
+    assert said == '<untrusted source="search">\nBilmiyorum.\n</untrusted>'
+
+
+def test_search_web_is_the_browser_only_when_the_user_asks_for_it() -> None:
+    """D29: a question is answered by `look_up`; `search_web` shows a search."""
+    description = search_web_for().spec.description
+
+    assert "only when" in description
+    assert "look_up" in description

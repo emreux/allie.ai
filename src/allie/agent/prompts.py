@@ -6,8 +6,8 @@ to do when the last message had no language in it at all, what to make of words
 a tool brought in from outside, and what the live session adds - a tool that
 answers "declined", and the line the assistant sends after reading a reminder
 aloud. `SEARCH_RULE` is a seventh that the composition root appends only to a
-session opened with web search (plan.md D22), and is outside `SYSTEM_PROMPT`
-for that reason.
+session opened with web search (plan.md D22) or with `look_up` on offer (D29),
+and is outside `SYSTEM_PROMPT` for that reason.
 
 **The prompt is frozen.** No clock, no date, no name of the user, nothing this
 module computes - and that is why there is not a single import below. A
@@ -84,10 +84,11 @@ LIVE_RULES = (
 
 # Added 2026-09-21 with Google Search grounding (plan.md D22). Not part of
 # `SYSTEM_PROMPT`: the composition root appends it only to a session that
-# was opened with a search tool, so the frozen bytes stay frozen for a
-# user who switched it off. It says two things the model gets wrong on its
-# own: that it may search for what it does not know, and that a browser is
-# for the user's eyes, not a substitute for a search it can do itself.
+# was opened with a search tool or offers `look_up` (D29, 2026-09-23), so
+# the frozen bytes stay frozen for a user who has neither. It says two
+# things the model gets wrong on its own: that it may search for what it
+# does not know, and that a browser is for the user's eyes, not a
+# substitute for a search it can do itself.
 SEARCH_RULE = (
     "You can look things up on the web yourself: do so for anything you do not know or "
     "that changes - news, prices, results, opening hours - and say in a few words that "

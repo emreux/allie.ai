@@ -379,6 +379,16 @@ def test_a_finished_turn_shows_what_was_heard_and_what_was_answered(screen: Scre
     assert "Üç buçuk." in str(screen)
 
 
+def test_a_turn_that_looked_something_up_shows_the_searches_between(screen: Screen) -> None:
+    """D29: Google's searches behind an answer, between the question and it."""
+    with line(screen) as status:
+        status.turn(Turn(heard="BIST kaç", said="13.337 puan.", searched=("BIST 100 bugün",)))
+
+    out = str(screen)
+    assert TEXT["searched"] in out
+    assert out.index("BIST kaç") < out.index("BIST 100 bugün") < out.index("13.337 puan.")
+
+
 def test_a_turn_reports_what_it_spent(screen: Screen) -> None:
     """Item 1.11 puts the tokens in the log; showing them is what makes a model
     that costs ten times as much noticeable on the day it is chosen."""

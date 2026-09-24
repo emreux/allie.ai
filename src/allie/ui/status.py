@@ -82,6 +82,8 @@ TEXT: dict[str, str] = {
     "state_reconnecting": "reconnecting",
     "you_said": "you",
     "it_said": "assistant",
+    # The row between the two when the answer was looked up (D29).
+    "searched": "searched google",
     "turn_cost": "{input} in, {output} out",
     # The session and the meter (plan.md 4.2): shown beside the state.
     "session_open": "session open",
@@ -339,6 +341,12 @@ class StatusLine:
         exchange.add_column(style="dim", justify="right")
         exchange.add_column()
         exchange.add_row(self._said["you_said"], heard)
+        if finished.searched:
+            # Google's searches behind the answer (D29): its terms ask
+            # that they be shown with it.
+            exchange.add_row(
+                self._said["searched"], Text(" · ".join(finished.searched), style="dim")
+            )
         exchange.add_row(self._said["it_said"], answer)
         self._console.print(exchange)
 
