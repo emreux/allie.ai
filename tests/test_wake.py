@@ -65,6 +65,41 @@ def test_the_batched_path_scores_exactly_as_the_toolkit_s_predict(name: str) -> 
 
 
 @pytest.mark.parametrize("name", MODELS)
+def test_the_detector_runs_its_three_onnx_sessions_on_one_thread(name: str) -> None:
+    """ONNX Runtime left to itself gives every session a pool of one thread
+    per core, and the pool spins between calls: measured 2026-09-24 on the
+    owner's four-core laptop at 2.4 cores - about 30 % of the machine and
+    the fans at full - for a detector asked three times a second. On one
+    thread each it was 1.4 %."""
+    pytest.importorskip("livekit.wakeword")
+    toolkit = LiveKitWakeWord(shipped(name), threshold=0.5)._built()._model
+
+    sessions = [
+        toolkit._mel_frontend._onnx_session,
+        toolkit._speech_embedding._session,
+        toolkit._classifiers[name][0],
+    ]
+
+    for session in sessions:
+        options = session.get_session_options()
+        assert options.intra_op_num_threads == 1
+        assert options.inter_op_num_threads == 1
+
+
+@pytest.mark.parametrize("name", MODELS)
+def test_on_one_thread_the_detector_scores_as_the_toolkit_does(name: str) -> None:
+    """Fewer threads is less CPU, not another answer: the threshold each
+    model ships with was measured on the toolkit's own path."""
+    wakeword = pytest.importorskip("livekit.wakeword")
+    window = (np.random.default_rng(1).standard_normal(WINDOW) * 0.02).astype(np.float32)
+
+    theirs = wakeword.WakeWordModel(models=[str(shipped(name))]).predict(window)[name]
+    ours = LiveKitWakeWord(shipped(name), threshold=0.5)._built().predict(window)[name]
+
+    assert ours == pytest.approx(theirs, abs=1e-5)
+
+
+@pytest.mark.parametrize("name", MODELS)
 def test_a_shipped_model_is_found_by_its_stem(name: str) -> None:
     path = shipped(name)
 

@@ -18,8 +18,10 @@ asking at every 20 ms block would cost sixteen times the CPU for the same
 answer. The toolkit's own `predict` runs the sixteen embeddings of a window
 as sixteen ONNX calls (~75 ms on the owner's machine, F6a); `BatchedModel`
 runs them as one (~13 ms, bit-identical), through the toolkit's own
-frontends, which is what keeps the sleeping assistant under a twentieth
-of a core.
+frontends. That was the time of a call, not the CPU spent: ONNX Runtime's
+default pool of one spinning thread per core kept the sleeping assistant at
+about 30 % of the laptop (measured 2026-09-24). `_on_one_thread` rebuilds
+the sessions on one thread each, 1.4 %.
 
 **What "heard" means.** A score at or over the threshold, and not within
 `DEBOUNCE_SECONDS` of the last one - the phrase sits in the window for a
@@ -67,8 +69,8 @@ __all__ = [
 
 # The model judges the last two seconds (16 embeddings of 80 ms, LiveKit's
 # fixed input) and is asked every 320 ms of new audio (four of its 80 ms
-# frames; measured in F6a at ~16 ms per batched call on this machine, a
-# twentieth of a core).
+# frames; ~28 ms per batched call on one thread, measured 2026-09-24 on
+# this machine - 1.4 % of it).
 WINDOW_SECONDS = 2.0
 HOP_SECONDS = 0.32
 # One wake per phrase: the phrase stays in the window for several hops.
@@ -126,6 +128,52 @@ def _wake_word_model() -> Any:
     from livekit.wakeword import WakeWordModel  # type: ignore[import-untyped]
 
     return WakeWordModel
+
+
+def _on_one_thread(model: Any, name: str, path: Path) -> None:
+    """The toolkit's three sessions again, from the same files, on one
+    thread each.
+
+    The toolkit builds them with ONNX Runtime's defaults: a pool of one
+    thread per core that spins between calls rather than sleeping. Asked
+    three times a second, that pool kept 2.4 of the owner's eight logical
+    cores busy - about 30 % of the laptop, the fans at full, while the
+    assistant slept (measured 2026-09-24). On one thread each it was 1.4 %
+    and the call no slower (28 ms against 30-49). Silero is built the same
+    way by `faster-whisper`, which is why the waking hours never showed it.
+
+    The toolkit takes no session options, so this reaches in where
+    `BatchedModel` does, pinned to 0.2.1; a toolkit without those
+    attributes keeps its own sessions - more CPU, never wrong.
+    """
+    mel: Any = getattr(model, "_mel_frontend", None)
+    embedding: Any = getattr(model, "_speech_embedding", None)
+    classifiers = getattr(model, "_classifiers", None)
+    if (
+        not hasattr(mel, "_onnx_session")
+        or not hasattr(embedding, "_session")
+        or not isinstance(classifiers, dict)
+    ):
+        return
+    import onnxruntime  # type: ignore[import-untyped]
+    from livekit.wakeword.resources import (  # type: ignore[import-untyped]
+        get_embedding_model_path,
+        get_mel_model_path,
+    )
+
+    options = onnxruntime.SessionOptions()
+    options.intra_op_num_threads = 1
+    options.inter_op_num_threads = 1
+
+    def session(onnx: Path) -> Any:
+        return onnxruntime.InferenceSession(
+            str(onnx), sess_options=options, providers=["CPUExecutionProvider"]
+        )
+
+    mel._onnx_session = session(get_mel_model_path())
+    embedding._session = session(get_embedding_model_path())
+    classifier = session(path)
+    classifiers[name] = (classifier, classifier.get_inputs()[0].name)
 
 
 class BatchedModel:
@@ -196,7 +244,9 @@ class LiveKitWakeWord:
     def _built(self) -> Any:
         """The model, built now if `load` was never awaited."""
         if self._model is None:
-            self._model = BatchedModel(_wake_word_model()(models=[str(self._path)]), self.name)
+            toolkit = _wake_word_model()(models=[str(self._path)])
+            _on_one_thread(toolkit, self.name, self._path)
+            self._model = BatchedModel(toolkit, self.name)
         return self._model
 
     def feed(self, chunk: Audio) -> bool:
