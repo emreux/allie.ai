@@ -8,21 +8,23 @@
 #   livekit-wakeword run hey_allie.yaml
 #   -> output/hey_allie/hey_allie.onnx, output/hey_allie/hey_allie_eval.json
 #
-# The hardest of the four, and the numbers say why (measured 2026-09-22):
-# "allie" is AE L IY - two syllables, no consonant cluster, fifty-eight
-# rhyming words in CMUDict - and the Turkish name "Ali" is AA L IY, one
-# vowel away. The "hey" in front is what keeps the two apart, so the
-# phrase is trained with both readings and the negatives are the words
-# that share its ending but not its beginning.
+# Version 2 (2026-09-24). Version 1 - "hey allie" and "hey ali" alone -
+# woke to American voices (0.97-0.99, even to "hey Kelly") and hardly ever
+# to a Turkish speaker: the owner's real attempts scored 0.01-0.66, and a
+# recogniser heard most of them as "hey Ellie". Neither the level nor the
+# microphone was the cause: clean clips played into the same microphone
+# scored 0.99. The three names that do wake to the owner were trained with
+# spellings that mimic Turkish stress; this one had none.
 #
-# Two spellings, not three: a wider decision boundary is the last thing
-# this phrase needs. "allie" AE L IY as an English speaker says it, "ali"
-# AA L IY as a Turkish one does. Both are in CMUDict, so the synthesiser
-# says exactly that. If the owner's ten-minute recording shows wakes on
-# the name Ali, the cure is a higher threshold first, a retrain without
-# the second spelling second.
+# The spellings, and what the synthesiser is really given (espeak en-us,
+# checked 2026-09-24): "allie" AE L IY as an English speaker says it,
+# "ellie" EH L IY as a Turkish one reads it, "ali" AA L IY, and the three
+# Turkish readings with the stress on the last syllable - "el lee" (Elli),
+# "eh lee" (Eli), "ah lee" (Ali). They are written in pieces because the
+# words themselves come out wrong: the toolkit splits "elli" into "el li",
+# which espeak says as "el lie", and reads "eli" as "ih-lee".
 model_name: hey_allie
-target_phrases: ["hey allie", "hey ali"]
+target_phrases: ["hey allie", "hey ellie", "hey ali", "hey el lee", "hey eh lee", "hey ah lee"]
 
 n_samples: 25000
 n_samples_val: 5000
@@ -31,16 +33,15 @@ n_background_samples_val: 500
 tts_batch_size: 50
 
 # What must NOT wake it: the name without "hey" (so the phrase is the
-# trigger, not the name), and words that share its ending. "alley" is a
-# homophone of "allie" and so is deliberately absent - a negative the
-# model cannot possibly separate only costs recall.
+# trigger, not the name), and words that share its ending but not its
+# beginning. "hey holly" is not here: with its h swallowed it is "hey ali".
 custom_negative_phrases:
   - "allie"
+  - "ellie"
   - "call allie"
   - "tell allie"
   - "hey valley"
   - "hey rally"
-  - "hey holly"
   - "hey sally"
   - "hey callie"
   - "hey jolly"
