@@ -271,8 +271,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--tray",
         action="store_true",
         help=(
-            "Also show an icon in the notification area: the state, a switch for "
-            "listening, the settings folder, quit. The terminal stays."
+            "With --terminal, also show an icon in the notification area: the state, "
+            "a switch for listening, the settings folder, quit. The window always has it."
         ),
     )
     run.add_argument(
@@ -812,10 +812,11 @@ def _run(*, device: str | None = None, tray: bool = False, terminal: bool = Fals
 
     `device` is the `--device` flag: a microphone by index or by words from its
     name, outranking the settings for this one run. `tray` is `--tray`: the
-    icon of 4.3, whose "quit" ends the run the way Ctrl+C does. `terminal` is
-    `--terminal`: the status line on the terminal instead of the window
-    (plan.md D20) - the window is the face otherwise, and on a machine that
-    is not set up yet it opens on the wizard.
+    icon of 4.3 beside the terminal line, whose "quit" ends the run the way
+    Ctrl+C does - the window has the icon whether asked or not (D34).
+    `terminal` is `--terminal`: the status line on the terminal instead of
+    the window (plan.md D20) - the window is the face otherwise, and on a
+    machine that is not set up yet it opens on the wizard.
     """
     from rich.console import Console
 
@@ -877,7 +878,6 @@ def _run(*, device: str | None = None, tray: bool = False, terminal: bool = Fals
                     settings,
                     pack,
                     device=microphone,
-                    tray=tray,
                     fixable=fixable,
                     cannot_start=lambda problem: said["cannot_start"].format(problem=problem),
                 )
@@ -944,7 +944,6 @@ async def _session(
     pack: Locale,
     *,
     device: int | str | None,
-    tray: bool,
     fixable: tuple[type[Exception], ...],
     cannot_start: Callable[[BaseException], str],
 ) -> None:
@@ -955,11 +954,18 @@ async def _session(
     fix is a sentence on the window and a wait for a button, since the
     settings button is the way to fix it.
 
+    The tray icon goes up with the window and down with it (D34), across
+    every wizard and every talk: minimising hides the window into it, so it
+    must be there whenever the window is - on the wizard's page and under a
+    failed start too. Its switch is the window's, its "quit" the window's,
+    and its default line brings the window back.
+
     Ctrl+C on the terminal cancels this task; the talk under way is
     cancelled with it and the cancellation is let through, so that `_run`
     says the same "stopped" it always said.
     """
     from allie import setup_wizard
+    from allie.ui import tray as tray_ui
     from allie.ui.window import Switch, Window, WindowPrompter
 
     loop = asyncio.get_running_loop()
@@ -971,9 +977,18 @@ async def _session(
         on_toggle=switch,
         on_quit=wants.quit,
         on_settings=wants.open_settings,
-        tray=tray,
+        tray=True,
+    )
+    icon = tray_ui.Tray(
+        pack,
+        loop=loop,
+        on_toggle=switch,
+        on_quit=wants.quit,
+        on_show=window.show,
+        settings_folder=config_dir(),
     )
     window.start()
+    icon.start()
     try:
         while not wants.quitting.is_set():
             if not is_configured() or wants.settings:
@@ -1003,10 +1018,9 @@ async def _session(
                     settings,
                     pack,
                     device=device,
-                    tray=tray,
                     screen=window,
                     switch=switch,
-                    show=window.show,
+                    icon=icon,
                 )
             )
             try:
@@ -1030,6 +1044,7 @@ async def _session(
                 wants.task = None
             return
     finally:
+        icon.stop()
         window.stop()
 
 
@@ -1041,14 +1056,16 @@ async def _talk(
     tray: bool = False,
     screen: Screen,
     switch: Switch | None = None,
-    show: Callable[[], None] | None = None,
+    icon: Tray | None = None,
 ) -> None:
     """Builds the pieces and lets the state machine drive them (plan.md 4.1).
 
     `screen` is what it all shows on - the terminal's line or the window
     (D20); `switch`, when there is one, is the window's listen button,
-    given the capture's `toggle` once there is a capture; `show` is what
-    the tray offers when there is a window to bring back.
+    given the capture's `toggle` once there is a capture; `icon` is the
+    window's tray icon, up already and kept up by whoever put it there
+    (D34), which is told what the screen is told. Without one, `tray`
+    (`--tray` beside the terminal line) puts up an icon of this run's own.
     """
     from loguru import logger
 
@@ -1390,18 +1407,18 @@ async def _talk(
         # The window's listen button is this switch (D20).
         if switch is not None:
             switch.target = capture.toggle
-        # The icon of 4.3, when asked for: a second surface over the
-        # same state, and a second hand on the same switch - its menu
-        # line is the key's `toggle`, its "quit" is this task's cancel,
-        # and both reach the loop through `call_soon_threadsafe`.
-        icon: tray_ui.Tray | None = None
-        if tray:
-            icon = tray_ui.Tray(
+        # The icon of 4.3: the window's (D34), or on the terminal one of
+        # this run's own when asked for - a second surface over the same
+        # state, and a second hand on the same switch: its menu line is
+        # the key's `toggle`, its "quit" is this task's cancel, and both
+        # reach the loop through `call_soon_threadsafe`.
+        own: tray_ui.Tray | None = None
+        if icon is None and tray:
+            own = icon = tray_ui.Tray(
                 pack,
                 loop=asyncio.get_running_loop(),
                 on_toggle=capture.toggle,
                 on_quit=_stopper(),
-                on_show=show,
                 settings_folder=config_dir(),
             )
 
@@ -1463,8 +1480,8 @@ async def _talk(
             # the server heard the microphone at (D18).
             on_session=_session_told(screen, icon, capture),
         )
-        if icon is not None:
-            icon.start()
+        if own is not None:
+            own.start()
         ticking = asyncio.create_task(scheduler.run())
         try:
             await assistant.run()
@@ -1472,8 +1489,8 @@ async def _talk(
             ticking.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await ticking
-            if icon is not None:
-                icon.stop()
+            if own is not None:
+                own.stop()
     finally:
         await player.aclose()
         await weather.aclose()

@@ -1,13 +1,15 @@
 """The tray icon (`ui/tray.py`, 4.3): a surface, not a second brain.
 
 What is claimed: the icon and its tooltip follow the state and the mode the
-state machine reports; the tooltip also says whether a session is open and
-how many minutes this run has had one open (plan.md 4.2 - a live model
-bills by the minute); the menu's switch line and "quit" reach the event
-loop and nothing else; the folder line opens the settings folder without
-going near the loop; and every word is the pack's. The real `pystray`
-icon is built once, without being shown, to prove the adapter hands it
-labels, actions and a greyed-out state line.
+state machine reports, the disc in the orb's colour for the state (D34);
+the tooltip also says whether a session is open and how many minutes this
+run has had one open (plan.md 4.2 - a live model bills by the minute); the
+menu's switch line and "quit" reach the event loop and nothing else; the
+folder line opens the settings folder without going near the loop; with a
+window, "show the window" is the line a left click runs; and every word is
+the pack's. The real `pystray` icon is built once, without being shown, to
+prove the adapter hands it labels, actions, a greyed-out state line and the
+default line.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from PIL import Image
 
 from allie import locales
 from allie.app import State
-from allie.ui import status, tray
+from allie.ui import orb, status, tray
 from allie.ui.tray import ICON_SIZE, TEXT, MenuEntry, Tray, draw_icon, system_icon
 
 CENTRE = (ICON_SIZE // 2, ICON_SIZE // 2)
@@ -232,6 +234,14 @@ def test_the_ring_and_the_disc_are_drawn_in_the_states_colour() -> None:
     assert ring.getpixel((4, CENTRE[1])) == disc.getpixel((4, CENTRE[1]))
 
 
+@pytest.mark.parametrize("state", list(State))
+def test_the_disc_wears_the_orbs_colour_for_the_state(state: State) -> None:
+    """D34: the corner of the screen and the window say the same. The tray
+    had colours of its own from the old product, and two of them were the
+    orb's the other way round - confirming orange, reconnecting yellow."""
+    assert draw_icon(state, listening=True).getpixel(CENTRE) == (*orb.COLOURS[state], 255)
+
+
 # --------------------------------------------------------------------------
 # What its clicks do
 # --------------------------------------------------------------------------
@@ -322,15 +332,20 @@ def test_pystray_is_handed_the_labels_the_actions_and_a_greyed_state_line() -> N
     entries = [
         MenuEntry(lambda: "ready"),
         MenuEntry(lambda: "Stop listening", lambda: clicked.append("switch")),
+        MenuEntry(lambda: "Show the window", lambda: clicked.append("show"), default=True),
     ]
 
     icon = system_icon("assistant", draw_icon(State.IDLE, listening=True), "ready", entries)
 
     items = list(icon.menu.items)  # type: ignore[attr-defined]
-    assert [str(item.text) for item in items] == ["ready", "Stop listening"]
-    assert [item.enabled for item in items] == [False, True]
+    assert [str(item.text) for item in items] == ["ready", "Stop listening", "Show the window"]
+    assert [item.enabled for item in items] == [False, True, True]
+    assert [item.default for item in items] == [False, False, True]
     items[1](icon)
     assert clicked == ["switch"]
+    # What pystray does with a left click on the icon: the menu's default.
+    icon.menu(icon)  # type: ignore[attr-defined]
+    assert clicked == ["switch", "show"]
     assert icon.title == "ready"
 
 
@@ -361,6 +376,8 @@ async def test_with_a_window_the_menu_offers_to_show_it_and_the_click_reaches_th
 
     assert [entry.label() for entry in built.entries][3] == turkish("tray_show_window")
     assert len(built.entries) == 5
+    # The one a left click on the icon runs (D34).
+    assert [entry.default for entry in built.entries] == [False, False, False, True, False]
     show = built.entries[3].action
     assert show is not None
     await asyncio.to_thread(show)
@@ -372,3 +389,4 @@ async def test_with_a_window_the_menu_offers_to_show_it_and_the_click_reaches_th
 def test_without_a_window_the_menu_is_the_four_lines_it_was(built: Built) -> None:
     assert len(built.icon.entries) == 4
     assert turkish("tray_show_window") not in built.labels
+    assert not any(entry.default for entry in built.icon.entries)

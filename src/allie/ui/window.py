@@ -48,6 +48,14 @@ read ("could not start - the reason is below"). The wizard's page takes the
 full height. The user still cannot resize the window (U2): its height is the
 accordion's and the wizard's to set.
 
+**The tray (D34).** `run` puts the tray icon up with the window and keeps
+it there for as long as the window is. Minimising hides the window into it -
+no taskbar button, no place in Alt+Tab - and the icon's left click (its
+"Show the window" line) brings it back in front. The close box quits, like
+the quit button. Nothing else changes when the window is out of sight: the
+microphone, the wake word and the session are the loop's and never knew
+there was a window; only the orb stops being drawn.
+
 **The orb** is `ui/orb.py`'s numbers drawn on a canvas: the glow Pillow
 paints once per colour (Tk cannot blur), the core an oval that breathes,
 the rings arcs whose `start` turns every tick, the dots ovals moved.
@@ -515,9 +523,9 @@ class Window:
             except queue.Empty:
                 return taken
 
-    def hides_on_close(self) -> bool:
-        """Closing hides the window when there is a tray to bring it back
-        from, and quits when there is not."""
+    def hides_on_minimise(self) -> bool:
+        """Minimising hides the window into the tray when there is one to
+        bring it back from (D34), and leaves it on the taskbar when not."""
         return self._tray
 
     def toggle(self) -> None:
@@ -1347,7 +1355,9 @@ class TkPanel:
         # picks the size it wants for the title bar and for the taskbar.
         names = [str(mark) for mark in self._marks]
         root.iconphoto(True, names[0], *names[1:])
-        root.protocol("WM_DELETE_WINDOW", self._close)
+        # The close box quits, the minimise box hides into the tray (D34).
+        root.protocol("WM_DELETE_WINDOW", self._quit)
+        root.bind("<Unmap>", self._minimised)
         inset = self._inset = round(INSET * scale)
 
         # The face: readouts and orb, the state's word, the buttons, the
@@ -1551,13 +1561,16 @@ class TkPanel:
                 self._root.destroy()
                 return
             if message == ("show",):
-                self._root.deiconify()
+                self._bring_back()
                 continue
             self._view.apply(message)
         self._paint()
         self._fit(started)
         dt, self._last = min(started - self._last, MAX_DT), started
-        self._draw(self._view.frame(dt))
+        # Out of sight - in the tray, or on the taskbar - the orb is not
+        # drawn: sixty frames a second of a picture nobody sees.
+        if self._root.state() not in ("iconic", "withdrawn"):
+            self._draw(self._view.frame(dt))
         # The next frame is due `TICK_MS` after this one began, not after it
         # ended: asking for the whole period again would add the drawing to
         # it and leave the window short of sixty frames a second (U1).
@@ -1794,12 +1807,22 @@ class TkPanel:
     def _cancel_pressed(self) -> None:
         self._window.answer(self._view.take_answer(), None)
 
-    def _close(self) -> None:
-        # While the wizard is up there is no tray yet to come back from.
-        if self._view.wizard is None and self._window.hides_on_close():
-            self._root.withdraw()
-        else:
-            self._quit()
+    def _minimised(self, event: tk.Event[Any]) -> None:
+        """The minimise box: with a tray to come back from, the window leaves
+        the taskbar for it (D34). `<Unmap>` on the root reaches every widget
+        under it - the accordion folding unmaps the conversation - so only
+        the root's own, and only when Windows has made it an icon."""
+        root = self._root
+        if event.widget is root and root.state() == "iconic" and self._window.hides_on_minimise():
+            root.withdraw()
+
+    def _bring_back(self) -> None:
+        """The tray's line: the window back from the tray or the taskbar, in
+        front of whatever covered it, with the keyboard."""
+        root = self._root
+        root.deiconify()
+        root.lift()
+        root.focus_force()
 
     def _quit(self) -> None:
         self._window.answer(self._view.take_answer(), None)

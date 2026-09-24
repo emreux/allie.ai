@@ -9,15 +9,17 @@ notice (D33); the quiet-microphone sentence is said once, like the line; a
 level feeds the orb; the wizard's
 page holds what was said and the open question, and an answer from the Tk
 thread resolves the future on the loop; buttons reach the loop through
-`call_soon_threadsafe`; closing hides with a tray and quits without. The
-real Tk panel is built once, in `test_the_real_panel_comes_up_and_goes_down`
-(skipped where there is no display).
+`call_soon_threadsafe`; minimising hides into the tray when there is one,
+and the close box quits (D34). The real Tk panel is built in
+`test_the_real_panel_comes_up_and_goes_down`, and once more on Windows to
+be minimised, brought back and closed (skipped where there is no display).
 """
 
 from __future__ import annotations
 
 import asyncio
 import math
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -665,9 +667,11 @@ async def test_the_buttons_reach_the_loop_from_the_tk_thread() -> None:
         one.window.stop()
 
 
-def test_closing_hides_with_a_tray_and_quits_without(built: Any) -> None:
-    assert built(tray=True).window.hides_on_close() is True
-    assert built(tray=False).window.hides_on_close() is False
+def test_minimising_hides_into_the_tray_only_when_there_is_one(built: Any) -> None:
+    """D34: with no tray to bring it back from, a hidden window would be
+    lost - it stays on the taskbar."""
+    assert built(tray=True).window.hides_on_minimise() is True
+    assert built(tray=False).window.hides_on_minimise() is False
 
 
 def test_the_switch_does_nothing_until_it_has_a_target_and_then_calls_it() -> None:
@@ -821,6 +825,99 @@ def test_the_real_panel_comes_up_and_goes_down() -> None:
         assert real.pending() == 0
         assert real.view.state is State.IDLE
         assert not question.done() and not menu.done() and not secret.done()
+    finally:
+        if real is not None:
+            real.stop()
+        loop.close()
+
+
+def _top_level_of_this_process() -> int:
+    """The real window's handle, found the way Windows lists windows: the
+    one top-level Tk window this process owns."""
+    import ctypes
+    import os
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32")
+    each = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [each, wintypes.LPARAM]
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    found: list[int] = []
+
+    def look(hwnd: int, _: int) -> bool:
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        name = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, name, 64)
+        if owner.value == os.getpid() and name.value == "TkTopLevel":
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(each(look), 0)
+    assert len(found) <= 1, "more than one Tk window up"
+    return found[0] if found else 0
+
+
+def test_the_real_window_minimises_into_the_tray_comes_back_and_closes() -> None:
+    """D34 on a real window, driven the way Windows drives it: the minimise
+    box hides it (no taskbar button - it is not visible at all), the tray's
+    line brings it back in front and not minimised, and the close box quits
+    rather than hides. Skipped off Windows and where Tk has no display."""
+    tkinter = pytest.importorskip("tkinter")
+    if sys.platform != "win32":
+        pytest.skip("Windows' own window calls")
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32")
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    sw_minimize, wm_close = 6, 0x0010
+
+    loop = asyncio.new_event_loop()
+    quits: list[str] = []
+    real: Window | None = None
+
+    def until(done: Callable[[], bool]) -> bool:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            # The loop is run in steps, so that what the window posted to it
+            # with `call_soon_threadsafe` gets done.
+            loop.run_until_complete(asyncio.sleep(0.02))
+            if done():
+                return True
+        return False
+
+    try:
+        real = Window(
+            TR,
+            loop=loop,
+            on_toggle=lambda: None,
+            on_quit=lambda: quits.append("quit"),
+            on_settings=lambda: None,
+            tray=True,
+        )
+        try:
+            real.start()
+        except WindowError as refused:
+            if isinstance(refused.__cause__, tkinter.TclError):
+                pytest.skip(f"no display: {refused.__cause__}")
+            raise
+        assert until(lambda: bool(user32.IsWindowVisible(_top_level_of_this_process())))
+        hwnd = _top_level_of_this_process()
+
+        user32.ShowWindowAsync(hwnd, sw_minimize)
+        assert until(lambda: not user32.IsWindowVisible(hwnd))
+
+        real.show()
+        assert until(lambda: bool(user32.IsWindowVisible(hwnd)) and not user32.IsIconic(hwnd))
+
+        user32.PostMessageW(hwnd, wm_close, 0, 0)
+        assert until(lambda: quits == ["quit"])
+        assert user32.IsWindowVisible(hwnd)
     finally:
         if real is not None:
             real.stop()

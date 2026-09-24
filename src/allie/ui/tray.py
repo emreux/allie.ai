@@ -3,9 +3,10 @@
 A third surface over the same state machine as the status line and the
 window, and like them owning no behaviour of its own: what the icon shows is
 what `on_state` and `on_mode` say, and what its menu does is what the key and
-Ctrl+C already do. `run --tray` puts it up beside whichever of the two is
-showing - the window by default, the terminal line under `--terminal` - and
-that one keeps showing what was said.
+Ctrl+C already do. The window has it for as long as the window is up (D34):
+minimising the window hides it into the icon, a left click on the icon brings
+it back, and the close box quits. The terminal line has it when `run --tray
+--terminal` asks, and keeps showing what was said.
 
 **pystray runs on a thread of its own.** `run_detached` starts it and the
 shell's messages arrive there. A click on the menu is one of them, and
@@ -18,14 +19,16 @@ it, and the shell's icon calls take a millisecond or two, which is inside
 rule 4 of section 3.1.
 
 **Drawn, not shipped.** The icon is a disc in the state's colour - the
-reading the status line gives in words - filled while the microphone is
-live and a ring while it is not. Each is drawn once with Pillow when the
-tray is built, so that a change of state costs a lookup and not a picture.
+orb's own colour for it (`ui/orb.py`, D34), so that the corner of the screen
+and the window say the same - filled while the microphone is live and a ring
+while it is not. Each is drawn once with Pillow when the tray is built, so
+that a change of state costs a lookup and not a picture.
 
 **No sentence is written here.** The menu's labels come from the pack, and
 the state's name is the status line's own label under the same key, so a
 pack that translated the terminal has translated the tray. "Show the
-window" appears only when `run` gave the tray a window to show (D20).
+window" appears only when `run` gave the tray a window to show (D20), and it
+is the menu's default line: the one a left click on the icon runs.
 
 **The tooltip is the state, the session and the minutes** (plan.md section
 4.2): a live model bills by the minute while a session is open, and the
@@ -47,6 +50,7 @@ from PIL import Image, ImageDraw
 from allie import shell
 from allie.app import State
 from allie.locales import Locale
+from allie.ui.orb import COLOURS
 from allie.ui.status import TEXT as STATUS_TEXT
 from allie.ui.status import SessionMinutes, label_key
 
@@ -64,20 +68,6 @@ TEXT: dict[str, str] = {
 ICON_SIZE = 64
 _RING = 8
 
-# The disc's colour by state: the same reading as the status line's colours,
-# in pixels. A state with no colour of its own is grey, like idle.
-_GREY = (140, 140, 140)
-_COLOURS: dict[State, tuple[int, int, int]] = {
-    State.OFF: _GREY,
-    State.IDLE: _GREY,
-    State.SLEEPING: (70, 90, 120),
-    State.USER_SPEAKING: (46, 204, 113),
-    State.RECONNECTING: (241, 196, 15),
-    State.CONFIRMING: (243, 156, 18),
-    State.SPEAKING: (155, 89, 182),
-    State.ANNOUNCING: (155, 89, 182),
-}
-
 
 @dataclass(frozen=True)
 class MenuEntry:
@@ -85,11 +75,13 @@ class MenuEntry:
 
     `label` is asked every time the menu opens, which is how the toggle
     line reads "Stop listening" one moment and "Start listening" the next.
-    A line with no `action` only informs, and is drawn greyed out.
+    A line with no `action` only informs, and is drawn greyed out. The
+    `default` line is drawn bold and is what a left click on the icon runs.
     """
 
     label: Callable[[], str]
     action: Callable[[], None] | None = None
+    default: bool = False
 
 
 class TrayIcon(Protocol):
@@ -120,7 +112,9 @@ def system_icon(name: str, image: Image.Image, title: str, entries: list[MenuEnt
         action = entry.action
         if action is None:
             return pystray.MenuItem(lambda _: entry.label(), None, enabled=False)
-        return pystray.MenuItem(lambda _: entry.label(), lambda icon, item: action())
+        return pystray.MenuItem(
+            lambda _: entry.label(), lambda icon, item: action(), default=entry.default
+        )
 
     icon: TrayIcon = pystray.Icon(
         name, icon=image, title=title, menu=pystray.Menu(*(item(entry) for entry in entries))
@@ -129,10 +123,10 @@ def system_icon(name: str, image: Image.Image, title: str, entries: list[MenuEnt
 
 
 def draw_icon(state: State, *, listening: bool) -> Image.Image:
-    """A disc in the state's colour, filled while the microphone is live and
-    a ring while it is not."""
+    """A disc in the orb's colour for the state, filled while the microphone
+    is live and a ring while it is not."""
     image = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (0, 0, 0, 0))
-    colour = (*_COLOURS.get(state, _GREY), 255)
+    colour = (*COLOURS[state], 255)
     box = (2, 2, ICON_SIZE - 3, ICON_SIZE - 3)
     if listening:
         ImageDraw.Draw(image).ellipse(box, fill=colour)
@@ -194,14 +188,17 @@ class Tray:
 
     def entries(self) -> list[MenuEntry]:
         """The menu, top to bottom: the state, the switch, the folder, the
-        window when there is one to bring back (D20), the end."""
+        window when there is one to bring back (D20) - the line a left click
+        runs (D34) - the end."""
         lines = [
             MenuEntry(self._title),
             MenuEntry(self._toggle_label, self._toggle),
             MenuEntry(lambda: self._said["tray_open_settings"], self._open_settings),
         ]
         if self._on_show is not None:
-            lines.append(MenuEntry(lambda: self._said["tray_show_window"], self._show))
+            lines.append(
+                MenuEntry(lambda: self._said["tray_show_window"], self._show, default=True)
+            )
         lines.append(MenuEntry(lambda: self._said["tray_quit"], self._quit))
         return lines
 

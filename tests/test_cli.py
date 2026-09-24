@@ -138,7 +138,8 @@ def test_the_command_names_are_declared(command: str) -> None:
 
 def test_run_can_be_asked_for_the_tray() -> None:
     """`run --tray` (4.3); `run --terminal` keeps the line instead of the
-    window (D20). Without the flags: the window, no tray."""
+    window (D20). Without the flags: the window - which has the tray icon
+    whether asked or not (D34)."""
     assert build_parser().parse_args(["run", "--tray"]).tray is True
     assert build_parser().parse_args(["run"]).tray is False
     assert build_parser().parse_args(["run", "--terminal"]).terminal is True
@@ -1675,10 +1676,14 @@ class FakeWindow:
 
 @pytest.fixture
 def windows(monkeypatch: pytest.MonkeyPatch) -> type[FakeWindow]:
-    from allie.ui import window
+    """The fake window - and the fake tray, which the window always has
+    (D34): no test puts a real icon in the notification area."""
+    from allie.ui import tray, window
 
     FakeWindow.built = []
+    FakeTray.built = []
     monkeypatch.setattr(window, "Window", FakeWindow)
+    monkeypatch.setattr(tray, "Tray", FakeTray)
     return FakeWindow
 
 
@@ -1694,7 +1699,7 @@ def test_without_the_terminal_flag_the_window_is_the_screen(
     [face] = windows.built
     assert face.code == "tr"
     assert face.up == ["start", "stop"]
-    assert face.parts["tray"] is False
+    assert face.parts["tray"] is True
     assert ("phase", "window_loading") in face.told
     assert ("state", State.USER_SPEAKING) in face.told
     assert ("session", True) in face.told and ("session", False) in face.told
@@ -1716,14 +1721,37 @@ def test_the_window_hears_the_sound_both_ways(
     assert wiring.built[0]["speaker"].on_level == face.level
 
 
-def test_with_the_tray_the_icon_can_show_the_window(
-    configured: Path, wiring: Wiring, windows: type[FakeWindow], trays: type[FakeTray]
+def test_the_window_always_has_the_icon_and_the_icon_can_show_it(
+    configured: Path, wiring: Wiring, windows: type[FakeWindow]
 ) -> None:
-    main(["run", "--tray"])
+    """D34, without `--tray`: the icon is built with the pack, up while the
+    window is up, told what the window is told, and its three hands are the
+    window's - the listen switch, quit, and the line that brings it back."""
+    assert main(["run"]) == 0
 
     [face] = windows.built
-    [icon] = trays.built
-    assert face.parts["tray"] is True
+    [icon] = FakeTray.built
+    assert icon.code == "tr"
+    assert icon.parts["settings_folder"] == configured
+    assert icon.up == ["start", "stop"]
+    assert icon.parts["on_show"] == face.show
+    assert icon.parts["on_toggle"] is face.parts["on_toggle"]
+    assert icon.parts["on_quit"] == face.parts["on_quit"]
+    assert icon.states == [State.USER_SPEAKING]
+    assert icon.sessions == [True, False]
+    wiring.built[0]["on_mode"](False)
+    assert icon.modes == [False]
+
+
+def test_the_flag_changes_nothing_for_the_window(
+    configured: Path, wiring: Wiring, windows: type[FakeWindow]
+) -> None:
+    """`run --tray` is what `autostart` writes: on the window it is the same
+    one icon, not a second."""
+    assert main(["run", "--tray"]) == 0
+
+    [face] = windows.built
+    [icon] = FakeTray.built
     assert icon.parts["on_show"] == face.show
 
 
@@ -1733,7 +1761,7 @@ def test_on_the_terminal_the_tray_has_no_window_to_show(
     main(["run", "--tray", "--terminal"])
 
     [icon] = trays.built
-    assert icon.parts["on_show"] is None
+    assert icon.parts.get("on_show") is None
 
 
 def test_an_unconfigured_machine_runs_the_wizard_in_the_window_then_talks(
@@ -1782,6 +1810,9 @@ def test_a_wizard_walked_away_from_on_an_unconfigured_machine_ends_the_run(
     assert wiring.built == []
     [face] = windows.built
     assert face.up == ["start", "stop"]
+    # Up on the wizard's page too, where minimising hides into it (D34).
+    [icon] = FakeTray.built
+    assert icon.up == ["start", "stop"]
 
 
 def test_the_settings_button_stops_the_assistant_opens_the_list_and_starts_it_again(
@@ -1822,6 +1853,9 @@ def test_the_settings_button_stops_the_assistant_opens_the_list_and_starts_it_ag
     assert len(wiring.built) == 2
     [face] = windows.built
     assert face.up == ["start", "stop"]
+    # One icon across both talks and the list between them (D34).
+    [icon] = FakeTray.built
+    assert icon.up == ["start", "stop"]
 
 
 def test_quit_on_the_window_ends_the_run_the_way_ctrl_c_does(
