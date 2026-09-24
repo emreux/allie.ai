@@ -1,146 +1,52 @@
-"""What every speech engine is reduced to (design.md section 3.5).
+"""What the program's own voice is reduced to (plan.md D32).
 
-The contract is one sentence long: **a provider yields 16-bit signed mono PCM,
-little endian, at the rate it declares in `sample_rate`.** Windows speaks at
-16 kHz, Azure at 24; both are asked for raw PCM rather than a compressed
-format, so whatever plays the audio never has to decode anything.
+The contract is one sentence long: **a voice yields 16-bit signed mono PCM,
+little endian, at the rate it declares in `sample_rate`.** Raw PCM rather
+than a compressed format, so whatever plays it never decodes anything.
 
-Streaming is not optional here, and `sentences` below is why. A sentence is
-handed to the engine the moment it is whole rather than at the end of the
-script, so the first is already being said while the rest arrives. What arrives
-in the live product is short and already written - a gate's question, a
-reminder, one of three failure sentences (D3, D4, D10) - and the streaming
-shape is what lets `app.py` cut any of them off mid-word when the user talks.
+What it says is short and already written: a gate's question and the hint
+after it, a reminder, the filler while a tool takes its time, one of three
+failure sentences (D3, D4, D10). Each item handed to `stream` is one whole
+utterance - the pipeline's regrouping of a model's fragments into sentences
+went with the pipeline, since nothing streams fragments here any more - and
+the streaming shape is what lets `app.py` cut any of them off mid-word when
+the user talks.
 
-Text normalisation - reading `25.08.2026` and `%14` the way a person would -
-is phase 3.4 and lives in `tts/normalize.py` when it arrives. It belongs in
-front of this module, not inside it.
+Since 2026-09-24 there is one voice and it is the assistant's: the live
+model reads the sentences itself, in the voice the conversation speaks in
+(`tts/live_voice.py`). Windows' voice and Google's separate synthesiser are
+gone, and with them the choosing of a voice - it is `[live] voice`.
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncGenerator, Iterable, Sequence
 from typing import Protocol, runtime_checkable
 
-__all__ = [
-    "MIN_SENTENCE_CHARS",
-    "TERMINATORS",
-    "TTSProvider",
-    "VoiceInfo",
-    "choose_voice",
-    "sentences",
-]
-
-# What ends a sentence in the scripts this project has voices for. It is a
-# fallback in code, the last link of the chain in section 3.12: a language
-# whose script ends sentences differently - Greek with `;`, Devanagari with
-# `|` - says so in its locale pack when item 1.8 gives it somewhere to say it.
-TERMINATORS = ".!?…"
-
-# A full stop after four characters is far more likely to be a title or an
-# abbreviation than the end of a thought. Anything shorter than this is kept
-# and read together with what follows, which is also what a person would do
-# with "Dr. Mehmet Bey aradi."
-MIN_SENTENCE_CHARS = 12
-
-
-@dataclass(frozen=True, slots=True)
-class VoiceInfo:
-    """One voice the engine can read with, as the setup wizard lists them.
-
-    `language` is ISO 639-1 without the region: the product locale of section
-    3.12 is `tr`, and which of `tr-TR` or `tr-CY` a voice claims is not a
-    choice anyone wants to make in a menu.
-    """
-
-    id: str
-    display_name: str
-    language: str
+__all__ = ["TTSProvider"]
 
 
 @runtime_checkable
 class TTSProvider(Protocol):
-    """A speech engine, local or hosted."""
+    """The program's own voice."""
 
     id: str
 
-    # Of the PCM `stream` yields. Providers differ and none of them should be
-    # resampled on the way to the speaker.
+    # Of the PCM `stream` yields.
     sample_rate: int
 
-    async def list_voices(self, language: str | None = None) -> list[VoiceInfo]:
-        """The voices installed or offered, optionally for one language only."""
-        ...
-
-    def stream(self, chunks: AsyncIterator[str], *, voice: str) -> AsyncIterator[bytes]:
-        """Speaks text as it arrives, yielding one buffer per sentence.
+    def stream(self, texts: Sequence[str]) -> AsyncGenerator[bytes]:
+        """Says each of `texts` in turn, yielding PCM as it comes.
 
         Declared `def` rather than `async def` for the same reason as
-        `LiveSession.events`: implementations are async generators.
+        `LiveSession.events`: implementations are async generators. A
+        generator rather than any iterator, so that whoever stops listening
+        halfway can close it - and with it whatever it had open to speak.
         """
         ...
 
-
-async def sentences(chunks: AsyncIterator[str]) -> AsyncIterator[str]:
-    """Regroups a stream of text fragments into whole sentences.
-
-    Shared by every provider: the rule about when a sentence is safe to speak
-    has nothing to do with which engine speaks it, and three copies of it
-    would drift apart.
-    """
-    buffer = ""
-
-    async for fragment in chunks:
-        buffer += fragment
-        while (cut := _end_of_sentence(buffer)) is not None:
-            head, buffer = buffer[:cut], buffer[cut:]
-            # Never blank: a cut is only offered once what precedes it holds
-            # `MIN_SENTENCE_CHARS` of something other than space.
-            yield head.strip()
-
-    # Models end a turn without punctuation more often than one would like,
-    # and the last sentence of one that does not is still worth speaking.
-    if buffer.strip():
-        yield buffer.strip()
-
-
-def choose_voice(voices: Sequence[VoiceInfo], preferred: str | None) -> str:
-    """Which of the installed voices to speak with, given the pack's preference.
-
-    The pack names a preference rather than an identifier (item 1.8): `tr.toml`
-    says `Tolga`, and what is installed is `Microsoft Tolga` under a registry
-    path nobody would put in a TOML file. A preference that matches nothing is
-    not an error - it is a machine where that voice was never installed.
-    Shared by the state machine, which picks the voice an answer is read in,
-    and by a hosted engine picking the local voice it falls back to.
-    """
-    if not voices:
-        return ""
-
-    if preferred:
-        wanted = preferred.casefold()
-        for voice in voices:
-            if wanted in voice.display_name.casefold():
-                return voice.id
-
-    return voices[0].id
-
-
-def _end_of_sentence(text: str) -> int | None:
-    """Where the first sentence that is safe to speak ends, if there is one."""
-    for index, character in enumerate(text):
-        if character == "\n":
-            ends_here = True
-        elif character in TERMINATORS:
-            # Only when something follows it: a full stop at the end of the
-            # buffer may yet turn out to be `21.5`, and one inside a number
-            # has a digit after it rather than a space.
-            ends_here = index + 1 < len(text) and text[index + 1].isspace()
-        else:
-            continue
-
-        if ends_here and len(text[: index + 1].strip()) >= MIN_SENTENCE_CHARS:
-            return index + 1
-
-    return None
+    async def prepare(self, texts: Iterable[str]) -> None:
+        """Makes the sentences the program always says ready to be said at
+        once and without a network. Never raises for a sentence it could
+        not prepare: that one is read when it is needed."""
+        ...

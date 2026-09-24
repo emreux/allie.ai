@@ -43,7 +43,6 @@ TURKISH = Locale(
     code="tr",
     name="Türkçe",
     stt_language="tr",
-    voices={},
     ui={
         "state_user_speaking": "seni duyuyor",
         "state_idle": "hazır",
@@ -88,7 +87,7 @@ def screen() -> Screen:
 
 def line(screen: Screen, locale: Locale | None = None, clock: Clock | None = None) -> StatusLine:
     return StatusLine(
-        locale or Locale("en", "English", "en", {}, {}),
+        locale or Locale("en", "English", "en", {}),
         console=screen.console,
         clock=clock if clock is not None else Clock(),
     )
@@ -358,7 +357,7 @@ def test_a_microphone_that_went_quiet_again_is_said_again(screen: Screen) -> Non
 
 
 def test_the_quiet_microphone_is_said_in_the_pack_s_words(screen: Screen) -> None:
-    pack = Locale("tr", "Türkçe", "tr", {}, {"microphone_quiet": "mikrofon kısık ({level} dBFS)"})
+    pack = Locale("tr", "Türkçe", "tr", {"microphone_quiet": "mikrofon kısık ({level} dBFS)"})
 
     with line(screen, pack) as status:
         status.microphone_level(-45.0)

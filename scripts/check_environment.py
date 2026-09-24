@@ -5,9 +5,9 @@ of asserting: on a fresh clone the point is to see which piece is missing.
 
     uv run python scripts/check_environment.py
 
-Covered: the Python version, the audio devices, the installed speech voices
-(including the ones Windows hides from SAPI), the credential store, and the
-local speech-to-text model. It never touches the network except through the
+Covered: the Python version, the audio devices, the credential store, and the
+local speech-to-text model. No speech voice is checked: the assistant speaks
+in the live model's own voice (plan.md D32). It never touches the network except through the
 model cache, and it never records or plays anything - `scripts/smoke_audio.py`
 does that, because it needs a person to listen.
 """
@@ -15,14 +15,11 @@ does that, because it needs a person to listen.
 from __future__ import annotations
 
 import sys
-import winreg
 from typing import Any
 
 OK = "  ok   "
 WARN = " warn  "
 FAIL = " FAIL  "
-
-TURKISH_LANGUAGE_ID = "41f"
 
 
 def _line(status: str, message: str) -> None:
@@ -58,84 +55,6 @@ def check_audio_devices() -> bool:
     _line(OK, f"microphone: {source['name']}")
     _line(OK, f"speaker   : {sink['name']}")
     return True
-
-
-def _registry_voices(path: str) -> list[str]:
-    """Reads voice tokens from one registry hive path."""
-    names: list[str] = []
-    try:
-        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path)
-    except OSError:
-        return names
-
-    index = 0
-    while True:
-        try:
-            token = winreg.EnumKey(key, index)
-        except OSError:
-            break
-        try:
-            with winreg.OpenKey(key, token) as sub:
-                names.append(str(winreg.QueryValueEx(sub, "")[0]))
-        except OSError:
-            names.append(token)
-        index += 1
-    return names
-
-
-def check_speech_voices() -> bool:
-    """Finds the voices SAPI exposes, and the modern ones it usually hides.
-
-    Windows installs newer voices under Speech_OneCore. `SAPI.SpVoice` does not
-    list those, so a language pack can be installed and still be invisible to
-    `GetVoices()`. The assistant enumerates both hives itself (`tts/sapi.py`),
-    so these are listed for information rather than as a problem.
-    """
-    try:
-        import win32com.client
-    except Exception as error:
-        _line(FAIL, f"pywin32 could not be imported: {error}")
-        return False
-
-    try:
-        engine = win32com.client.Dispatch("SAPI.SpVoice")
-        sapi_voices = [voice.GetDescription() for voice in engine.GetVoices()]
-    except Exception as error:
-        _line(FAIL, f"SAPI is not available: {error}")
-        return False
-
-    for name in sapi_voices:
-        _line(OK, f"SAPI voice: {name}")
-
-    one_core = _registry_voices(r"SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens")
-    hidden = [name for name in one_core if name not in sapi_voices]
-    for name in hidden:
-        _line(OK, f"Speech_OneCore voice, read directly by the assistant: {name}")
-
-    turkish = [
-        name
-        for name in sapi_voices
-        if "turk" in name.lower() or TURKISH_LANGUAGE_ID in name.lower()
-    ]
-    if turkish:
-        _line(OK, f"Turkish voice available: {turkish[0]}")
-        return True
-
-    turkish_hidden = [name for name in hidden if "turk" in name.lower()]
-    if turkish_hidden:
-        _line(
-            OK,
-            f"Turkish voice {turkish_hidden[0]!r} is installed under Speech_OneCore; the "
-            f"assistant reads that hive itself (tts/sapi.py), so nothing needs copying",
-        )
-        return True
-
-    _line(
-        WARN,
-        "no Turkish voice - install one from Settings > Time & Language > Speech, "
-        "or let phase 1 speak Turkish text with an English voice",
-    )
-    return False
 
 
 def check_credential_store() -> bool:
@@ -190,7 +109,6 @@ def main() -> int:
         check_credential_store(),
         check_speech_to_text_model(),
     ]
-    check_speech_voices()  # a missing Turkish voice is a warning, not a failure
     print("-" * 42)
 
     if all(required):

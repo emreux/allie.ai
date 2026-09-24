@@ -21,7 +21,7 @@ than everything it does.
 
 ```
 uv sync
-uv run allie setup     # provider, key, model, language, voice, microphone
+uv run allie setup     # assistant, key, model, language, microphone; later, one setting at a time
 uv run allie run       # the window; --terminal for a status line, --tray for the icon
 uv run allie doctor    # who answers, what leaves this machine, where the files are
 ```

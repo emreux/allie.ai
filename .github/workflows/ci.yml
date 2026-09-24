@@ -12,7 +12,7 @@
 # later; delete it whenever.
 #
 # Notes for whoever re-enables it:
-#   - The runner has to be Windows: pywin32, SAPI and the Windows Credential
+#   - The runner has to be Windows: pywin32 and the Windows Credential
 #     Manager have no Linux equivalent.
 #   - This file has never worked. Its one run failed at "Set up job", before a
 #     single step executed, which points at an action reference the runner could

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -52,7 +52,6 @@ from allie.app import (
     RESUME_MINUTES,
     Greeting,
     LiveAssistant,
-    NoVoiceError,
     State,
     Turn,
     read_answer,
@@ -84,19 +83,14 @@ from allie.store.db import open_database
 from allie.store.repos import UsageRepo
 from allie.stt.base import SAMPLE_RATE, Audio, Transcript
 from allie.tools.registry import ToolRegistry, tool
-from allie.tts.base import VoiceInfo
 from allie.usage.tracker import Pricing, UsageTracker
 from allie.web.search import Searched
 from tests.live_contract import FakeLiveProvider, FakeLiveSession
-
-TOLGA = VoiceInfo(id=r"HKLM\...\TR-TR_TOLGA", display_name="Microsoft Tolga", language="tr")
-ZIRA = VoiceInfo(id=r"HKLM\...\EN-US_ZIRA", display_name="Microsoft Zira", language="en")
 
 TURKISH = Locale(
     code="tr",
     name="Türkçe",
     stt_language="tr",
-    voices={"fake": "Tolga"},
     ui={
         "key_invalid": "API anahtarın geçersiz görünüyor, yenilemen gerekiyor.",
         "unreachable": "Sağlayıcıya bağlanamadım, tekrar dener misin?",
@@ -320,33 +314,32 @@ class FakeSTT:
 
 
 class FakeTTS:
-    """An engine that returns the text it was given instead of speech.
+    """A voice that returns the text it was given instead of speech.
 
-    It speaks at the model's rate rather than Windows', deliberately: a rate
-    that happened to match the one the player would default to would let a
-    hardcoded 16 kHz pass the test written to catch it.
+    It speaks at the model's rate rather than a local engine's, deliberately:
+    a rate that happened to match the one the player would default to would
+    let a hardcoded 16 kHz pass the test written to catch it.
     """
 
     id = "fake"
     sample_rate = RATE
 
-    def __init__(self, *, installed: list[VoiceInfo] | None = None) -> None:
-        self.installed = [TOLGA, ZIRA] if installed is None else installed
+    def __init__(self) -> None:
         self.said: list[str] = []
-        self.voices_used: list[str] = []
-        self.asked_for: list[str | None] = []
+        # What `prepare` was told to keep, and how many streams were closed.
+        self.prepared: list[str] | None = None
+        self.closed = 0
 
-    async def list_voices(self, language: str | None = None) -> list[VoiceInfo]:
-        self.asked_for.append(language)
-        if language is None:
-            return list(self.installed)
-        return [voice for voice in self.installed if voice.language == language]
+    async def stream(self, texts: Sequence[str]) -> AsyncGenerator[bytes]:
+        try:
+            for text in texts:
+                self.said.append(text)
+                yield text.encode("utf-8")
+        finally:
+            self.closed += 1
 
-    async def stream(self, chunks: AsyncIterator[str], *, voice: str) -> AsyncIterator[bytes]:
-        self.voices_used.append(voice)
-        async for chunk in chunks:
-            self.said.append(chunk)
-            yield chunk.encode("utf-8")
+    async def prepare(self, texts: Iterable[str]) -> None:
+        self.prepared = list(texts)
 
 
 class FakeSpeaker:
@@ -1270,7 +1263,7 @@ async def test_a_tool_that_answers_at_once_needs_no_filler() -> None:
 
 
 async def test_the_filler_comes_from_the_code_when_the_pack_has_none() -> None:
-    english = Locale(code="en", name="English", stt_language="en", voices={}, ui={})
+    english = Locale(code="en", name="English", stt_language="en", ui={})
     gate = Held()
     capture = FakeCapture()
     tts = FakeTTS()
@@ -1362,7 +1355,7 @@ async def test_the_question_says_how_to_answer() -> None:
 
     await one_turn(asking(capture=capture, stt=says("evet"), tts=tts), capture)
 
-    assert tts.said[0] == "Spotify will be opened. Evet ya da hayır de."
+    assert tts.said[:2] == ["Spotify will be opened.", "Evet ya da hayır de."]
 
 
 async def test_a_tool_that_asks_does_not_run_when_the_user_says_no() -> None:
@@ -1404,7 +1397,7 @@ async def test_an_answer_with_neither_word_is_asked_about_once_more() -> None:
 
     assert ran == ["open_app:Spotify"]
     assert len(capture.windows) == 2
-    assert tts.said[1] == TURKISH.ui["confirm_again"]
+    assert tts.said[2] == TURKISH.ui["confirm_again"]
 
 
 async def test_two_answers_with_neither_word_are_a_no() -> None:
@@ -1556,7 +1549,7 @@ async def test_switching_off_in_the_window_is_a_no() -> None:
 
 async def test_the_words_that_count_come_from_the_pack() -> None:
     """A pack that names no words gets the English ones beside the code."""
-    english = Locale(code="en", name="English", stt_language="en", voices={}, ui={})
+    english = Locale(code="en", name="English", stt_language="en", ui={})
     capture = FakeCapture(answers=[speech()])
 
     await one_turn(asking(capture=capture, stt=says("Yes."), locale=english), capture)
@@ -1576,13 +1569,13 @@ async def test_the_pack_s_words_replace_the_english_ones_rather_than_adding_to_t
 async def test_the_hint_falls_back_to_english_together_with_the_words() -> None:
     """Whichever words are listened for, the hint names them: the two fall
     back as one, or the user would be told to say words nobody hears."""
-    english = Locale(code="en", name="English", stt_language="en", voices={}, ui={})
+    english = Locale(code="en", name="English", stt_language="en", ui={})
     capture = FakeCapture(answers=[speech()])
     tts = FakeTTS()
 
     await one_turn(asking(capture=capture, stt=says("no"), tts=tts, locale=english), capture)
 
-    assert tts.said[0] == "Spotify will be opened. " + app.TEXT["confirm_hint"]
+    assert tts.said[:2] == ["Spotify will be opened.", app.TEXT["confirm_hint"]]
 
 
 def test_the_window_is_the_six_seconds_section_3_1_allows() -> None:
@@ -1950,7 +1943,7 @@ async def test_a_polite_hang_up_ends_the_session_and_the_next_sentence_opens_one
 async def test_the_sentences_it_says_are_the_ones_in_the_locale_pack() -> None:
     """Nothing said out loud is written in this file: the pack answers
     first, `TEXT` last."""
-    english = Locale(code="en", name="English", stt_language="en", voices={}, ui={})
+    english = Locale(code="en", name="English", stt_language="en", ui={})
     capture = FakeCapture()
     tts = FakeTTS()
     provider = Provider(refuse=[ProviderError("down", kind="unreachable")])
@@ -1999,35 +1992,57 @@ async def test_the_bug_comes_out_of_run_as_well() -> None:
 
 
 # --------------------------------------------------------------------------
-# The voice the questions are asked in
+# The voice the program's own sentences are said in (D32)
 # --------------------------------------------------------------------------
 
 
-async def test_the_question_is_read_in_the_voice_the_locale_asks_for() -> None:
+async def test_the_sentences_that_never_change_are_prepared_at_the_start() -> None:
+    """The fillers, the hint, the failures, the limits, the greeting - kept
+    by the voice, so that they cost no request and need no network."""
+    tts = FakeTTS()
+    assistant = assistant_with(tts=tts)
+    task = asyncio.create_task(assistant.run())
+
+    await until(lambda: tts.prepared is not None)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert tts.prepared == [*TURKISH.fillers, *(TURKISH.ui[key] for key in app.TEXT)]
+
+
+async def test_preparing_the_voice_does_not_hold_the_end_of_the_run() -> None:
+    """The first start after a new voice reads a dozen sentences; a quit in
+    the middle of that is still a quit."""
+
+    class Slow(FakeTTS):
+        async def prepare(self, texts: Iterable[str]) -> None:
+            await asyncio.Event().wait()
+
+    capture = FakeCapture()
+    task = asyncio.create_task(assistant_with(capture=capture, tts=Slow()).run())
+    await until(lambda: capture.started)
+
+    task.cancel()
+    await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 1)
+
+    assert not capture.started
+
+
+async def test_a_sentence_cut_short_lets_the_voice_go() -> None:
+    """The user talked over a question: the speaker stops asking, and the
+    voice's stream - and the reader session behind it - is closed."""
+
+    class Stops(FakeSpeaker):
+        async def play(self, buffers: AsyncIterator[bytes], *, sample_rate: int) -> None:
+            self.played.append(await anext(buffers))
+
     capture = FakeCapture(answers=[speech()])
     tts = FakeTTS()
 
-    await one_turn(asking(capture=capture, stt=says("evet"), tts=tts), capture)
+    await one_turn(asking(capture=capture, stt=says("evet"), tts=tts, speaker=Stops()), capture)
 
-    assert tts.voices_used == [TOLGA.id]
-
-
-async def test_a_locale_with_no_voice_of_its_own_still_gets_a_voice() -> None:
-    capture = FakeCapture(answers=[speech()])
-    tts = FakeTTS(installed=[ZIRA])
-
-    await one_turn(asking(capture=capture, stt=says("evet"), tts=tts), capture)
-
-    assert tts.voices_used == [ZIRA.id]
-
-
-async def test_a_machine_with_no_voice_at_all_says_so_before_it_listens() -> None:
-    capture = FakeCapture()
-
-    with pytest.raises(NoVoiceError):
-        await assistant_with(capture=capture, tts=FakeTTS(installed=[])).begin()
-
-    assert not capture.started
+    assert tts.said[0] == "Spotify will be opened."
+    assert tts.closed >= 1
 
 
 # --------------------------------------------------------------------------

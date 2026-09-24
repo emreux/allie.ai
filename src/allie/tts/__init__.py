@@ -1,8 +1,8 @@
-"""Text to speech: one protocol, one engine per vendor (design.md section 3.5).
+"""The program's own voice: one protocol, one voice (plan.md D32).
 
-Nothing outside this package imports a speech SDK. `app.py` sees only what
-`base.py` declares, which is what lets Windows be swapped for Azure in phase
-3.4 without touching the state machine.
+`app.py` sees only what `base.py` declares. The voice is the assistant's -
+the live model reading the program's sentences from a session of its own
+(`live_voice.py`) - so there is nothing here to choose between.
 """
 
 __all__: list[str] = []

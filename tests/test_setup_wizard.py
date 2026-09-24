@@ -19,10 +19,10 @@ Since 2026-09-15 the last question is which microphone to listen through,
 and `allie mic` asks that one question on its own. The device list is
 handed in, so no test touches PortAudio.
 
-The live product (plan.md L1.6) added two questions between the model and
-the microphone: who hears the yes or no of a confirmation and who reads the
-questions out loud (D10: the local recogniser and the local voice serve
-only the gate window and the reminders now). And the microphone list puts
+The live product (plan.md L1.6) added a question between the model and the
+microphone: who hears the yes or no of a confirmation (D10: the local
+recogniser serves only the gate window now). Who reads the questions out
+loud was a second one until D32: the assistant does, in its own voice. And the microphone list puts
 the Windows audio engine first and warns on a raw kernel-streaming choice
 (D18): that path has no echo cancellation, and the assistant hears itself.
 
@@ -56,7 +56,6 @@ from allie.config import (
     LocaleSettings,
     Settings,
     STTSettings,
-    TTSSettings,
     WakeSettings,
     config_path,
     load_settings,
@@ -64,6 +63,7 @@ from allie.config import (
     store_api_key,
 )
 from allie.live.base import (
+    AuthenticationError,
     LiveEvent,
     ModelInfo,
     OutputText,
@@ -80,6 +80,7 @@ from allie.setup_wizard import (
     Option,
     TerminalPrompter,
     run_microphone_setup,
+    run_settings,
     run_setup,
     wording,
 )
@@ -94,6 +95,9 @@ GOOD_KEY = "good-key"
 # A key checked while the network is down: the provider cannot say whether it
 # works, and the adapter reports that as a refusal of the request, not the key.
 OFFLINE_KEY = "offline"
+# A key that was stored once and has been revoked since: only asking for the
+# models finds out.
+DEAD_KEY = "revoked-since"
 
 
 class FakeProvider:
@@ -129,6 +133,10 @@ class FakeProvider:
         return self.api_key == GOOD_KEY
 
     async def list_models(self) -> list[ModelInfo]:
+        if self.down:
+            raise ProviderError("fake could not be reached (ConnectError)")
+        if self.api_key == DEAD_KEY:
+            raise AuthenticationError("fake refused the key")
         return list(self.models)
 
     @asynccontextmanager
@@ -181,6 +189,11 @@ class ScriptedPrompter:
         return self._answer(key)
 
     async def ask(self, key: str) -> str | None:
+        return self._answer(key)
+
+    async def menu(self, key: str, options: Sequence[Option]) -> str | None:
+        self.offered[key] = [option.value for option in options]
+        self.labelled[key] = [option.label for option in options]
         return self._answer(key)
 
     def _answer(self, key: str) -> str | None:
@@ -257,7 +270,6 @@ def complete_run(**overrides: str | list[str | None] | None) -> ScriptedPrompter
         "api_key": GOOD_KEY,
         "model": "fast",
         "hears": "local",
-        "reads": "sapi",
         "microphone": "",
     }
     answers.update(overrides)
@@ -894,7 +906,7 @@ async def test_walking_away_from_the_assistant_writes_nothing(
 
 
 # --------------------------------------------------------------------------
-# Who hears the yes or no, who reads the questions (L1.6)
+# Who hears the yes or no (L1.6)
 # --------------------------------------------------------------------------
 
 
@@ -917,17 +929,17 @@ async def test_who_hears_the_yes_or_no_is_asked_when_google_is_at_hand(
     assert load_settings().stt.provider == "gemini"
 
 
-async def test_who_reads_the_questions_is_asked_the_same_way(
+async def test_who_reads_the_questions_is_no_question_any_more(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
-    save_settings(Settings(locale=LocaleSettings(code="tr")))
-    prompter = complete_run(reads="gemini")
+    """D32: the assistant reads them, in its own voice - there is nothing
+    to choose, and nothing about a voice engine is written."""
+    prompter = complete_run()
 
     await run_setup(prompter, catalog=fake_catalog())
 
-    assert prompter.offered["reads"] == ["sapi", "gemini"]
-    assert prompter.labelled["reads"] == [turkish("reads_sapi"), turkish("reads_gemini")]
-    assert load_settings().tts.provider == "gemini"
+    assert "reads" not in prompter.asked
+    assert "[tts]" not in config_path().read_text(encoding="utf-8")
 
 
 def turkish(key: str) -> str:
@@ -938,30 +950,27 @@ def turkish(key: str) -> str:
 async def test_without_a_google_key_the_local_engines_are_taken_without_a_question(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
-    """Another provider's key is no use to Google's recogniser or voice;
-    with one choice there is no question, and the file says local."""
+    """Another provider's key is no use to Google's recogniser; with one
+    choice there is no question, and the file says local."""
     prompter = complete_run(provider="openrouter")
 
     await run_setup(prompter, catalog=fake_catalog("gemini", "openrouter"))
 
     assert "hears" not in prompter.asked
-    assert "reads" not in prompter.asked
-    settings = load_settings()
-    assert (settings.stt.provider, settings.tts.provider) == ("local", "sapi")
+    assert load_settings().stt.provider == "local"
 
 
 async def test_a_google_key_stored_earlier_is_enough_to_offer_google(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
     """Set up on OpenRouter after a Gemini run: the Gemini key is still in
-    the Credential Manager, and the two engines can use it."""
+    the Credential Manager, and the recogniser can use it."""
     store_api_key("gemini", "AIza-from-last-time")
-    prompter = complete_run(provider="openrouter", hears="gemini", reads="sapi")
+    prompter = complete_run(provider="openrouter", hears="gemini")
 
     await run_setup(prompter, catalog=fake_catalog("gemini", "openrouter"))
 
     assert prompter.offered["hears"] == ["local", "gemini"]
-    assert prompter.offered["reads"] == ["sapi", "gemini"]
     assert load_settings().stt.provider == "gemini"
 
 
@@ -969,7 +978,7 @@ async def test_the_questions_come_in_the_plan_s_order(
     config_home: Path, vault: MemoryKeyring
 ) -> None:
     """Plan.md L1.6 and D31: the assistant first, then provider, key,
-    model, who hears, who reads, microphone - the microphone last, so that
+    model, who hears, microphone - the microphone last, so that
     walking away there still leaves nothing written."""
     prompter = complete_run()
 
@@ -981,7 +990,6 @@ async def test_the_questions_come_in_the_plan_s_order(
         "api_key",
         "model",
         "hears",
-        "reads",
         "microphone",
     ]
 
@@ -991,14 +999,13 @@ async def test_setup_run_again_keeps_the_session_tuning_and_the_engines_models(
 ) -> None:
     """The owner tunes `[live]` by hand in the real run (ADR-001) and may
     come back to setup for the voice: what setup does not ask about, it
-    keeps - the session numbers, the recogniser's and the voice's model."""
+    keeps - the session numbers, the recogniser's model."""
     save_settings(
         Settings(
             live=LiveSettings(
                 primary="gemini:fast", idle_close_seconds=30.0, end_sensitivity="HIGH"
             ),
             stt=STTSettings(provider="gemini", model="a-recogniser"),
-            tts=TTSSettings(provider="gemini", model="a-voice"),
         )
     )
 
@@ -1009,7 +1016,6 @@ async def test_setup_run_again_keeps_the_session_tuning_and_the_engines_models(
     assert settings.live.voice == load_assistants()["friday"].voice_for("gemini")
     assert (settings.live.idle_close_seconds, settings.live.end_sensitivity) == (30.0, "HIGH")
     assert (settings.stt.provider, settings.stt.model) == ("local", "a-recogniser")
-    assert (settings.tts.provider, settings.tts.model) == ("sapi", "a-voice")
 
 
 # --------------------------------------------------------------------------
@@ -1215,6 +1221,273 @@ async def test_mic_with_nothing_to_choose_from_gives_up(
 
 
 # --------------------------------------------------------------------------
+# The settings list (plan.md D32): one row at a time, after the first setup
+# --------------------------------------------------------------------------
+
+
+def set_up(*, key: str | None = GOOD_KEY) -> None:
+    """A machine the first setup has run on: Vesper, Turkish, `fast`."""
+    save_settings(
+        Settings(
+            live=LiveSettings(primary="gemini:fast", voice="Orus", idle_close_seconds=30.0),
+            wake=WakeSettings(enabled=True, model="hey_vesper", threshold=0.5),
+            locale=LocaleSettings(code="tr"),
+            stt=STTSettings(provider="local", model="a-recogniser"),
+        )
+    )
+    if key is not None:
+        store_api_key("gemini", key)
+
+
+def settings_list(**answers: str | list[str | None] | None) -> ScriptedPrompter:
+    """A prompter that opens the rows `settings` names, in turn, and closes
+    the list after them."""
+    rows = answers.pop("settings", [])
+    assert isinstance(rows, list)
+    return ScriptedPrompter(settings=[*rows, None], **answers)
+
+
+async def settings_run(
+    prompter: ScriptedPrompter,
+    *providers: str,
+    database: sqlite3.Connection | None = None,
+) -> int:
+    return await run_settings(
+        prompter, catalog=fake_catalog(*providers), database=database, microphones=LAPTOP
+    )
+
+
+def row(key: str, value: str, language: str = "tr") -> str:
+    """A row of the list as the pack words it."""
+    return locales.load(language).say(f"setting_{key}", TEXT[f"setting_{key}"]).format(value=value)
+
+
+async def test_the_list_shows_every_setting_as_it_stands(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    prompter = settings_list()
+
+    exit_code = await settings_run(prompter)
+
+    assert exit_code == 0
+    assert prompter.offered["settings"] == [
+        "assistant",
+        "locale",
+        "api_key",
+        "model",
+        "hears",
+        "microphone",
+    ]
+    stored = locales.load("tr").say("key_stored", TEXT["key_stored"])
+    whisper = locales.load("tr").say("hears_short_local", TEXT["hears_short_local"])
+    assert prompter.labelled["settings"][:5] == [
+        row("assistant", "Vesper"),
+        row("locale", "Türkçe"),
+        row("api_key", stored),
+        row("model", "fast"),
+        row("hears", whisper),
+    ]
+    assert prompter.asked == ["settings"]
+
+
+async def test_changing_the_assistant_asks_that_one_question_and_keeps_the_rest(
+    config_home: Path, vault: MemoryKeyring, fake_adapter: list[FakeProvider]
+) -> None:
+    """The owner's case: Friday to Jarvis is one question - not the
+    language, the model and the key again."""
+    set_up()
+    prompter = settings_list(settings=["assistant"], assistant="jarvis")
+
+    await settings_run(prompter)
+
+    settings = load_settings()
+    jarvis = load_assistants()["jarvis"]
+    assert prompter.asked == ["settings", "assistant", "settings"]
+    assert settings.live.voice == jarvis.voice_for("gemini")
+    assert (settings.wake.enabled, settings.wake.model) == (True, jarvis.wake)
+    # Vesper's tuned threshold means nothing for Jarvis's model.
+    assert settings.wake.threshold is None
+    assert UserMemory.load().name == "Jarvis"
+    # Everything else as it was, and no provider built to change a voice.
+    assert settings.live.primary == "gemini:fast"
+    assert settings.live.idle_close_seconds == 30.0
+    assert settings.locale.code == "tr"
+    assert vault.vault == {(KEYRING_SERVICE, "gemini"): GOOD_KEY}
+    assert fake_adapter == []
+
+
+async def test_a_saved_row_is_said_with_what_it_says_now(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    prompter = settings_list(settings=["assistant"], assistant="friday")
+
+    await settings_run(prompter)
+
+    assert ("setting_saved", {"setting": row("assistant", "Friday")}) in prompter.said
+
+
+async def test_leaving_a_row_s_question_is_back_to_the_list_with_nothing_changed(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    before = config_path().read_text(encoding="utf-8")
+    prompter = settings_list(settings=["assistant"], assistant=None)
+
+    exit_code = await settings_run(prompter)
+
+    assert exit_code == 0
+    assert prompter.asked == ["settings", "assistant", "settings"]
+    assert config_path().read_text(encoding="utf-8") == before
+
+
+async def test_changing_the_language_writes_the_language_alone(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    prompter = settings_list(settings=["locale"], locale="en")
+
+    await settings_run(prompter)
+
+    settings = load_settings()
+    assert settings.locale.code == "en"
+    assert (settings.live.primary, settings.live.voice) == ("gemini:fast", "Orus")
+
+
+async def test_the_list_is_worded_in_the_language_just_chosen(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    prompter = settings_list(settings=["locale"], locale="en")
+
+    await settings_run(prompter)
+
+    assert prompter.labelled["settings"][0] == TEXT["setting_assistant"].format(value="Vesper")
+
+
+async def test_changing_the_model_uses_the_key_already_stored(
+    config_home: Path, vault: MemoryKeyring, verdicts: sqlite3.Connection
+) -> None:
+    """No key question to change a model: the stored one is used."""
+    set_up()
+    prompter = settings_list(settings=["model"], model="smart")
+
+    await settings_run(prompter, database=verdicts)
+
+    assert load_settings().live.primary == "gemini:smart"
+    assert "api_key" not in prompter.asked and "api_key_keep" not in prompter.asked
+    verdict = remembered(SettingsRepo(verdicts), "gemini", "smart", ttl=60.0)
+    assert verdict is not None and verdict.ok
+
+
+async def test_changing_the_model_with_no_key_stored_asks_for_one_first(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up(key=None)
+    prompter = settings_list(settings=["model"], api_key=GOOD_KEY, model="smart")
+
+    await settings_run(prompter)
+
+    assert prompter.asked == ["settings", "api_key", "model", "settings"]
+    assert vault.vault == {(KEYRING_SERVICE, "gemini"): GOOD_KEY}
+    assert load_settings().live.primary == "gemini:smart"
+
+
+async def test_a_stored_key_that_died_is_said_and_the_model_stays(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up(key=DEAD_KEY)
+    prompter = settings_list(settings=["model"])
+
+    await settings_run(prompter)
+
+    assert ("bad_key", {}) in prompter.said
+    assert load_settings().live.primary == "gemini:fast"
+
+
+async def test_a_provider_that_cannot_be_reached_is_a_sentence_and_the_list_again(
+    config_home: Path, vault: MemoryKeyring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    set_up()
+    monkeypatch.setattr(FakeProvider, "down", True)
+    prompter = settings_list(settings=["model"])
+
+    exit_code = await settings_run(prompter)
+
+    assert exit_code == 0
+    assert ("provider_unreachable", {}) in prompter.said
+    assert prompter.asked == ["settings", "settings"]
+    assert load_settings().live.primary == "gemini:fast"
+
+
+async def test_changing_the_key_checks_it_before_keeping_it(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up(key="an-old-key")
+    prompter = settings_list(settings=["api_key"], api_key_keep="mistyped", api_key=GOOD_KEY)
+
+    await settings_run(prompter)
+
+    assert ("bad_key", {}) in prompter.said
+    assert vault.vault == {(KEYRING_SERVICE, "gemini"): GOOD_KEY}
+    assert load_settings().live.primary == "gemini:fast"
+
+
+async def test_changing_who_hears_the_yes_or_no(config_home: Path, vault: MemoryKeyring) -> None:
+    set_up()
+    prompter = settings_list(settings=["hears"], hears="gemini")
+
+    await settings_run(prompter)
+
+    assert prompter.offered["hears"] == ["local", "gemini"]
+    stt = load_settings().stt
+    assert (stt.provider, stt.model) == ("gemini", "a-recogniser")
+
+
+async def test_changing_the_microphone_warns_about_a_raw_path(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    prompter = settings_list(settings=["microphone"], microphone=RAW_ARRAY.setting)
+
+    await settings_run(prompter)
+
+    assert load_settings().audio.input_device == RAW_ARRAY.setting
+    assert ("microphone_raw", {}) in prompter.said
+
+
+async def test_the_provider_is_a_row_only_when_there_is_a_choice(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    one, two = settings_list(), settings_list()
+
+    await settings_run(one)
+    await settings_run(two, "gemini", "openrouter")
+
+    assert "provider" not in one.offered["settings"]
+    assert "provider" in two.offered["settings"]
+
+
+async def test_changing_the_provider_asks_its_key_and_its_model_together(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    prompter = settings_list(
+        settings=["provider"], provider="openrouter", api_key=GOOD_KEY, model="smart"
+    )
+
+    await settings_run(prompter, "gemini", "openrouter")
+
+    settings = load_settings()
+    assert settings.live.primary == "openrouter:smart"
+    # Vesper has no voice by OpenRouter's name: the model's own.
+    assert settings.live.voice == ""
+    assert vault.vault[(KEYRING_SERVICE, "openrouter")] == GOOD_KEY
+
+
+# --------------------------------------------------------------------------
 # Giving up
 # --------------------------------------------------------------------------
 
@@ -1364,6 +1637,22 @@ async def test_a_key_can_be_typed_from_inside_the_event_loop() -> None:
         assert await prompter.secret("api_key") == "a-key"
 
 
+async def test_the_terminal_s_settings_list_ends_in_close() -> None:
+    """A terminal has no Close button: the list's last choice is one, and
+    choosing it is done with the list."""
+    prompter = TerminalPrompter(text={"settings": "Settings", "settings_close": "Close"})
+    rows = [Option("assistant", "Assistant: Vesper"), Option("model", "Model: fast")]
+
+    with typed("\r"):
+        first = await prompter.menu("settings", rows)
+    # Down twice from the top: past both rows, onto Close.
+    with typed("\x1b[B\x1b[B\r"):
+        closed = await prompter.menu("settings", rows)
+
+    assert first == "assistant"
+    assert closed is None
+
+
 # --------------------------------------------------------------------------
 # The wizard on the window (plan.md D20): the same questions, a page each
 # --------------------------------------------------------------------------
@@ -1408,7 +1697,6 @@ async def test_the_wizard_runs_through_the_window_and_leaves_the_same_settings(
         "api_key": GOOD_KEY,
         "model": "smart",
         "hears": "local",
-        "reads": "sapi",
         "microphone": "",
     }
     pages: list[PageAnswers] = []
@@ -1441,7 +1729,6 @@ async def test_the_wizard_runs_through_the_window_and_leaves_the_same_settings(
         "choose",
         "choose",
         "secret",
-        "choose",
         "choose",
         "choose",
         "choose",

@@ -12,11 +12,10 @@ beside the code that says it, passed to `say` as the default. That is why
 second thing to keep in step - and why a language nobody has translated still
 produces a working assistant with an English interface.
 
-**Sentences fall back; identity does not.** `code`, `name`, the speech hint and
-the voice preference default to the locale itself rather than to English. An
-English voice reading German, or a recogniser told to expect English while a
-German speaks, are both worse than having no preference at all: the first is
-merely unpleasant, the second means the model never sees what was said.
+**Sentences fall back; identity does not.** `code`, `name` and the speech hint
+default to the locale itself rather than to English. A recogniser told to
+expect English while a German speaks is worse than having no preference at
+all: the model never sees what was said.
 """
 
 from __future__ import annotations
@@ -54,12 +53,6 @@ class Locale:
     # expect. Usually the code above, and deliberately separate from it: a
     # locale is free to show one language and listen for another.
     stt_language: str
-
-    # Preferred voice per engine, from `[tts.voice]`. The value is matched
-    # against the voices actually installed, so it is a preference and not an
-    # identifier - `tr.toml` naming Tolga on a machine without Tolga still
-    # leaves any other Turkish voice usable.
-    voices: Mapping[str, str]
 
     # What `[ui]` translated, already merged over `en`. Anything missing here
     # is answered by the caller's own English constant through `say`.
@@ -100,10 +93,6 @@ class Locale:
     language_code: str = ""
     user_language_rule: str = ""
 
-    def voice(self, engine: str) -> str | None:
-        """The voice this locale prefers for `engine`, if it names one."""
-        return self.voices.get(engine) or None
-
     def say(self, key: str, default: str) -> str:
         """The sentence for `key`, or `default` - the last link of the chain.
 
@@ -129,7 +118,6 @@ def load(code: str | None = None, *, directory: Path | None = None) -> Locale:
         code=wanted,
         name=_text(pack, "name") or wanted,
         stt_language=_text(_table(pack, "stt"), "language") or wanted,
-        voices=_texts(_table(_table(pack, "tts"), "voice")),
         ui={**_texts(_table(english, "ui")), **_texts(_table(pack, "ui"))},
         yes_words=_words(_table(pack, "speech"), "yes_words"),
         no_words=_words(_table(pack, "speech"), "no_words"),
@@ -160,11 +148,8 @@ def system_code() -> str:
 
 
 def iso_code(identifier: int) -> str:
-    """A Windows language identifier as ISO 639-1, or the fallback.
-
-    `tts/sapi.py` reads the same table and returns `""` for a language Windows
-    will not name, because a voice may honestly have no language. An interface
-    may not: it has to be in something before the first question is asked.
+    """A Windows language identifier as ISO 639-1, or the fallback: an
+    interface has to be in some language before the first question is asked.
     """
     return windows.windows_locale.get(identifier, "").partition("_")[0] or FALLBACK_CODE
 

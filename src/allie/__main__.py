@@ -1,8 +1,9 @@
 """Command line entry point - and the composition root of the program.
 
-`setup` asks the questions of item 1.4, the microphone among them since
-2026-09-15 and the live product's three (voice, who hears, who reads) since
-L1.6; `mic` asks the microphone again on its own. `run` is item 1.11: it
+`setup` asks the questions of item 1.4 on a machine that has never been set
+up - the assistant, the key, the model, who hears the yes or no, the
+microphone - and after that opens the settings list, each row changed on
+its own (plan.md D32); `mic` asks the microphone again on its own. `run` is item 1.11: it
 puts the pieces together, hands them to the state machine, and shows the one
 line of terminal that is the entire interface until the tray icon of phase
 4.2. `cost` is 2.4: what the turns cost, read back from `usage_log`. `purge --all`
@@ -26,8 +27,9 @@ wizard's prompt library it will never show.
 **`run` wires the live loop of plan.md section 4.1.** The model speaks for
 itself over one session at a time (`app.py`), so what `_talk` builds is the
 doorman and the microphone stream (`audio/capture.py`), the tool round
-(`agent/core.py`) behind the one gate, the local recogniser and voice that
-serve the gate window and the reminders (D3, D4, D10), and what a session is
+(`agent/core.py`) behind the one gate, the local recogniser and the
+assistant's reading voice that serve the gate window and the reminders (D3,
+D4, D10, D32), and what a session is
 opened with - the prompt with the pack's language rule, the user's facts and
 the time, the tools, the pack's language code, the `[live]` knobs - read
 afresh at every open, since the facts and the time move.
@@ -63,6 +65,7 @@ from allie.config import (
     Settings,
     config_dir,
     config_path,
+    data_dir,
     is_configured,
     load_api_key,
     load_settings,
@@ -196,15 +199,11 @@ DOCTOR_TEXT: dict[str, str] = {
     "doctor_verdict_none": "  tool calling: not checked yet (checked at the next start)",
     "doctor_stt_local": "  recogniser: Whisper '{size}', on this machine",
     "doctor_stt_gemini": "  recogniser: Google ({model}), Whisper '{size}' behind it",
-    "doctor_tts_sapi": "  voice: Windows ({voice})",
-    "doctor_tts_gemini": "  voice: Google ({model}), Windows behind it",
     "doctor_leaves": "What leaves this machine",
     "doctor_voice_stays": "  your voice: stays here",
     "doctor_voice_goes": "  your voice: goes to Google (the recogniser)",
     "doctor_text_goes": "  what you said, as text: goes to {provider}",
     "doctor_content_goes": "  pages, clipboard text and mail you ask about: go to {provider}",
-    "doctor_answer_stays": "  what the assistant says: stays here",
-    "doctor_answer_goes": "  what the assistant says: goes to Google (the voice)",
     "doctor_weather": "  a place you ask the weather for: goes to Open-Meteo",
     "doctor_store": "  the name of an app you do not have: goes to the Microsoft Store",
     "doctor_messages": "  a message: the WhatsApp app on this PC, or Telegram's servers as you",
@@ -356,7 +355,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         # Looked up on the module rather than imported by name so the tests can
         # stand in for it; the wizard itself opens a prompt and would hang.
-        return asyncio.run(setup_wizard.run_setup(setup_wizard.TerminalPrompter()))
+        # The questions in a row once; after that, one setting at a time.
+        if not is_configured():
+            return asyncio.run(setup_wizard.run_setup(setup_wizard.TerminalPrompter()))
+        return asyncio.run(setup_wizard.run_settings(setup_wizard.TerminalPrompter()))
 
     if args.command == "mic":
         from allie import setup_wizard
@@ -522,10 +524,6 @@ def _doctor() -> int:
         say("doctor_stt_gemini", model=settings.stt.model, size=DEFAULT_MODEL_SIZE)
     else:
         say("doctor_stt_local", size=DEFAULT_MODEL_SIZE)
-    if settings.tts.provider == "gemini":
-        say("doctor_tts_gemini", model=settings.tts.model)
-    else:
-        say("doctor_tts_sapi", voice=pack.voice("sapi") or "the default voice")
 
     # What leaves this machine.
     lines.append("")
@@ -533,7 +531,6 @@ def _doctor() -> int:
     say("doctor_voice_goes" if settings.stt.provider == "gemini" else "doctor_voice_stays")
     say("doctor_text_goes", provider=provider_name)
     say("doctor_content_goes", provider=provider_name)
-    say("doctor_answer_goes" if settings.tts.provider == "gemini" else "doctor_answer_stays")
     say("doctor_weather")
     say("doctor_store")
     say("doctor_messages")
@@ -822,7 +819,6 @@ def _run(*, device: str | None = None, tray: bool = False, terminal: bool = Fals
     """
     from rich.console import Console
 
-    from allie.app import NoVoiceError
     from allie.audio.capture import MicrophoneUnavailableError, device_choice
     from allie.audio.wake import WakeModelMissingError
     from allie.live.registry import RegistryError
@@ -851,16 +847,15 @@ def _run(*, device: str | None = None, tray: bool = False, terminal: bool = Fals
         return _GAVE_UP
 
     setup_logging()
-    # What the user can fix and the program cannot: a key that is gone, a
-    # voice that is not installed, weights that could not be fetched, a
-    # microphone that would not open, a memory file edited into something
-    # that does not parse, a wake-word model that is not where the
-    # settings say. Each is one sentence and exit code 1. Anything else is
-    # a bug in this project and keeps its traceback.
+    # What the user can fix and the program cannot: a key that is gone,
+    # weights that could not be fetched, a microphone that would not open, a
+    # memory file edited into something that does not parse, a wake-word
+    # model that is not where the settings say. Each is one sentence and
+    # exit code 1. Anything else is a bug in this project and keeps its
+    # traceback.
     fixable = (
         RegistryError,
         WakeModelMissingError,
-        NoVoiceError,
         ModelUnavailableError,
         MicrophoneUnavailableError,
         MemoryFileError,
@@ -982,12 +977,20 @@ async def _session(
     try:
         while not wants.quitting.is_set():
             if not is_configured() or wants.settings:
+                first = not is_configured()
                 wants.settings = False
                 window.wizard(True)
                 try:
                     # Looked up on the module, as `setup` does, so that the
-                    # tests can stand in for it.
-                    code = await setup_wizard.run_setup(WindowPrompter(window))
+                    # tests can stand in for it. The questions in a row on a
+                    # machine never set up; the list of settings, each
+                    # changed on its own, every time after (D32).
+                    prompter = WindowPrompter(window)
+                    code = await (
+                        setup_wizard.run_setup(prompter)
+                        if first
+                        else setup_wizard.run_settings(prompter)
+                    )
                 finally:
                     window.wizard(False)
                 if wants.quitting.is_set() or (code != _OK and not is_configured()):
@@ -1106,8 +1109,7 @@ async def _talk(
     )
     from allie.tools.trends import x_trends_for
     from allie.tools.web import fetch_page_for, look_up_for, read_clipboard_for, search_web_for
-    from allie.tts.gemini_tts import GeminiTTS
-    from allie.tts.sapi import SapiTTS
+    from allie.tts.live_voice import LiveVoice
     from allie.ui import tray as tray_ui
     from allie.usage.tracker import Pricing, UsageTracker
     from allie.web import search as search_module
@@ -1225,26 +1227,20 @@ async def _talk(
                     "run 'allie setup' to add one, or set provider = \"local\""
                 )
             speech = GeminiSTT(key, model=settings.stt.model, fallback=whisper)
-        # The local voice (D3, D4, D10): Windows' own, or Google's with
-        # Windows behind it for the sentence Google refuses. It reads
-        # the gate's questions, the reminders and the three failure
-        # sentences; the model speaks for itself. The same key as the
-        # recogniser; missing, a sentence before anything slow is loaded.
-        voice: SapiTTS | GeminiTTS = SapiTTS()
-        if settings.tts.provider == "gemini":
-            key = load_api_key("gemini")
-            if not key:
-                raise MissingAPIKeyError(
-                    "no API key stored for 'gemini', which [tts] provider names - "
-                    "run 'allie setup' to add one, or set provider = \"sapi\""
-                )
-            voice = GeminiTTS(
-                key,
-                model=settings.tts.model,
-                fallback=voice,
-                fallback_language=pack.code,
-                fallback_preference=pack.voice("sapi"),
-            )
+        # The program's own voice (D3, D4, D10, D32): the live model itself,
+        # in the conversation's voice, reading from a session of its own -
+        # the gate's questions, the reminders, the filler and the three
+        # failure sentences. One voice, the assistant's; the sentences that
+        # never change are kept on disk, and what cannot be read is put on
+        # the screen instead.
+        voice = LiveVoice(
+            provider,
+            model=live.model,
+            voice=live.voice,
+            language_code=pack.language_code,
+            directory=data_dir() / "voice",
+            on_unsaid=screen.notice,
+        )
         # The Microsoft Store, asked last by `open_app` and installed from
         # by `install_app` - the one tool that changes what is on the
         # machine, and asks first (2026-09-13).

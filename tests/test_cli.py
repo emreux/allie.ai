@@ -50,7 +50,6 @@ from allie.config import (
     RetentionSettings,
     Settings,
     STTSettings,
-    TTSSettings,
     WakeSettings,
     WebSettings,
     config_path,
@@ -160,7 +159,7 @@ def test_telegram_login_is_a_command_of_its_own() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_setup_runs_the_wizard(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_setup_runs_the_wizard(config_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[object] = []
 
     async def wizard(prompter: object, **kwargs: object) -> int:
@@ -174,7 +173,7 @@ def test_setup_runs_the_wizard(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_the_exit_code_of_the_wizard_is_the_exit_code_of_the_process(
-    monkeypatch: pytest.MonkeyPatch,
+    config_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A cancelled setup must not look like a successful one to a script."""
 
@@ -184,6 +183,29 @@ def test_the_exit_code_of_the_wizard_is_the_exit_code_of_the_process(
     monkeypatch.setattr(setup_wizard, "run_setup", wizard)
 
     assert main(["setup"]) == 1
+
+
+def test_setup_after_the_first_opens_the_settings_list(
+    configured: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D32: the questions in a row once; after that, one setting at a time -
+    changing the assistant is not the key and the model again."""
+    calls: list[str] = []
+
+    async def wizard(prompter: object, **kwargs: object) -> int:
+        calls.append("wizard")
+        return 0
+
+    async def settings(prompter: object, **kwargs: object) -> int:
+        assert isinstance(prompter, setup_wizard.TerminalPrompter)
+        calls.append("settings")
+        return 0
+
+    monkeypatch.setattr(setup_wizard, "run_setup", wizard)
+    monkeypatch.setattr(setup_wizard, "run_settings", settings)
+
+    assert main(["setup"]) == 0
+    assert calls == ["settings"]
 
 
 # --------------------------------------------------------------------------
@@ -501,18 +523,16 @@ def test_a_key_that_is_gone_is_a_sentence_rather_than_a_traceback(
 @pytest.mark.parametrize(
     "problem",
     [
-        app.NoVoiceError("no speech voice is installed, for 'tr' or otherwise"),
         local_whisper.ModelUnavailableError("the speech model 'small' could not be loaded"),
         capture.MicrophoneUnavailableError("the microphone 'nope' could not be opened"),
     ],
-    ids=["voice", "model", "microphone"],
+    ids=["model", "microphone"],
 )
 def test_what_the_user_can_fix_is_a_sentence_rather_than_a_traceback(
     configured: Path, wiring: Wiring, capsys: pytest.CaptureFixture[str], problem: Exception
 ) -> None:
-    """A voice that is not installed, weights that could not be fetched, a
-    microphone that would not open. Each is the user's to fix, and a traceback
-    tells them nothing about how."""
+    """Weights that could not be fetched, a microphone that would not open.
+    Each is the user's to fix, and a traceback tells them nothing about how."""
     wiring.stop = problem
 
     assert main(["run", "--terminal"]) == 1
@@ -1017,58 +1037,40 @@ def test_gemini_as_recogniser_without_a_gemini_key_is_one_sentence(
     assert wiring.recognisers == []
 
 
-def test_with_the_setting_the_voice_is_gemini_with_windows_behind_it(
+def test_the_program_s_own_sentences_are_read_in_the_assistant_s_voice(
     configured: Path, wiring: Wiring
 ) -> None:
-    """`[tts] provider = "gemini"` (17 Sep 2026): Google's synthesiser with
-    the same key entry, Windows' own engine behind it for the sentence
-    Google refuses, and the pack's local preference for that engine. It
-    reads the gate's questions and the reminders (D3, D4); the model speaks
-    for itself."""
-    from allie.tts.gemini_tts import GeminiTTS
-    from allie.tts.sapi import SapiTTS
+    """D32: one voice. The gate's questions, the reminders, the filler and
+    the failures are read by the live model itself - the provider the
+    conversation uses, its model, its voice, the pack's language - and the
+    ones that never change are kept on this machine."""
+    from allie.tts.live_voice import LiveVoice
 
-    configured_with(tts=TTSSettings(provider="gemini", model="gemini-3.1-flash-tts-preview"))
+    configured_with(live=LiveSettings(primary=f"gemini:{MODEL}", voice="Orus"))
 
     main(["run", "--terminal"])
 
-    voice = wiring.built[-1]["tts"]
-    assert isinstance(voice, GeminiTTS)
-    assert voice._model == "gemini-3.1-flash-tts-preview"
-    assert isinstance(voice._fallback, SapiTTS)
-    assert (voice._fallback_language, voice._fallback_preference) == ("tr", "Tolga")
+    [parts] = wiring.built
+    voice = parts["tts"]
+    assert isinstance(voice, LiveVoice)
+    assert voice._provider is parts["provider"]
+    assert (voice._model, voice._voice, voice._language_code) == (MODEL, "Orus", "tr-TR")
+    assert voice._directory is not None and voice._directory.name == "voice"
 
 
-def test_gemini_as_voice_without_a_gemini_key_is_one_sentence(
-    configured: Path,
-    vault: MemoryKeyring,
-    wiring: Wiring,
-    other_provider: None,
-    capsys: pytest.CaptureFixture[str],
+def test_a_file_that_still_names_a_windows_voice_starts_all_the_same(
+    configured: Path, wiring: Wiring
 ) -> None:
-    save_settings(
-        Settings(
-            live=LiveSettings(primary="other:some-model"),
-            locale=LocaleSettings(code="tr"),
-            tts=TTSSettings(provider="gemini"),
-        )
-    )
-    vault.vault.clear()
-    store_api_key("other", "sk-not-a-real-key")
+    """A `config.toml` written before D32 carries `[tts]`: read past, not
+    refused - and there is no Windows voice left to build from it."""
+    from allie.tts.live_voice import LiveVoice
 
-    assert main(["run", "--terminal"]) == 1
+    with config_path().open("a", encoding="utf-8") as file:
+        file.write('\n[tts]\nprovider = "sapi"\nmodel = "gemini-3.1-flash-tts-preview"\n')
 
-    printed = capsys.readouterr().out
-    assert "gemini" in printed and "[tts]" in printed and "allie setup" in printed
-    assert "speech model" not in wiring.happened
+    assert main(["run", "--terminal"]) == 0
 
-
-def test_without_the_setting_the_voice_is_windows(configured: Path, wiring: Wiring) -> None:
-    from allie.tts.sapi import SapiTTS
-
-    main(["run", "--terminal"])
-
-    assert isinstance(wiring.built[-1]["tts"], SapiTTS)
+    assert isinstance(wiring.built[-1]["tts"], LiveVoice)
 
 
 def test_the_gate_the_tool_round_is_handed_is_the_permission_gate(
@@ -1782,13 +1784,20 @@ def test_a_wizard_walked_away_from_on_an_unconfigured_machine_ends_the_run(
     assert face.up == ["start", "stop"]
 
 
-def test_the_settings_button_stops_the_assistant_runs_the_wizard_and_starts_it_again(
+def test_the_settings_button_stops_the_assistant_opens_the_list_and_starts_it_again(
     configured: Path, wiring: Wiring, windows: type[FakeWindow], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """D32: on a machine already set up the button opens the settings list,
+    one row at a time, not the questions in a row."""
     runs: list[str] = []
 
     async def wizard(prompter: Any, **_: Any) -> int:
         runs.append("wizard")
+        return 0
+
+    async def settings(prompter: Any, **_: Any) -> int:
+        assert type(prompter).__name__ == "WindowPrompter"
+        runs.append("settings")
         return 0
 
     async def press_settings_then_quit() -> None:
@@ -1804,11 +1813,12 @@ def test_the_settings_button_stops_the_assistant_runs_the_wizard_and_starts_it_a
         raise AssertionError("the run was not cancelled")
 
     monkeypatch.setattr(setup_wizard, "run_setup", wizard)
+    monkeypatch.setattr(setup_wizard, "run_settings", settings)
     wiring.during_run = press_settings_then_quit
 
     assert main(["run"]) == 0
 
-    assert runs == ["talk", "wizard", "talk again"]
+    assert runs == ["talk", "settings", "talk again"]
     assert len(wiring.built) == 2
     [face] = windows.built
     assert face.up == ["start", "stop"]
@@ -2518,7 +2528,6 @@ def test_doctor_reports_the_installation_and_never_a_key(
     assert line("doctor_verdict_ok", days=3) in out
     assert line("doctor_stt_gemini", model="gemini-3.5-transcribe-live", size="small") in out
     assert line("doctor_voice_goes") in out
-    assert line("doctor_answer_stays") in out
     assert line("doctor_text_goes", provider="Google Gemini Live") in out
     assert line("doctor_memory", path=configured / MEMORY_FILE_NAME, count=3) in out
     assert line("doctor_contacts", path=configured / CONTACTS_FILE_NAME, count=1) in out
@@ -2552,7 +2561,6 @@ def test_doctor_on_a_bare_setup_says_what_is_not_there(
     for key in (
         "doctor_verdict_none",
         "doctor_voice_stays",
-        "doctor_answer_stays",
         "doctor_local_none",
         "doctor_mail_none",
         "doctor_telegram_none",

@@ -8,8 +8,8 @@ reopened with the handle it left behind; `OFF` the switch. The session itself
 is opened by speech and closed by silence (D5), and everything in between is
 an event the session sends and this file answers.
 
-Everything is injected - the microphone, the provider, the runner, the two
-local voices, the sound card - so a whole conversation can be driven in a
+Everything is injected - the microphone, the provider, the runner, the local
+recogniser, the program's own voice, the sound card - so a whole conversation can be driven in a
 test without any of them. That is also the reason this file is short: each
 piece already knows how to do its own job, and what is left here is the
 order they do it in, and what happens when one of them fails.
@@ -36,7 +36,8 @@ words back; what this file adds is the one who answers a tool's question -
 hands `confirm` the sentence with the real argument values in it; this file
 waits for the model to finish what it was saying, pauses the session's input
 (D3: nothing said in the window reaches the model), reads the question in
-the local voice, tells the user how to answer, and opens the local
+the assistant's voice from a session of its own (D32), tells the user how
+to answer, and opens the local
 recogniser's microphone for six seconds. A "no" anywhere in the answer wins
 over a "yes"; silence is a no, and so is a voice or the switch while the
 question is still being read; an answer with neither word in it is asked
@@ -54,7 +55,7 @@ to the screen.
 **A reminder is said between turns, and only then** (rule 5, D4). The
 scheduler writes to the announce queue and never to the speaker; the queue
 is read when nothing is under way - no voice, no answer owed, no tool, no
-sound - and said in the local voice with the session's input paused; then
+sound - and said in the assistant's voice with the session's input paused; then
 one line goes to the session so the model knows what was said. Listening
 switched off does not silence it: the assistant was asked not to listen,
 not to forget the dentist. A voice that starts cuts it off like an answer.
@@ -102,7 +103,7 @@ import asyncio
 import contextlib
 import re
 import uuid
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Literal, Protocol
@@ -138,7 +139,7 @@ from allie.live.base import (
 from allie.locales import Locale
 from allie.store.normalize import normalize_search
 from allie.stt.base import NO_SPEECH_CEILING, SAMPLE_RATE, Audio, STTProvider, Transcript
-from allie.tts.base import TTSProvider, choose_voice
+from allie.tts.base import TTSProvider
 from allie.usage.tracker import UsageTracker
 from allie.web.search import Searched
 
@@ -156,23 +157,13 @@ __all__ = [
     "Capture",
     "Heard",
     "LiveAssistant",
-    "NoVoiceError",
     "State",
     "Turn",
-    "choose_voice",
     "confirm_prompt",
     "confirm_words",
     "hear",
     "read_answer",
 ]
-
-
-class NoVoiceError(RuntimeError):
-    """No speech voice is installed, for the locale or otherwise.
-
-    The user can install one; the program cannot. Named so that `allie
-    run` can say so in a sentence instead of a traceback.
-    """
 
 
 class State(StrEnum):
@@ -243,7 +234,7 @@ Greeting = Literal["chime", "sentence", "none"]
 # claim the same key.
 TEXT: dict[str, str] = {
     # The three failures said out loud when there is no session to say them
-    # (plan.md 4.4 rule 7), by the local voice.
+    # (plan.md 4.4 rule 7), in the assistant's voice.
     "unreachable": "I could not reach the provider. Will you try again?",
     "key_invalid": "Your API key is not being accepted any more. You need to renew it.",
     "took_too_long": "That took too long. Will you try again?",
@@ -257,7 +248,7 @@ TEXT: dict[str, str] = {
     "daily_over": "You have gone over today's spending limit.",
     "monthly_over": "You have gone over this month's spending limit.",
     "spend_stopped": "The spending limit has been passed, so I am not asking the model.",
-    # Said in the local voice at the wake word when `[wake] greeting =
+    # Said in the assistant's voice at the wake word when `[wake] greeting =
     # "sentence"` (D21); the chime is the default.
     "wake_greeting": "I am listening.",
 }
@@ -524,7 +515,6 @@ class LiveAssistant:
         self._fillers = locale.fillers or FILLERS
         self._fillers_said = 0
         self._state = State.IDLE
-        self._voice = ""
         # The model's voice, queued as it arrives (rule 2).
         self._playback = LivePlayback(speaker)
         # How many of the assistant's own sentences are being played at once
@@ -570,14 +560,16 @@ class LiveAssistant:
         """Whether a session is open right now - what the tray shows."""
         return self._session_open
 
-    async def begin(self) -> None:
-        """Picks the voice and opens the microphone, before anything is said.
+    def fixed_sentences(self) -> list[str]:
+        """What the program always says in the same words (D32): the
+        fillers, the hint after a question and the one after an answer with
+        neither word in it, the three failures, the limits, the greeting.
+        The voice keeps these, so that they cost no request and need no
+        network - the failures are said exactly when there is none."""
+        return [*self._fillers, *self._said.values()]
 
-        The voice is settled here rather than at the first question: a
-        machine with no voice installed can never ask one, and that is worth
-        finding out at startup instead of at two in the morning.
-        """
-        self._voice = await self._pick_voice()
+    async def begin(self) -> None:
+        """Opens the microphone, before anything is said."""
         self._capture.on_speech = self._speech
         self._capture.on_mode = self._mode_changed
         self._capture.on_wake = self._woken
@@ -607,12 +599,17 @@ class LiveAssistant:
         """
         await self.begin()
         announcing = self._spawn(self._announcing())
+        # The sentences the program always says, read once in the
+        # assistant's voice and kept (D32) - beside everything else, since
+        # the first start after a new voice reads a dozen of them.
+        preparing = self._spawn(self._tts.prepare(self.fixed_sentences()))
         try:
             await self._crashed.wait()
             if self._crash is not None:
                 raise self._crash
         finally:
             announcing.cancel()
+            preparing.cancel()
             self._hang_up()
             with contextlib.suppress(Exception, asyncio.CancelledError):
                 await self.settled()
@@ -1076,10 +1073,9 @@ class LiveAssistant:
         filler = self._filler()
         self._start_answer()
         try:
-            async for buffer in self._tts.stream(_one(filler), voice=self._voice):
-                self._playback.push(buffer, sample_rate=self._tts.sample_rate)
-        except ProviderError as failure:
-            logger.warning("the filler could not be said: {kind}", kind=failure.kind)
+            async with contextlib.aclosing(self._tts.stream([filler])) as buffers:
+                async for buffer in buffers:
+                    self._playback.push(buffer, sample_rate=self._tts.sample_rate)
         finally:
             # Also when the model's voice cut it short: what was pushed of
             # it is an answer of its own, and the model's follows.
@@ -1115,7 +1111,9 @@ class LiveAssistant:
         self._enter(State.CONFIRMING)
         self._capture.pause()
         try:
-            answer = await self._ask(f"{question} {self._said['confirm_hint']}")
+            # Two utterances: the question live, with the real values in it,
+            # and the hint kept on disk (D32).
+            answer = await self._ask(question, self._said["confirm_hint"])
             if answer is None:
                 answer = await self._ask(self._said["confirm_again"])
         finally:
@@ -1125,7 +1123,7 @@ class LiveAssistant:
                 self._rest()
         return answer is True
 
-    async def _ask(self, prompt: str) -> bool | None:
+    async def _ask(self, *prompt: str) -> bool | None:
         """Reads `prompt`, opens the window, and reads the answer.
 
         `None` is "neither word was heard": something was said, or the
@@ -1133,7 +1131,7 @@ class LiveAssistant:
         is every way of not saying yes that is not worth one: silence, a no,
         the user speaking over the question or switching the assistant off.
         """
-        await self._play(_one(prompt))
+        await self._play(prompt)
         if self._withdrawn():
             return False
 
@@ -1191,14 +1189,14 @@ class LiveAssistant:
         )
 
     async def _announce(self, announcement: Announcement) -> None:
-        """Says one announcement in the local voice, with the session's
-        input paused, and tells the session what was said (D4)."""
+        """Says one announcement in the assistant's voice, with the
+        session's input paused, and tells the session what was said (D4)."""
         self._interrupted.clear()
         self._enter(State.ANNOUNCING)
         logger.info("announcing reminder {id}", id=announcement.reminder_id)
         self._capture.pause()
         try:
-            await self._play(_one(announcement.text))
+            await self._play([announcement.text])
         finally:
             self._capture.resume()
         session = self._session
@@ -1219,7 +1217,7 @@ class LiveAssistant:
                 self._enter(State.OFF)
 
     # ----------------------------------------------------------------------
-    # Saying things in the local voice
+    # Saying things in the assistant's voice (D32)
     # ----------------------------------------------------------------------
 
     async def _speak(self, said: str) -> None:
@@ -1228,22 +1226,23 @@ class LiveAssistant:
             return
         self._interrupted.clear()
         self._enter(State.SPEAKING)
-        await self._play(_one(said))
+        await self._play([said])
 
-    async def _play(self, pieces: AsyncIterator[str]) -> None:
-        """Says `pieces` through the sound card, with the microphone deaf meanwhile.
+    async def _play(self, texts: Sequence[str]) -> None:
+        """Says `texts` through the sound card, with the microphone deaf meanwhile.
 
         Deaf for exactly as long as there is something for it to mishear -
         on a microphone that needs it - and in a `finally`, because a
         sentence that failed halfway through must not leave the assistant
-        unable to hear at all.
+        unable to hear at all. The voice's stream is closed on the way out,
+        so that a sentence cut short does not leave its reader open.
         """
         if self._playing == 0:
             self._capture.mute()
         self._playing += 1
         try:
-            buffers = self._tts.stream(pieces, voice=self._voice)
-            await self._speaker.play(buffers, sample_rate=self._tts.sample_rate)
+            async with contextlib.aclosing(self._tts.stream(texts)) as buffers:
+                await self._speaker.play(buffers, sample_rate=self._tts.sample_rate)
         except PlaybackError as failure:
             # Only the sound of it was lost. A headset switched off between
             # two questions is not a bug, so it is a line in the log rather
@@ -1345,18 +1344,6 @@ class LiveAssistant:
             # `run` - never swallowed into a sentence.
             self._crash = error
             self._crashed.set()
-
-    async def _pick_voice(self) -> str:
-        preferred = self._locale.voice(self._tts.id)
-
-        for language in (self._locale.code, None):
-            # The locale's own language first. Failing that, anything installed:
-            # the wrong accent is a poor answer, and no answer is worse.
-            voice = choose_voice(await self._tts.list_voices(language), preferred)
-            if voice:
-                return voice
-
-        raise NoVoiceError(f"no speech voice is installed, for {self._locale.code!r} or otherwise")
 
 
 def _drop(task: asyncio.Task[None] | None) -> None:
@@ -1469,12 +1456,6 @@ def _spaced(text: str) -> str:
     """The words of `text`, folded, one space between and one either side -
     so that a phrase of one or more words can be found only at word edges."""
     return f" {' '.join(_WORD.findall(normalize_search(text)))} "
-
-
-async def _one(said: str) -> AsyncIterator[str]:
-    """A sentence of the assistant's own - a question, a reminder, a failure
-    - as a stream of one."""
-    yield said
 
 
 async def _one_buffer(pcm16: bytes) -> AsyncIterator[bytes]:

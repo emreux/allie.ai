@@ -54,7 +54,6 @@ __all__ = [
     "CONFIG_DIR_ENV",
     "KEYRING_SERVICE",
     "RECOGNISERS",
-    "VOICES",
     "AudioSettings",
     "LimitSettings",
     "LiveSettings",
@@ -64,7 +63,6 @@ __all__ = [
     "RetentionSettings",
     "STTSettings",
     "Settings",
-    "TTSSettings",
     "ToolSettings",
     "WakeSettings",
     "config_dir",
@@ -144,8 +142,9 @@ class LiveSettings(BaseModel):
     `primary` is one line, `provider:model`, as the old `[llm]` table had it:
     the provider names the catalogue entry and the key, the model is what
     the session opens with (`gemini:gemini-3.8-live`, D13). `voice` is the
-    model's voice by the provider's own name, chosen in setup from what the
-    adapter lists; empty means the adapter's default.
+    model's voice by the provider's own name, the chosen assistant's (D31);
+    empty means the adapter's default. Since D32 it is also the voice the
+    program's own sentences are read in - there is no other.
 
     The three numbers are the session policy of D5 and D6. `barge_in` keeps
     the microphone streaming while the model speaks, so that talking over it
@@ -338,35 +337,6 @@ class STTSettings(BaseModel):
         return value
 
 
-# The voices `[tts] provider` may name. `sapi` is Windows' own and never
-# leaves the list; `gemini` is Google's synthesiser (17 Sep 2026) and sends
-# every sentence the assistant says to Google.
-VOICES = ("sapi", "gemini")
-
-
-class TTSSettings(BaseModel):
-    """Which engine turns the answer into speech (section 3.5).
-
-    `sapi` by default: no key, no cost, and the words never leave the
-    machine. `gemini` is a choice made in this file, and it changes where
-    the answer goes; `model` names Google's synthesiser and is only read
-    then. Which voice is a preference of the locale pack (`[tts.voice]`),
-    matched against what the engine offers, not a setting here.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    provider: str = "sapi"
-    model: str = "gemini-3.1-flash-tts-preview"
-
-    @field_validator("provider")
-    @classmethod
-    def _must_be_a_voice(cls, value: str) -> str:
-        if value not in VOICES:
-            raise ValueError(f"expected one of {', '.join(VOICES)}, got {value!r}")
-        return value
-
-
 class ToolSettings(BaseModel):
     """Which `blocked` tools the user switched on, by name (section 3.9).
 
@@ -541,7 +511,9 @@ class Settings(BaseSettings):
     locale: LocaleSettings = LocaleSettings()
     audio: AudioSettings = AudioSettings()
     stt: STTSettings = STTSettings()
-    tts: TTSSettings = TTSSettings()
+    # No `[tts]` since 2026-09-24 (plan.md D32): the program's own sentences
+    # are read by the live model in `[live] voice`. A file that still has the
+    # table is read without it and written back without it.
     tools: ToolSettings = ToolSettings()
     limits: LimitSettings = LimitSettings()
     media: MediaSettings = MediaSettings()

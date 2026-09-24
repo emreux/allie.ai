@@ -21,13 +21,3 @@ name = "English"
 # What the recogniser is told to expect. Usually `code`, but not always: this
 # is the language people *speak* to the assistant, not the one it shows them.
 language = "en"
-
-[tts.voice]
-# The preferred voice, matched against the names Windows actually lists. It is
-# a preference, not an identifier: when it is not installed, any other voice
-# for this language is used instead. Zira is one of the voices Windows ships
-# for English.
-sapi = "Zira"
-# Google's synthesiser (`[tts] provider = "gemini"`): the thirty voices read
-# every language, so this is a matter of timbre.
-gemini = "Kore"

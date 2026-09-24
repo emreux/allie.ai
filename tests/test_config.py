@@ -474,6 +474,21 @@ def test_an_unknown_recogniser_is_refused() -> None:
         STTSettings(provider="azure")
 
 
+def test_a_voice_table_from_before_is_read_past_and_not_written_back(config_home: Path) -> None:
+    """D32: the program speaks in `[live] voice` and in nothing else. A file
+    that still names Windows' voice loads, and the next save drops it."""
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '[live]\nprimary = "gemini:x"\nvoice = "Orus"\n\n[tts]\nprovider = "sapi"\n',
+        encoding="utf-8",
+    )
+
+    save_settings(load_settings())
+
+    assert "[tts]" not in config_path().read_text(encoding="utf-8")
+    assert load_settings().live.voice == "Orus"
+
+
 # --------------------------------------------------------------------------
 # [wake] (plan.md D21)
 # --------------------------------------------------------------------------

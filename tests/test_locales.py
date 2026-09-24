@@ -106,7 +106,13 @@ def test_every_shipped_pack_answers_what_phase_one_asks_of_it() -> None:
     for pack in available():
         assert pack.name.strip(), f"{pack.code} has no name to show in a menu"
         assert pack.stt_language, f"{pack.code} gives the speech recogniser no hint"
-        assert pack.voice("sapi"), f"{pack.code} names no Windows voice"
+
+
+def test_no_pack_names_a_voice_any_more() -> None:
+    """D32: the program speaks in the assistant's voice, `[live] voice`, and
+    nothing else - a `[tts]` table in a pack would be a Windows voice again."""
+    for path in shipped():
+        assert "tts" not in read(path), path.name
 
 
 def test_a_pack_is_filed_under_the_name_of_its_own_file() -> None:
@@ -208,23 +214,7 @@ def test_a_language_with_no_pack_at_all_is_still_a_working_locale(tmp_path: Path
     assert pack.say("welcome", "Hello.") == "Hello."
 
 
-def test_english_does_not_lend_its_voice_to_another_language(tmp_path: Path) -> None:
-    """Sentences fall back; identity does not. An English voice reading German
-    is worse than no preference at all."""
-    write(tmp_path, "en", '[tts.voice]\nsapi = "Zira"\n')
-
-    assert load("de", directory=tmp_path).voice("sapi") is None
-
-
-def test_a_voice_left_blank_is_no_preference_at_all(tmp_path: Path) -> None:
-    """The template ships the key with a placeholder in it. Emptying it is how
-    a translator says their language has no voice worth naming."""
-    write(tmp_path, "de", '[tts.voice]\nsapi = ""\n')
-
-    assert load("de", directory=tmp_path).voice("sapi") is None
-
-
-def test_english_does_not_lend_its_speech_language_either(tmp_path: Path) -> None:
+def test_english_does_not_lend_its_speech_language(tmp_path: Path) -> None:
     """Whisper told to expect English would return English-shaped nonsense for
     every German sentence, and the model would never see the German."""
     write(tmp_path, "en", '[stt]\nlanguage = "en"\n')
@@ -290,12 +280,12 @@ def test_a_pack_that_does_not_parse_is_skipped_rather_than_fatal(tmp_path: Path)
 def test_a_pack_of_the_wrong_shape_is_read_as_far_as_it_makes_sense(tmp_path: Path) -> None:
     """Every value here is the wrong kind of thing, and each one falls back on
     its own rather than taking the whole pack down with it."""
-    write(tmp_path, "de", 'name = 5\nstt = "German"\n[tts]\nvoice = 3\n[ui]\nmodel = 7\n')
+    write(tmp_path, "de", 'name = 5\nstt = "German"\n[speech]\nfiller = 3\n[ui]\nmodel = 7\n')
 
     pack = load("de", directory=tmp_path)
 
     assert (pack.code, pack.name, pack.stt_language) == ("de", "de", "de")
-    assert pack.voice("sapi") is None
+    assert pack.fillers == ()
     assert pack.say("model", "Which model?") == "Which model?"
 
 

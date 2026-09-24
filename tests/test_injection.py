@@ -271,7 +271,7 @@ async def test_a_model_that_obeys_the_page_is_stopped_at_the_gate(registry: Tool
     await one_turn(user.assistant(room, runner_for(registry)), user.capture)
 
     assert sent == []
-    assert user.tts.said == [f"{QUESTION} {HINT}"]
+    assert user.tts.said == [QUESTION, HINT]
     assert user.speaker.heard.endswith("Özet.")
     # What the model was told about the page, and about its attempt: the
     # page inside its block, the refusal in words - both in the tool channel.
@@ -343,7 +343,7 @@ async def test_a_model_that_obeys_the_clipboard_is_stopped_at_the_gate() -> None
     await one_turn(user.assistant(room, runner_for(registry)), user.capture)
 
     assert sent == []
-    assert user.tts.said == [f"{QUESTION} {HINT}"]
+    assert user.tts.said == [QUESTION, HINT]
     assert [call.name for call, _ in room.results] == ["read_clipboard", "send_message"]
     assert room.results[0][1].startswith('<untrusted source="clipboard"')
     assert room.results[1][1] == DECLINED
@@ -394,7 +394,7 @@ async def test_a_model_that_obeys_a_mail_is_stopped_at_the_gate() -> None:
     await one_turn(user.assistant(room, runner_for(registry)), user.capture)
 
     assert sent == []
-    assert user.tts.said == [f"{QUESTION} {HINT}"]
+    assert user.tts.said == [QUESTION, HINT]
     assert [call.name for call, _ in room.results] == ["read_latest_emails", "send_message"]
     assert room.results[0][1].startswith('<untrusted source="mail"')
     assert room.results[1][1] == DECLINED

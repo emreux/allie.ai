@@ -73,7 +73,6 @@ import asyncio
 import re
 import sys
 import time
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -318,13 +317,19 @@ async def echo(*, device: int | str | None = None, floor: Take | None = None) ->
     speaker has already been told it is finished.
     """
     from allie.audio.player import SystemSpeaker
-    from allie.tts.sapi import SapiTTS
+    from allie.config import load_settings
+    from allie.live.registry import RegistryError, create_provider
+    from allie.tts.live_voice import LiveVoice
 
-    tts = SapiTTS()
-    voices = await tts.list_voices(None)
-    if not voices:
-        print("No speech voice is installed; there is nothing to echo.", file=sys.stderr)
+    # The voice the assistant speaks in (plan.md D32): the live model's own,
+    # on the key and in the voice the settings name.
+    live = load_settings().live
+    try:
+        provider = create_provider(live.provider, base_url=live.base_url or None)
+    except RegistryError as problem:
+        print(f"No voice to echo: {problem}", file=sys.stderr)
         return None
+    tts = LiveVoice(provider, model=live.model, voice=live.voice)
 
     # The room before anything is said, as the control. Without it a take of
     # silence and a take with the speakers turned off are the same number.
@@ -342,9 +347,7 @@ async def echo(*, device: int | str | None = None, floor: Take | None = None) ->
     microphone.open(blocks.append)
     try:
         print(f"  Speaking, and listening to itself: {SPOKEN}")
-        await SystemSpeaker().play(
-            tts.stream(_one(SPOKEN), voice=voices[0].id), sample_rate=tts.sample_rate
-        )
+        await SystemSpeaker().play(tts.stream([SPOKEN]), sample_rate=tts.sample_rate)
         spoken_until = sum(len(block) for block in blocks)
         # A second of room after the speaker fell silent: that is the part the
         # detector must not be shown.
@@ -441,10 +444,6 @@ async def guided(*, seconds: float, device: int | str | None, no_read: bool) -> 
         takes.append(heard)
 
     summary(takes)
-
-
-async def _one(said: str) -> AsyncIterator[str]:
-    yield said
 
 
 # --------------------------------------------------------------------------

@@ -1,11 +1,17 @@
 """`allie setup` - the few questions phase 1 asks (design.md section 3.3).
 
 Which assistant, provider, key, model, the language the assistant speaks,
-who hears the yes or no of a confirmation, who reads the questions out loud,
-and the microphone it listens through. The fourteen step wizard of section
-3.3 - device tests, tool probe, latency measurement, a fallback model - is
-phase 4.5; what is here is the smallest thing that can produce a working
-`config.toml`.
+who hears the yes or no of a confirmation, and the microphone it listens
+through. The fourteen step wizard of section 3.3 - device tests, tool probe,
+latency measurement, a fallback model - is phase 4.5; what is here is the
+smallest thing that can produce a working `config.toml`.
+
+**In a row once, one at a time after that** (plan.md D32, 2026-09-24).
+`run_setup` walks the questions on a machine that has never been set up.
+Every time after, the settings button and `allie setup` open
+`run_settings`: a list of the settings as they stand, each row changed on
+its own and saved at once - changing Friday to Jarvis is one question, not
+the language, the model and the key again. A row writes only what it owns.
 
 Two rules shape the code more than the questions do.
 
@@ -56,13 +62,13 @@ what it is called. It replaced the free-text voice question: a voice now
 comes with a name. A threshold tuned by hand stays only when the same
 assistant is chosen again - it was measured for that model.
 
-**The local engines serve the gate window and the reminders** (plan.md D3,
-D4, D10). The model speaks for itself; Whisper or Google's recogniser hears
-the yes or no after a tool asks first, and Windows' or Google's voice reads
-the question and the reminders. Google's are offered when its key is at
-hand - the one just checked, or one stored earlier - since they use the
-same entry. What setup does not ask about in `[live]`, `[stt]` and `[tts]`
-it keeps from the file: the session numbers are the owner's to tune.
+**The local recogniser serves the gate window** (plan.md D3, D10). The
+model speaks for itself; Whisper or Google's recogniser hears the yes or no
+after a tool asks first - Google's offered when its key is at hand, the one
+just checked or one stored earlier, since it uses the same entry. Who reads
+the question is no longer a question: the assistant does, in its own voice
+(D32). What setup does not ask about in `[live]` and `[stt]` it keeps from
+the file: the session numbers are the owner's to tune.
 """
 
 from __future__ import annotations
@@ -70,6 +76,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 import questionary
@@ -96,7 +103,7 @@ from allie.config import (
     store_api_key,
 )
 from allie.live import probe
-from allie.live.base import LiveProvider, ModelInfo, ProviderError
+from allie.live.base import AuthenticationError, LiveProvider, ModelInfo, ProviderError
 from allie.live.registry import (
     ADAPTERS,
     ProviderEntry,
@@ -114,6 +121,7 @@ __all__ = [
     "Prompter",
     "TerminalPrompter",
     "run_microphone_setup",
+    "run_settings",
     "run_setup",
     "wording",
 ]
@@ -155,6 +163,11 @@ class Prompter(Protocol):
     async def ask(self, key: str) -> str | None:
         """Reads a line the user can see - an address, not a secret - or
         `None` if the user walked away."""
+        ...
+
+    async def menu(self, key: str, options: Sequence[Option]) -> str | None:
+        """The settings list (D32): the row to change, or `None` when the
+        user is done with the list."""
         ...
 
 
@@ -199,9 +212,6 @@ TEXT: dict[str, str] = {
     "hears": "Who hears your yes or no when a tool asks first?",
     "hears_local": "Whisper, on this machine - nothing leaves it",
     "hears_gemini": "Google's recogniser, with the same key - those two words go to Google",
-    "reads": "Who reads the questions and the reminders out loud?",
-    "reads_sapi": "Windows' own voice - nothing leaves this machine",
-    "reads_gemini": "Google's voice, with the same key - those sentences go to Google",
     "microphone": "Which microphone should the assistant listen through?",
     "windows_microphone": "Whatever Windows has chosen (right now: {name})",
     "no_microphones": "No microphone was found.",
@@ -212,6 +222,21 @@ TEXT: dict[str, str] = {
     "microphone_saved": "Microphone: {microphone}. Settings: {path}",
     "saved": "Ready. Settings: {path} - the key itself is in the Windows Credential Manager.",
     "cancelled": "Setup cancelled. Nothing was changed.",
+    # The settings list (D32): one row per setting, "title: {value}".
+    "settings": "Settings - choose one to change it",
+    "settings_close": "Close",
+    "setting_assistant": "Assistant: {value}",
+    "setting_provider": "Provider: {value}",
+    "setting_locale": "Language: {value}",
+    "setting_api_key": "API key: {value}",
+    "key_stored": "stored",
+    "key_missing": "not set",
+    "setting_model": "Model: {value}",
+    "setting_hears": "Who hears your yes or no: {value}",
+    "hears_short_local": "Whisper, on this machine",
+    "hears_short_gemini": "Google's recogniser",
+    "setting_microphone": "Microphone: {value}",
+    "setting_saved": "Saved: {setting}",
 }
 
 
@@ -321,28 +346,11 @@ async def _ask(
     locale = _answered(await prompter.choose("locale", _languages()))
     base_url = await _address(prompter, entry)
 
-    if entry.requires_key:
-        if entry.key_url is not None:
-            prompter.say("key_url", url=entry.key_url)
-        provider, api_key = await _working_key(prompter, provider_id, entries, base_url=base_url)
-    else:
-        api_key = ""
-        answering = await _answering_server(prompter, provider_id, entries, base_url=base_url)
-        if answering is None:
-            return _GAVE_UP
-        provider = answering
-
-    prompter.say("loading_models")
-    models = await provider.list_models()
-    if not models:
-        prompter.say("no_models")
+    connected = await _connection(prompter, provider_id, entry, entries, base_url, locale)
+    if connected is None:
         return _GAVE_UP
-    model, verdict = await _model_that_calls_tools(
-        prompter, provider, models, question=_probe_question(locale)
-    )
-    google = provider_id == "gemini" or load_api_key("gemini") is not None
-    hears = await _pick_engine(prompter, "hears", ("local", "gemini"), google=google)
-    reads = await _pick_engine(prompter, "reads", ("sapi", "gemini"), google=google)
+    api_key, model, verdict = connected
+    hears = await _pick_engine(prompter, "hears", ("local", "gemini"), google=_google(provider_id))
     input_device = await _pick_microphone(prompter, _found(microphones))
 
     # Everything above could still be abandoned; from here it is written down.
@@ -374,13 +382,296 @@ async def _ask(
             locale=LocaleSettings(code=locale),
             audio=AudioSettings(input_device=input_device),
             stt=kept.stt.model_copy(update={"provider": hears}),
-            tts=kept.tts.model_copy(update={"provider": reads}),
         )
     )
     _name(assistant.name)
     _remember(database, provider_id, model, verdict)
     prompter.say("saved", path=path)
     return _OK
+
+
+async def _connection(
+    prompter: Prompter,
+    provider_id: str,
+    entry: ProviderEntry,
+    entries: Mapping[str, ProviderEntry],
+    base_url: str | None,
+    locale: str,
+) -> tuple[str, str, probe.ProbeResult] | None:
+    """A provider that answers and a model of it that calls tools: the key
+    (checked) or the server's answer, then the model list and the probe.
+    The key, the model and the verdict - or `None` when there is nothing
+    to go on with: a keyless server that does not answer, a key that reaches
+    no model."""
+    if entry.requires_key:
+        if entry.key_url is not None:
+            prompter.say("key_url", url=entry.key_url)
+        provider, api_key = await _working_key(prompter, provider_id, entries, base_url=base_url)
+    else:
+        api_key = ""
+        answering = await _answering_server(prompter, provider_id, entries, base_url=base_url)
+        if answering is None:
+            return None
+        provider = answering
+
+    prompter.say("loading_models")
+    models = await provider.list_models()
+    if not models:
+        prompter.say("no_models")
+        return None
+    model, verdict = await _model_that_calls_tools(
+        prompter, provider, models, question=_probe_question(locale)
+    )
+    return api_key, model, verdict
+
+
+def _google(provider_id: str) -> bool:
+    """Whether Google's recogniser can be offered: its key is the one just
+    checked, or one stored earlier under the same entry."""
+    return provider_id == "gemini" or load_api_key("gemini") is not None
+
+
+# --------------------------------------------------------------------------
+# The settings list (plan.md D32)
+# --------------------------------------------------------------------------
+
+
+async def run_settings(
+    prompter: Prompter,
+    *,
+    catalog: Mapping[str, ProviderEntry] | None = None,
+    database: sqlite3.Connection | None = None,
+    microphones: Microphones | None = None,
+    assistants: Mapping[str, Assistant] | None = None,
+) -> int:
+    """The settings one at a time: the list of them as they stand, one row
+    chosen, that one question asked, the answer saved at once, and the list
+    again - until the user closes it. Leaving a row's question halfway is
+    back to the list with nothing of that row changed. Returns a process
+    exit code; closing the list is success.
+    """
+    entries = load_catalog() if catalog is None else catalog
+    buildable = {
+        provider_id: entry for provider_id, entry in entries.items() if entry.adapter in ADAPTERS
+    }
+    offered = load_assistants() if assistants is None else assistants
+    # Asked once: PortAudio's table does not change while the list is open.
+    found = _found(microphones)
+    setting = _Setting(prompter, entries, buildable, database, found, offered)
+
+    while True:
+        rows = setting.rows()
+        chosen = await prompter.menu("settings", rows)
+        if chosen is None:
+            return _OK
+        try:
+            changed = await setting.change(chosen)
+        except _WalkedAwayError:
+            continue
+        except ProviderError:
+            # The model list, asked of a provider that went away meanwhile:
+            # a sentence and the list again, never the end of the program.
+            prompter.say("provider_unreachable")
+            continue
+        after = next((row.label for row in setting.rows() if row.value == chosen), None)
+        if changed and after is not None:
+            prompter.say("setting_saved", setting=after)
+
+
+class _Setting:
+    """What each row of the settings list says, and what changing it asks
+    and writes. Every read of the settings is fresh: the row changed a
+    moment ago is the one shown now."""
+
+    def __init__(
+        self,
+        prompter: Prompter,
+        entries: Mapping[str, ProviderEntry],
+        buildable: Mapping[str, ProviderEntry],
+        database: sqlite3.Connection | None,
+        found: Microphones,
+        assistants: Mapping[str, Assistant],
+    ) -> None:
+        self._prompter = prompter
+        self._entries = entries
+        self._buildable = buildable
+        self._database = database
+        self._found = found
+        self._assistants = assistants
+
+    def rows(self) -> list[Option]:
+        """One row per setting, "title: value", in the words of the language
+        chosen - read again every time, so that a new language shows."""
+        said = wording()
+        settings = load_settings()
+        provider_id = settings.live.provider
+        entry = self._entries.get(provider_id)
+
+        def row(key: str, value: str) -> Option:
+            return Option(key, said[f"setting_{key}"].format(value=value))
+
+        assistant = self._current(settings)
+        rows = [row("assistant", assistant.name if assistant else settings.wake.model)]
+        if len(self._buildable) > 1:
+            rows.append(row("provider", entry.display_name if entry else provider_id))
+        rows.append(row("locale", locales.load(settings.locale.code).name))
+        if entry is None or entry.requires_key:
+            stored = load_api_key(provider_id) is not None
+            rows.append(row("api_key", said["key_stored" if stored else "key_missing"]))
+        rows.append(row("model", settings.live.model))
+        rows.append(row("hears", said[f"hears_short_{settings.stt.provider}"]))
+        rows.append(row("microphone", self._microphone(settings.audio.input_device)))
+        return rows
+
+    async def change(self, key: str) -> bool:
+        """Asks the one question of `key` and writes the answer; whether
+        anything was written."""
+        prompter = self._prompter
+        settings = load_settings()
+        provider_id = settings.live.provider
+
+        if key == "assistant":
+            assistant = await _pick_assistant(prompter, self._assistants)
+            _save(
+                live={"voice": assistant.voice_for(provider_id)},
+                wake={
+                    "enabled": True,
+                    "model": assistant.wake,
+                    "threshold": (
+                        settings.wake.threshold if settings.wake.model == assistant.wake else None
+                    ),
+                },
+            )
+            _name(assistant.name)
+            return True
+
+        if key == "locale":
+            code = _answered(await prompter.choose("locale", _languages()))
+            _save(locale={"code": code})
+            return True
+
+        if key == "api_key":
+            entry = self._entries[provider_id]
+            if entry.key_url is not None:
+                prompter.say("key_url", url=entry.key_url)
+            _, api_key = await _working_key(
+                prompter, provider_id, self._entries, base_url=settings.live.base_url or None
+            )
+            store_api_key(provider_id, api_key)
+            return True
+
+        if key == "model":
+            return await self._model(settings)
+
+        if key == "hears":
+            options = [Option("local", wording()["hears_local"])]
+            if _google(provider_id):
+                options.append(Option("gemini", wording()["hears_gemini"]))
+            hears = _answered(await prompter.choose("hears", options))
+            _save(stt={"provider": hears})
+            return True
+
+        if key == "microphone":
+            _save(audio={"input_device": await _pick_microphone(prompter, self._found)})
+            return True
+
+        if key == "provider":
+            return await self._provider(settings)
+
+        raise ValueError(f"no setting is called {key!r}")
+
+    async def _model(self, settings: Settings) -> bool:
+        """Another model of the same provider, on the key already stored -
+        asked for a key only when there is none. The list, the probe, and
+        the verdict written beside the choice as setup writes it."""
+        prompter = self._prompter
+        provider_id = settings.live.provider
+        entry = self._entries[provider_id]
+        base_url = settings.live.base_url or None
+        provider: LiveProvider | None
+        if not entry.requires_key:
+            provider = await _answering_server(
+                prompter, provider_id, self._entries, base_url=base_url
+            )
+            if provider is None:
+                return False
+        elif (stored := load_api_key(provider_id)) is not None:
+            provider = create_provider(
+                provider_id, api_key=stored, catalog=self._entries, base_url=base_url
+            )
+        else:
+            prompter.say("key_needed")
+            provider, api_key = await _working_key(
+                prompter, provider_id, self._entries, base_url=base_url
+            )
+            store_api_key(provider_id, api_key)
+
+        prompter.say("loading_models")
+        try:
+            models = await provider.list_models()
+        except AuthenticationError:
+            # The stored key has died since; the key row is where it is fixed.
+            prompter.say("bad_key")
+            return False
+        if not models:
+            prompter.say("no_models")
+            return False
+        model, verdict = await _model_that_calls_tools(
+            prompter, provider, models, question=_probe_question(settings.locale.code)
+        )
+        _save(live={"primary": f"{provider_id}:{model}"})
+        _remember(self._database, provider_id, model, verdict)
+        return True
+
+    async def _provider(self, settings: Settings) -> bool:
+        """Another provider: its address, its key and a model of it belong
+        together, so they are asked together - and the assistant's voice by
+        the new provider's own name."""
+        prompter = self._prompter
+        provider_id, entry = await _pick_provider(prompter, self._buildable)
+        base_url = await _address(prompter, entry)
+        connected = await _connection(
+            prompter, provider_id, entry, self._entries, base_url, settings.locale.code
+        )
+        if connected is None:
+            return False
+        api_key, model, verdict = connected
+        if api_key:
+            store_api_key(provider_id, api_key)
+        assistant = self._current(settings)
+        _save(
+            live={
+                "primary": f"{provider_id}:{model}",
+                "base_url": base_url or "",
+                "voice": assistant.voice_for(provider_id) if assistant else "",
+            }
+        )
+        _remember(self._database, provider_id, model, verdict)
+        return True
+
+    def _current(self, settings: Settings) -> Assistant | None:
+        """The assistant whose wake phrase the settings name."""
+        return next(
+            (one for one in self._assistants.values() if one.wake == settings.wake.model), None
+        )
+
+    def _microphone(self, setting: str) -> str:
+        """The row's words for `[audio] input_device`: the list's own label."""
+        for option in _microphone_options(self._found):
+            if option.value == setting:
+                return option.label
+        return setting
+
+
+def _save(**changes: Mapping[str, object]) -> Path:
+    """Writes the tables named, each the file's own with only `changes`
+    replaced - so that a row never takes the owner's tuning with it."""
+    kept = load_settings()
+    tables = {
+        table: getattr(kept, table).model_copy(update=dict(values))
+        for table, values in changes.items()
+    }
+    return save_settings(Settings(**tables))
 
 
 async def _pick_assistant(prompter: Prompter, assistants: Mapping[str, Assistant]) -> Assistant:
@@ -538,9 +829,9 @@ async def _model_that_calls_tools(
 async def _pick_engine(
     prompter: Prompter, key: str, engines: tuple[str, str], *, google: bool
 ) -> str:
-    """Which local engine hears the yes or no (`hears`) or reads the
-    questions (`reads`): the one on this machine, or Google's when its key
-    is at hand. With one choice there is no question."""
+    """Which recogniser hears the yes or no (`hears`): the one on this
+    machine, or Google's when its key is at hand. With one choice there is
+    no question."""
     local, remote = engines
     if not google:
         return local
@@ -676,6 +967,24 @@ class TerminalPrompter:
 
     async def ask(self, key: str) -> str | None:
         return _as_answer(await questionary.text(self._text[key]).ask_async())
+
+    async def menu(self, key: str, options: Sequence[Option]) -> str | None:
+        # A terminal has no Close button, so the list ends in one: its value
+        # is the one no row has.
+        answer = await questionary.select(
+            self._text[key],
+            choices=[
+                *(questionary.Choice(title=option.label, value=option.value) for option in options),
+                questionary.Choice(title=self._text["settings_close"], value=_CLOSE),
+            ],
+            use_jk_keys=False,
+        ).ask_async()
+        chosen = _as_answer(answer)
+        return None if chosen == _CLOSE else chosen
+
+
+# What the terminal's settings list answers for its Close choice.
+_CLOSE = ""
 
 
 def _as_answer(value: object) -> str | None:
