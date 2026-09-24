@@ -1,12 +1,15 @@
-"""The window: the product's face (plan.md D20; spec docs/specs/2026-09-19-window-design.md).
+"""The window: the product's face (plan.md D20, D33; specs docs/specs/2026-09-19-window-design.md
+and docs/specs/2026-09-24-window-redesign-design.md).
 
-`allie run` opens it. An orb whose colour is the state and whose
-pulse is the sound, the state and the session line under it, the finished
-turns below, three buttons - and the setup wizard, on its own page, when
-there is nothing set up yet or the settings button was pressed. It owns no
-behaviour: what it shows is what `on_state`, `on_mode`, `on_session` and
-`on_turn` say, like the status line and the tray, and what its buttons do
-is what the key, the tray and `allie setup` already do.
+`allie run` opens it. An orb whose colour is the state and whose pulse is
+the sound, the state's word under it, the session and its minutes on the
+orb's corners, three buttons - and under them the conversation, folded
+away like an accordion until it is asked for. The setup wizard has a page
+of its own, shown instead, when there is nothing set up yet or the settings
+button was pressed. It owns no behaviour: what it shows is what `on_state`,
+`on_mode`, `on_session` and `on_turn` say, like the status line and the
+tray, and what its buttons do is what the key, the tray and `allie setup`
+already do.
 
 **Tk runs on a thread of its own**, like pystray (`ui/tray.py`). Two
 rules make that safe, and both are the tray's:
@@ -23,30 +26,47 @@ rules make that safe, and both are the tray's:
    created.
 
 **Three pieces.** `View` is the window as data - what the labels say,
-what the transcript holds, where the orb is - and knows no Tk, so that
-the tests read it and the Tk half only draws it. `Window` is the loop's
-side: the `Screen` of `ui/status.py`, the queue, the thread. `TkPanel`
-is the Tk half: widgets, the orb on a canvas, the tick.
+what the transcript holds, whether it is unfolded, where the orb is - and
+knows no Tk, so that the tests read it and the Tk half only draws it.
+`Window` is the loop's side: the `Screen` of `ui/status.py`, the queue, the
+thread. `TkPanel` is the Tk half: widgets, the orb on a canvas, the tick.
+
+**The look (D33).** The orb's colour is the state and the only colour there
+is: everything around it is a neutral instrument bezel - a graphite ground
+with no blue in it, so that green, purple and yellow sit on it as well as
+the idle blue does; chalk and graphite ink; the state's word tinted with the
+state's colour. Bahnschrift, Windows' DIN, for what the machine says;
+Segoe UI for what people said. Windows' own dark title bar and its own
+glyphs on the buttons. One filled button on a page.
+
+**The accordion (D33).** At every start the window is the orb and nothing
+more: the readouts, the orb, the state's word, the buttons, and a
+"Conversation" header. Pressing the header grows the window downwards to
+`WINDOW_SIZE` and shows the transcript; pressing it again folds it away.
+The buttons never move. A notice unfolds it, because a notice is there to be
+read ("could not start - the reason is below"). The wizard's page takes the
+full height. The user still cannot resize the window (U2): its height is the
+accordion's and the wizard's to set.
 
 **The orb** is `ui/orb.py`'s numbers drawn on a canvas: the glow Pillow
 paints once per colour (Tk cannot blur), the core an oval that breathes,
 the rings arcs whose `start` turns every tick, the dots ovals moved.
 
-**Sixty frames a second, and one size** (task U1-U2). The tick asks for
-fifteen milliseconds and subtracts the time the last one took, so the
-period is the frame and not the frame plus the work; Windows is asked for
-a one millisecond timer while the window is up, because at its usual
-15.6 ms granularity a sixteen millisecond wait is rounded up to thirty-one
-and sixty frames quietly become thirty. The window does not resize: it is
-one shape at one size, so the maximise button is greyed out and the orb is
-laid out once. Nothing here is a clock the animation reads - every frame
-is still told how long it was.
+**Sixty frames a second** (task U1). The tick asks for fifteen milliseconds
+and subtracts the time the last one took, so the period is the frame and
+not the frame plus the work; Windows is asked for a one millisecond timer
+while the window is up, because at its usual 15.6 ms granularity a sixteen
+millisecond wait is rounded up to thirty-one and sixty frames quietly
+become thirty. Nothing here is a clock the animation reads - every frame is
+still told how long it was.
 
 **The wizard's page** is the `Prompter` of `setup_wizard.py` on a window:
 `WindowPrompter` posts each question and awaits a future the Tk thread
 resolves when Continue is pressed - so the wizard's checks (the key, the
 model list, the tool probe, the microphone list) come to the window
-without a line of the wizard changing.
+without a line of the wizard changing. The settings list (D32) is the same
+page: a `menu` question is a list of two-line rows without the filter box,
+and its buttons say Change and Close.
 
 **No sentence is written here.** `TEXT` is the end of the chain; the
 state labels are the status line's, the button words the tray's.
@@ -85,8 +105,11 @@ __all__ = [
     "TRANSCRIPT_ROWS",
     "Answer",
     "Button",
+    "Field",
+    "Fold",
     "Message",
     "Panel",
+    "Rows",
     "Style",
     "Switch",
     "TkPanel",
@@ -96,6 +119,7 @@ __all__ = [
     "WindowPrompter",
     "WizardPage",
     "plate",
+    "split_row",
     "system_panel",
 ]
 
@@ -104,9 +128,16 @@ TEXT: dict[str, str] = {
     "window_failed": "Could not start - the reason is below.",
     "window_settings": "Settings",
     "window_setting_up": "Settings are being changed; the assistant starts again afterwards.",
+    # The accordion's header under the buttons (D33): press it to unfold the
+    # conversation, press it again to fold it away.
+    "window_conversation": "Conversation",
     "wizard_continue": "Continue",
     "wizard_cancel": "Cancel",
     "wizard_filter": "Type to filter the list",
+    # Under the settings list (D32): change the chosen row, or close the
+    # list and start the assistant again with what was saved.
+    "wizard_change": "Change",
+    "wizard_close": "Close",
 }
 
 # What the status line and the tray already say, borrowed under their keys.
@@ -116,9 +147,6 @@ STATUS_KEYS = (
     "session_open",
     "session_closed",
     "session_minutes",
-    "you_said",
-    "it_said",
-    "searched",
     "microphone_quiet",
 )
 TRAY_KEYS = ("tray_not_listening", "tray_stop_listening", "tray_start_listening", "tray_quit")
@@ -129,11 +157,13 @@ TRAY_KEYS = ("tray_not_listening", "tray_stop_listening", "tray_start_listening"
 # without the fine timer and on 15 ms with it; both are over sixty.
 TICK_MS = 15
 TRANSCRIPT_ROWS = 200
-# One size, no resizing (U2): the window is a shape, not a workspace.
+# The window unfolded, and with the wizard's page up (U2, D33). Folded, it is
+# as tall as what it holds asks for - measured, not written down, because
+# the screen's scaling and the fonts decide it.
 WINDOW_SIZE = (420, 640)
 ORB_HEIGHT = 300
-BACKGROUND: RGB = (11, 15, 20)
-WHITE: RGB = (230, 243, 255)
+# How long the accordion takes to open or close.
+FOLD_SECONDS = 0.2
 # How long `start` waits for the Tk thread to put the window up, and
 # `stop` for it to come down.
 START_SECONDS = 5.0
@@ -144,6 +174,15 @@ MAX_DT = 0.25
 
 Message = tuple[Any, ...]
 Answer = asyncio.Future[str | None]
+
+
+def split_row(label: str) -> tuple[str, str]:
+    """A settings row as (what it is, its value): the packs word every row
+    of the list as "<what>: {value}". Split at the first colon only - a
+    microphone's name can hold one - and a row worded otherwise stays one
+    line, `("", label)`."""
+    what, colon, value = label.partition(": ")
+    return (what, value) if colon else ("", label)
 
 
 @dataclass
@@ -184,6 +223,8 @@ class View:
         # Bumped at every row, so that the Tk half redraws the transcript
         # only when it changed.
         self.version = 0
+        # The accordion (D33): folded at every start - the window is the orb.
+        self.log_open = False
         self.wizard: WizardPage | None = None
         self.orb = Orb()
 
@@ -204,6 +245,9 @@ class View:
                 self._turn(finished)
             case ("notice", str(text)):
                 self._add("notice", text)
+                # A notice is there to be read - "the reason is below" - so
+                # it unfolds the conversation it was written into.
+                self.log_open = True
             case ("level", dbfs):
                 self.orb.level.feed(float(dbfs))
             case ("say", str(text)):
@@ -230,10 +274,12 @@ class View:
             return self._tray["tray_not_listening"]
         return self._labels[self.state]
 
-    def meter(self) -> str:
+    def readouts(self) -> tuple[str, str]:
+        """What the orb's two top corners say: whether a session is open,
+        and the minutes of this run."""
         which = self._status["session_open" if self.session.open else "session_closed"]
         minutes = self._status["session_minutes"].format(minutes=int(self.session.minutes))
-        return f"{which} · {minutes}"
+        return which, minutes
 
     def switch_label(self) -> str:
         return self._tray["tray_stop_listening" if self.listening else "tray_start_listening"]
@@ -241,14 +287,25 @@ class View:
     def quit_label(self) -> str:
         return self._tray["tray_quit"]
 
-    def row_label(self, kind: str) -> str:
-        if kind == "you":
-            return self._status["you_said"]
-        if kind == "it":
-            return self._status["it_said"]
-        if kind == "searched":
-            return self._status["searched"]
-        return ""
+    def page_buttons(self) -> tuple[str, str]:
+        """The two buttons under the page: Change and Close on the settings
+        list, Continue and Cancel under every other question."""
+        if self.wizard is not None and self.wizard.kind == "menu":
+            return self.said["wizard_change"], self.said["wizard_close"]
+        return self.said["wizard_continue"], self.said["wizard_cancel"]
+
+    # -- the accordion ---------------------------------------------------------
+
+    def toggle_log(self) -> None:
+        """The header was pressed, on the Tk thread - the one that applies."""
+        self.log_open = not self.log_open
+
+    def wants_room(self) -> bool:
+        """Whether the window should be at its full height: the
+        conversation unfolded, or the wizard's page up."""
+        return self.log_open or self.wizard is not None
+
+    # ------------------------------------------------------------------------
 
     def frame(self, dt: float) -> Frame:
         return self.orb.advance(self.state, dt)
@@ -262,8 +319,6 @@ class View:
             return None
         answer, page.answer, page.kind = page.answer, None, ""
         return answer
-
-    # ------------------------------------------------------------------------
 
     def _turn(self, finished: Turn) -> None:
         # The status line's rule: a turn nobody had is no row.
@@ -433,8 +488,9 @@ class Window:
         self._post(("say", text))
 
     def ask(self, kind: str, text: str, options: Sequence[Option]) -> Answer:
-        """A question for the page: `kind` is `choose`, `secret` or `ask`.
-        The future resolves with the answer, or `None` for walking away."""
+        """A question for the page: `kind` is `choose`, `menu`, `secret` or
+        `ask`. The future resolves with the answer, or `None` for walking
+        away - which, on the settings list, is closing it."""
         answer: Answer = self._loop.create_future()
         if self._quitting:
             answer.set_result(None)
@@ -500,6 +556,9 @@ class WindowPrompter:
     async def ask(self, key: str) -> str | None:
         return await self._window.ask("ask", self._text[key], ())
 
+    async def menu(self, key: str, options: Sequence[Option]) -> str | None:
+        return await self._window.ask("menu", self._text[key], options)
+
 
 class Switch:
     """The listen button's target: nothing until the capture exists, then
@@ -517,12 +576,48 @@ class Switch:
 # The Tk half
 # --------------------------------------------------------------------------
 
-FONT = "Segoe UI"
-INK = "#e6f3ff"
-DIM_INK = "#7f93a8"
-PANE = "#0f151c"
-PRESSED = "#1a2430"
-NOTICE_INK = "#f39c12"
+# The ground, with no blue in it (D33): on the old blue-black only the idle
+# orb looked at home. Everything the orb glows over is painted on it.
+BACKGROUND: RGB = (8, 10, 14)
+# A plate, the pointer's plate, a press - each a step off the ground.
+RAISED: RGB = (19, 23, 29)
+LIFTED: RGB = (29, 34, 42)
+SUNK: RGB = (13, 16, 21)
+HAIRLINE: RGB = (38, 45, 55)
+CHALK: RGB = (233, 237, 241)
+GRAPHITE: RGB = (138, 147, 158)
+FAINT: RGB = (84, 92, 103)
+# Notices keep the orange they had: the reconnecting orb's.
+AMBER: RGB = orb.COLOURS[State.RECONNECTING]
+SIGNAL_INK: RGB = (255, 158, 158)
+SIGNAL_PLATE: RGB = (52, 22, 27)
+# What the orb's hot centre and its dots burn towards.
+WHITE: RGB = (230, 243, 255)
+# How much of the state's colour the state's word carries, over chalk.
+WORD_TINT = 0.6
+
+# Bahnschrift - Windows' DIN, on every Windows 10 since 1709 - says what
+# the machine says; Segoe UI what people said. A machine without
+# Bahnschrift falls back to the system's font and keeps the layout.
+DISPLAY_FONT = ("Bahnschrift SemiLight", 21)
+QUESTION_FONT = ("Bahnschrift SemiLight", 16)
+CAPTION_FONT = ("Bahnschrift", 9)
+LABEL_FONT = ("Bahnschrift", 10)
+BODY_FONT = ("Segoe UI", 10)
+VALUE_FONT = ("Segoe UI", 11)
+# Windows' own icons, from the font every Windows 10 has. All in the Basic
+# Multilingual Plane, which Tcl 8.6.14 draws reliably.
+GLYPH_FAMILY = "Segoe MDL2 Assets"
+MIC = chr(0xE720)
+MIC_OFF = chr(0xF781)
+GEAR = chr(0xE713)
+POWER = chr(0xE7E8)
+SEARCH = chr(0xE721)
+CHEVRON_DOWN = chr(0xE70D)
+CHEVRON_UP = chr(0xE70E)
+# The side margin of everything that is not the orb.
+INSET = 20
+
 # The core's hot centre as the canvas can draw it: ovals stepping inwards,
 # each a fraction of the core's radius and that much whiter. Sixteen steps
 # rather than the first four (U1): at four the gradient had rings of its
@@ -557,46 +652,49 @@ MIN_TURN_DEGREES = 0.12
 #
 # Tk's own button is a grey slab with a square corner and no answer to the
 # pointer. These are canvases: a rounded plate Pillow draws (supersampled,
-# because Tk has no anti-aliased corner either), the label as canvas text on
-# top so it stays the system's own crisp glyphs, and four plates per button -
-# at rest, under the pointer, held down, and out of use.
+# because Tk has no anti-aliased corner either), a Windows glyph and the
+# label as canvas text on top so they stay the system's own crisp glyphs,
+# and six plates per button - at rest, under the pointer, held down, out of
+# use, and the first two again with the keyboard's focus ring.
 
 
 @dataclass(frozen=True, slots=True)
 class Style:
     """What one kind of button wears. `edge` is the hairline round the plate,
-    or nothing for a filled one; `hover_ink` recolours the label under the
-    pointer, which only the one destructive button uses."""
+    or nothing; a `fill` that is the ground is a ghost - words until the
+    pointer is on them. `hover_ink` recolours the words under the pointer."""
 
     fill: RGB
     hover: RGB
     press: RGB
     edge: RGB | None
-    ink: str
-    hover_ink: str | None = None
+    ink: RGB
+    hover_ink: RGB | None = None
 
 
-# The everyday button: a plate barely above the background, lifting under
-# the pointer.
-QUIET = Style(fill=(22, 30, 41), hover=(33, 45, 60), press=(15, 21, 29), edge=(40, 54, 71), ink=INK)
-# What the window is for: the orb's ready blue, filled.
-ACCENT = Style(
-    fill=(31, 106, 196), hover=(48, 133, 229), press=(24, 84, 158), edge=None, ink="#f3f9ff"
-)
-# Quit: the quiet plate until the pointer is on it, then it says so.
+# The one filled button of a page: Continue, Change.
+SOLID = Style(fill=CHALK, hover=(255, 255, 255), press=(196, 203, 211), edge=None, ink=BACKGROUND)
+# The listen switch: the orb is the face's light, so its button is a plate.
+PLATE = Style(fill=RAISED, hover=LIFTED, press=SUNK, edge=HAIRLINE, ink=CHALK)
+# Settings, Cancel, Close.
+GHOST = Style(fill=BACKGROUND, hover=RAISED, press=SUNK, edge=None, ink=GRAPHITE, hover_ink=CHALK)
+# Quit: a ghost until the pointer is on it, then it says so.
 DANGER = Style(
-    fill=(22, 30, 41),
-    hover=(58, 29, 38),
-    press=(44, 21, 29),
-    edge=(40, 54, 71),
-    ink=INK,
-    hover_ink="#ff9aa7",
+    fill=BACKGROUND,
+    hover=SIGNAL_PLATE,
+    press=(38, 16, 20),
+    edge=None,
+    ink=GRAPHITE,
+    hover_ink=SIGNAL_INK,
 )
+# Where the keyboard is: a ring of its own, never the pointer's plate.
+FOCUS_EDGE = GRAPHITE
 
-BUTTON_FONT = 10
 BUTTON_PAD_X = 16
 BUTTON_PAD_Y = 9
-BUTTON_RADIUS = 9
+BUTTON_RADIUS = 8
+# Between a button's glyph and its words.
+GLYPH_GAP = 9
 # How much larger the plate is drawn before it is shrunk back, so that the
 # corners come out smooth.
 PLATE_SUPERSAMPLE = 4
@@ -641,6 +739,12 @@ def _turned(before: float, after: float) -> float:
     return abs((after - before + 180) % 360 - 180)
 
 
+def _eased(progress: float) -> float:
+    """Ease-out, cubic: quick to answer the press, gentle to arrive."""
+    progress = max(0.0, min(1.0, progress))
+    return 1 - (1 - progress) ** 3
+
+
 def _dpi_aware() -> None:
     """Crisp at 125-150 % scaling: the process says it handles DPI itself.
     Windows only, and harmless where the call does not exist."""
@@ -668,12 +772,95 @@ def _timer_period(milliseconds: int, *, begin: bool) -> None:
         pass
 
 
-class Button(tk.Canvas):
-    """A rounded button that answers the pointer: `Style`'s four plates, the
-    label in the system's font on top, and the command on release inside.
+def _frame_of(root: tk.Tk) -> int:
+    """The Windows handle of the window's frame - the title bar's - which is
+    the parent of the window Tk draws in. 0 where there is none."""
+    try:
+        import ctypes
+        from ctypes import wintypes
 
-    Keyboard-reachable like Tk's own: it takes focus, wears the pointer's
-    plate while it has it, and Return or Space presses it.
+        parent = ctypes.windll.user32.GetParent
+        parent.argtypes = [wintypes.HWND]
+        parent.restype = wintypes.HWND
+        return int(parent(root.winfo_id()) or 0)
+    except (AttributeError, OSError):
+        return 0
+
+
+def _dark_title_bar(frame: int) -> None:
+    """Windows' dark title bar over the window (D33): DWM's
+    `DWMWA_USE_IMMERSIVE_DARK_MODE`, 20 since Windows 10 2004. An older
+    Windows leaves the bar light; nothing else changes."""
+    if not frame:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        attribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+        on = ctypes.c_int(1)
+        attribute(frame, 20, ctypes.byref(on), ctypes.sizeof(on))
+    except (AttributeError, OSError):
+        pass
+
+
+def _repaint(handle: int) -> None:
+    """Has Windows ask the widget to paint all of itself again, from what
+    it holds - no new layout, just fresh pixels. Harmless where the call
+    does not exist."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        invalidate = ctypes.windll.user32.InvalidateRect
+        invalidate.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.BOOL]
+        invalidate(handle, None, True)
+    except (AttributeError, OSError):
+        pass
+
+
+def _work_area_bottom(frame: int) -> int | None:
+    """Where the usable part of the window's own screen ends - above the
+    taskbar - in pixels; `None` where it cannot be asked."""
+    if not frame:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = (
+                ("size", wintypes.DWORD),
+                ("monitor", wintypes.RECT),
+                ("work", wintypes.RECT),
+                ("flags", wintypes.DWORD),
+            )
+
+        user32 = ctypes.windll.user32
+        nearest = user32.MonitorFromWindow
+        nearest.argtypes = [wintypes.HWND, wintypes.DWORD]
+        nearest.restype = wintypes.HMONITOR
+        describe = user32.GetMonitorInfoW
+        describe.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MonitorInfo)]
+        describe.restype = wintypes.BOOL
+        info = MonitorInfo()
+        info.size = ctypes.sizeof(MonitorInfo)
+        # MONITOR_DEFAULTTONEAREST: the screen the window is (mostly) on.
+        if not describe(nearest(frame, 2), ctypes.byref(info)):
+            return None
+        return int(info.work.bottom)
+    except (AttributeError, OSError):
+        return None
+
+
+class Button(tk.Canvas):
+    """A rounded button that answers the pointer: `Style`'s plates, a
+    Windows glyph and the label on top, and the command on release inside.
+
+    Keyboard-reachable like Tk's own: it takes focus, wears a ring while it
+    has it, and Return or Space presses it. A click does not take the focus,
+    so the ring is only ever Tab's and never follows the mouse.
     """
 
     def __init__(
@@ -682,13 +869,13 @@ class Button(tk.Canvas):
         *,
         text: str,
         command: Callable[[], None],
-        style: Style = QUIET,
+        style: Style = GHOST,
+        glyph: str = "",
         scale: float = 1.0,
-        background: RGB = BACKGROUND,
     ) -> None:
         super().__init__(
             parent,
-            bg=hex_of(background),
+            bg=hex_of(BACKGROUND),
             highlightthickness=0,
             bd=0,
             takefocus=True,
@@ -696,50 +883,57 @@ class Button(tk.Canvas):
         )
         self._style = style
         self._command = command
-        self._background = background
-        self._pad = (round(BUTTON_PAD_X * scale), round(BUTTON_PAD_Y * scale))
-        self._radius = max(2, round(BUTTON_RADIUS * scale))
-        self._font = tkfont.Font(family=FONT, size=BUTTON_FONT)
+        self._scale = scale
+        self._font = tkfont.Font(family=LABEL_FONT[0], size=LABEL_FONT[1])
+        self._glyph_font = tkfont.Font(family=GLYPH_FAMILY, size=11)
         self._plates: dict[str, ImageTk.PhotoImage] = {}
         self._plate_item = self.create_image(0, 0, anchor="nw")
-        self._label_item = self.create_text(0, 0, anchor="center", font=self._font, text="")
+        self._glyph_item = self.create_text(0, 0, anchor="w", font=self._glyph_font, text="")
+        self._label_item = self.create_text(0, 0, anchor="w", font=self._font, text="")
         self._enabled = True
         self._under = False
         self._held = False
+        self._focused = False
         # None until the first `set_text`, so that a button born with no
         # words still gets its plates and its size when they arrive.
-        self._text: str | None = None
+        self._shown: tuple[str, str] | None = None
         for event, handler in (
             ("<Enter>", self._entered),
             ("<Leave>", self._left),
             ("<ButtonPress-1>", self._pressed),
             ("<ButtonRelease-1>", self._released),
-            ("<FocusIn>", self._entered),
-            ("<FocusOut>", self._left),
+            ("<FocusIn>", self._focus_in),
+            ("<FocusOut>", self._focus_out),
             ("<Return>", self._struck),
             ("<space>", self._struck),
         ):
             self.bind(event, handler)
-        self.set_text(text)
+        self.set_text(text, glyph)
 
     # -- what the panel says to it -----------------------------------------
 
-    def set_text(self, text: str) -> None:
-        """The label, and with it the button's size: the plates are repainted
-        only when the words really changed."""
-        if text == self._text:
+    def set_text(self, text: str, glyph: str = "") -> None:
+        """The words and the glyph, and with them the button's size: the
+        plates are repainted only when either really changed."""
+        if (text, glyph) == self._shown:
             return
-        self._text = text
-        width = self._font.measure(text) + 2 * self._pad[0]
-        height = self._font.metrics("linespace") + 2 * self._pad[1]
+        self._shown = (text, glyph)
+        pad_x, pad_y = round(BUTTON_PAD_X * self._scale), round(BUTTON_PAD_Y * self._scale)
+        glyph_width = self._glyph_font.measure(glyph) if glyph else 0
+        gap = round(GLYPH_GAP * self._scale) if glyph else 0
+        width = pad_x + glyph_width + gap + self._font.measure(text) + pad_x
+        height = self._font.metrics("linespace") + 2 * pad_y
         self.configure(width=width, height=height)
+        radius = max(2, round(BUTTON_RADIUS * self._scale))
         self._plates = {
-            name: ImageTk.PhotoImage(
-                plate(width, height, self._radius, fill, edge, self._background)
-            )
+            name: ImageTk.PhotoImage(plate(width, height, radius, fill, edge, BACKGROUND))
             for name, fill, edge in self._faces()
         }
-        self.coords(self._label_item, width / 2, height / 2)
+        middle = height / 2
+        # The glyphs sit a pixel high against Bahnschrift's letters.
+        self.coords(self._glyph_item, pad_x, middle + round(self._scale))
+        self.itemconfigure(self._glyph_item, text=glyph)
+        self.coords(self._label_item, pad_x + glyph_width + gap, middle)
         self.itemconfigure(self._label_item, text=text)
         self._wear()
 
@@ -749,28 +943,34 @@ class Button(tk.Canvas):
             self.configure(cursor="hand2" if enabled else "")
             self._wear()
 
-    # -- what the pointer says to it ---------------------------------------
+    # -- what the pointer and the keyboard say to it ------------------------
 
-    def _entered(self, _: object = None) -> None:
+    def _entered(self, _: object) -> None:
         self._under = True
         self._wear()
 
-    def _left(self, _: object = None) -> None:
+    def _left(self, _: object) -> None:
         self._under = self._held = False
         self._wear()
 
     def _pressed(self, _: object) -> None:
-        if not self._enabled:
-            return
-        self._held = True
-        self.focus_set()
-        self._wear()
+        if self._enabled:
+            self._held = True
+            self._wear()
 
     def _released(self, _: object) -> None:
         held, self._held = self._held, False
         self._wear()
-        if held and self._enabled:
+        if held and self._enabled and self._under:
             self._command()
+
+    def _focus_in(self, _: object) -> None:
+        self._focused = True
+        self._wear()
+
+    def _focus_out(self, _: object) -> None:
+        self._focused = False
+        self._wear()
 
     def _struck(self, _: object) -> None:
         if self._enabled:
@@ -780,28 +980,343 @@ class Button(tk.Canvas):
 
     def _faces(self) -> tuple[tuple[str, RGB, RGB | None], ...]:
         style = self._style
-        faded = blend(style.fill, self._background, 1 - FADED)
-        edge = None if style.edge is None else blend(style.edge, self._background, 1 - FADED)
+        faded = blend(style.fill, BACKGROUND, 1 - FADED)
         return (
             ("rest", style.fill, style.edge),
             ("hover", style.hover, style.edge),
             ("held", style.press, style.edge),
-            ("off", faded, edge),
+            ("off", faded, None),
+            ("rest+focus", style.fill, FOCUS_EDGE),
+            ("hover+focus", style.hover, FOCUS_EDGE),
         )
 
     def _wear(self) -> None:
         if not self._plates:
             return
+        style = self._style
         if not self._enabled:
-            face, ink = "off", DIM_INK
+            face, ink = "off", FAINT
         elif self._held:
-            face, ink = "held", self._style.ink
+            face, ink = "held", style.hover_ink or style.ink
         elif self._under:
-            face, ink = "hover", self._style.hover_ink or self._style.ink
+            face, ink = "hover", style.hover_ink or style.ink
         else:
-            face, ink = "rest", self._style.ink
+            face, ink = "rest", style.ink
+        if self._focused and face in ("rest", "hover"):
+            face += "+focus"
         self.itemconfigure(self._plate_item, image=self._plates[face])
-        self.itemconfigure(self._label_item, fill=ink)
+        for item in (self._glyph_item, self._label_item):
+            self.itemconfigure(item, fill=hex_of(ink))
+
+
+class Fold(tk.Canvas):
+    """The accordion's header (D33): the words on the left, a chevron on the
+    right that points where the conversation will go, the whole row one
+    target. Answers the pointer and the keyboard like a `Button`."""
+
+    def __init__(
+        self, parent: tk.Misc, *, text: str, command: Callable[[], None], scale: float
+    ) -> None:
+        font = tkfont.Font(family=LABEL_FONT[0], size=LABEL_FONT[1])
+        height = font.metrics("linespace") + round(2 * 12 * scale)
+        super().__init__(
+            parent,
+            bg=hex_of(BACKGROUND),
+            highlightthickness=0,
+            bd=0,
+            takefocus=True,
+            cursor="hand2",
+            height=height,
+        )
+        self._command = command
+        self._scale = scale
+        self._height = height
+        self._pad = round(12 * scale)
+        self._plates: dict[str, ImageTk.PhotoImage] = {}
+        self._plate_item = self.create_image(0, 0, anchor="nw")
+        self._label_item = self.create_text(self._pad, height / 2, anchor="w", text=text, font=font)
+        self._chevron_item = self.create_text(
+            0, height / 2 + round(scale), anchor="e", text=CHEVRON_DOWN, font=(GLYPH_FAMILY, 9)
+        )
+        self._under = False
+        self._focused = False
+        for event, handler in (
+            ("<Configure>", self._resized),
+            ("<Enter>", lambda _: self._set(under=True)),
+            ("<Leave>", lambda _: self._set(under=False)),
+            ("<ButtonRelease-1>", self._released),
+            ("<FocusIn>", lambda _: self._set(focused=True)),
+            ("<FocusOut>", lambda _: self._set(focused=False)),
+            ("<Return>", lambda _: self._command()),
+            ("<space>", lambda _: self._command()),
+        ):
+            self.bind(event, handler)
+
+    def set_open(self, opened: bool) -> None:
+        self.itemconfigure(self._chevron_item, text=CHEVRON_UP if opened else CHEVRON_DOWN)
+
+    def _set(self, *, under: bool | None = None, focused: bool | None = None) -> None:
+        if under is not None:
+            self._under = under
+        if focused is not None:
+            self._focused = focused
+        self._wear()
+
+    def _released(self, event: tk.Event[Any]) -> None:
+        if 0 <= event.x < self.winfo_width() and 0 <= event.y < self.winfo_height():
+            self._command()
+
+    def _resized(self, event: tk.Event[Any]) -> None:
+        width = max(2, event.width)
+        radius = max(2, round(BUTTON_RADIUS * self._scale))
+        faces = {
+            "rest": (BACKGROUND, None),
+            "hover": (RAISED, None),
+            "rest+focus": (BACKGROUND, FOCUS_EDGE),
+            "hover+focus": (RAISED, FOCUS_EDGE),
+        }
+        self._plates = {
+            name: ImageTk.PhotoImage(plate(width, self._height, radius, fill, edge, BACKGROUND))
+            for name, (fill, edge) in faces.items()
+        }
+        self.coords(self._chevron_item, width - self._pad, self._height / 2 + round(self._scale))
+        self._wear()
+
+    def _wear(self) -> None:
+        if not self._plates:
+            return
+        face = "hover" if self._under else "rest"
+        if self._focused:
+            face += "+focus"
+        self.itemconfigure(self._plate_item, image=self._plates[face])
+        ink = hex_of(CHALK if self._under else GRAPHITE)
+        for item in (self._label_item, self._chevron_item):
+            self.itemconfigure(item, fill=ink)
+
+
+class Field(tk.Canvas):
+    """A rounded entry: a plate Pillow draws, the Entry sitting on it, an
+    optional glyph at the start and a hint while it is empty."""
+
+    def __init__(self, parent: tk.Misc, *, scale: float, glyph: str = "", hint: str = "") -> None:
+        font = tkfont.Font(family=VALUE_FONT[0], size=VALUE_FONT[1])
+        height = font.metrics("linespace") + round(2 * 10 * scale)
+        super().__init__(parent, bg=hex_of(BACKGROUND), highlightthickness=0, bd=0, height=height)
+        self._scale = scale
+        self._height = height
+        self._pad = round(14 * scale)
+        self._plate_item = self.create_image(0, 0, anchor="nw")
+        start = self._pad
+        if glyph:
+            self.create_text(
+                start,
+                height / 2 + round(scale),
+                anchor="w",
+                text=glyph,
+                font=(GLYPH_FAMILY, 11),
+                fill=hex_of(GRAPHITE),
+            )
+            start += round(26 * scale)
+        self._start = start
+        self.entry = tk.Entry(
+            self,
+            bg=hex_of(RAISED),
+            fg=hex_of(CHALK),
+            insertbackground=hex_of(CHALK),
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            font=font,
+        )
+        self._slot = self.create_window(start, height / 2, anchor="w", window=self.entry)
+        # The hint is a label over the Entry's empty box - a canvas item would
+        # be under it, since a canvas draws its windows over everything - and
+        # starts two pixels in, so that the caret still shows beside it.
+        self._hint = tk.Label(self, text=hint, bg=hex_of(RAISED), fg=hex_of(FAINT), font=font)
+        self._hint.bind("<Button-1>", lambda _: self.entry.focus_set())
+        self._plates: dict[bool, ImageTk.PhotoImage] = {}
+        self._focused = False
+        self.bind("<Configure>", self._resized)
+        self.bind("<Button-1>", lambda _: self.entry.focus_set())
+        self.entry.bind("<FocusIn>", lambda _: self._wear(True), add="+")
+        self.entry.bind("<FocusOut>", lambda _: self._wear(False), add="+")
+        self.entry.bind("<KeyRelease>", lambda _: self._hinted(), add="+")
+        self._hinted()
+
+    def clear(self) -> None:
+        self.entry.delete(0, "end")
+        self._hinted()
+
+    def _hinted(self) -> None:
+        if self.entry.get() or not self._hint.cget("text"):
+            self._hint.place_forget()
+        else:
+            self._hint.place(in_=self.entry, x=round(2 * self._scale), rely=0.5, anchor="w")
+            self._hint.lift()
+
+    def _resized(self, event: tk.Event[Any]) -> None:
+        width = max(2, event.width)
+        radius = max(2, round(BUTTON_RADIUS * self._scale))
+        self._plates = {
+            focused: ImageTk.PhotoImage(
+                plate(
+                    width,
+                    self._height,
+                    radius,
+                    RAISED,
+                    GRAPHITE if focused else HAIRLINE,
+                    BACKGROUND,
+                )
+            )
+            for focused in (False, True)
+        }
+        self.itemconfigure(self._slot, width=max(1, width - self._start - self._pad))
+        self._wear(self._focused)
+
+    def _wear(self, focused: bool) -> None:
+        self._focused = focused
+        if self._plates:
+            self.itemconfigure(self._plate_item, image=self._plates[focused])
+
+
+class Rows(tk.Text):
+    """The pick-one list, as rows rather than Tk's listbox lines: padded,
+    highlighted the whole width, one line each or two (`split_row`).
+    Keyboard and mouse like a list: up and down, a click to pick, a double
+    click or Return to go on."""
+
+    def __init__(self, parent: tk.Misc, *, scale: float, on_activate: Callable[[], None]) -> None:
+        super().__init__(
+            parent,
+            bg=hex_of(BACKGROUND),
+            fg=hex_of(CHALK),
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            wrap="word",
+            cursor="arrow",
+            takefocus=True,
+            padx=0,
+            pady=0,
+            height=1,
+            font=VALUE_FONT,
+            insertwidth=0,
+            exportselection=False,
+        )
+        margin = round(14 * scale)
+        self.tag_configure(
+            "what",
+            font=CAPTION_FONT,
+            foreground=hex_of(GRAPHITE),
+            spacing1=round(11 * scale),
+            lmargin1=margin,
+            lmargin2=margin,
+            rmargin=margin,
+        )
+        self.tag_configure(
+            "value",
+            font=VALUE_FONT,
+            foreground=hex_of(CHALK),
+            spacing1=round(2 * scale),
+            spacing3=round(11 * scale),
+            lmargin1=margin,
+            lmargin2=margin,
+            rmargin=margin,
+        )
+        self.tag_configure(
+            "single",
+            font=VALUE_FONT,
+            foreground=hex_of(CHALK),
+            spacing1=round(8 * scale),
+            spacing3=round(8 * scale),
+            lmargin1=margin,
+            lmargin2=margin,
+            rmargin=margin,
+        )
+        self.tag_configure("hover", background=hex_of(RAISED), lmargincolor=hex_of(RAISED))
+        self.tag_configure("chosen", background=hex_of(LIFTED), lmargincolor=hex_of(LIFTED))
+        self._on_activate = on_activate
+        self._spans: list[tuple[str, str]] = []
+        self.chosen = -1
+        self._hovered = -1
+        self.configure(state="disabled")
+        self.bind("<Motion>", self._moved)
+        self.bind("<Leave>", lambda _: self._hover(-1))
+        self.bind("<Button-1>", self._clicked)
+        self.bind("<Double-Button-1>", self._activated)
+        self.bind("<Return>", self._activated)
+        self.bind("<Up>", lambda _: self._step(-1))
+        self.bind("<Down>", lambda _: self._step(1))
+
+    def show(self, labels: Sequence[str], *, two_lines: bool) -> None:
+        self.configure(state="normal")
+        self.delete("1.0", "end")
+        self._spans = []
+        for number, label in enumerate(labels):
+            start = self.index("end-1c")
+            what, value = split_row(label) if two_lines else ("", label)
+            if what:
+                self.insert("end", what + "\n", ("what",))
+                self.insert("end", value, ("value",))
+            else:
+                self.insert("end", label, ("single",))
+            # A row ends at its line break; the last row has none, and ends
+            # at Tk's own final line break instead - which would be an empty
+            # row under the list if a break were written after it.
+            self._spans.append((start, self.index("end-1c")))
+            if number < len(labels) - 1:
+                self.insert("end", "\n", (("value",) if what else ("single",)))
+        self.configure(state="disabled")
+        self.chosen = self._hovered = -1
+        if self._spans:
+            self.choose(0)
+        self.yview_moveto(0)
+
+    def choose(self, index: int) -> None:
+        if not self._spans:
+            return
+        index = max(0, min(index, len(self._spans) - 1))
+        self.chosen = index
+        start, end = self._spans[index]
+        self.tag_remove("chosen", "1.0", "end")
+        # Through the line break, or the highlight stops where the words do.
+        self.tag_add("chosen", start, f"{end} +1c")
+        self.see(end)
+        self.see(start)
+
+    def _row_at(self, event: tk.Event[Any]) -> int:
+        at = self.index(f"@{event.x},{event.y}")
+        for index, (start, end) in enumerate(self._spans):
+            if self.compare(at, ">=", start) and self.compare(at, "<=", end):
+                return index
+        return -1
+
+    def _hover(self, index: int) -> None:
+        if index == self._hovered:
+            return
+        self._hovered = index
+        self.tag_remove("hover", "1.0", "end")
+        if index >= 0:
+            start, end = self._spans[index]
+            self.tag_add("hover", start, f"{end} +1c")
+
+    def _moved(self, event: tk.Event[Any]) -> None:
+        self._hover(self._row_at(event))
+
+    def _clicked(self, event: tk.Event[Any]) -> str:
+        self.focus_set()
+        index = self._row_at(event)
+        if index >= 0:
+            self.choose(index)
+        return "break"
+
+    def _activated(self, _: object) -> str:
+        self._on_activate()
+        return "break"
+
+    def _step(self, delta: int) -> str:
+        self.choose(self.chosen + delta)
+        return "break"
 
 
 class TkPanel:
@@ -813,13 +1328,14 @@ class TkPanel:
         self._window = window
         _timer_period(1, begin=True)
         root = self._root = tk.Tk()
-        background = hex_of(BACKGROUND)
+        ground = hex_of(BACKGROUND)
         root.title(APP_TITLE)
-        root.configure(bg=background)
-        self._scale = root.winfo_fpixels("1i") / 96.0
-        width, height = (round(side * self._scale) for side in WINDOW_SIZE)
-        root.geometry(f"{width}x{height}")
-        # One size (U2): no drag on an edge, no maximise - Windows greys the
+        root.configure(bg=ground)
+        scale = self._scale = root.winfo_fpixels("1i") / 96.0
+        self._width, self._full = (round(side * scale) for side in WINDOW_SIZE)
+        root.geometry(f"{self._width}x{self._full}")
+        # One width, and a height only the accordion and the wizard set
+        # (U2, D33): no drag on an edge, no maximise - Windows greys the
         # middle title-bar button out, and minimise and close stay.
         root.resizable(False, False)
         # The mark, in the title bar and on the taskbar button (U5). Tk keeps
@@ -832,80 +1348,137 @@ class TkPanel:
         names = [str(mark) for mark in self._marks]
         root.iconphoto(True, names[0], *names[1:])
         root.protocol("WM_DELETE_WINDOW", self._close)
+        inset = self._inset = round(INSET * scale)
 
-        # The face: orb, labels, transcript, buttons.
-        self._face = tk.Frame(root, bg=background)
+        # The face: readouts and orb, the state's word, the buttons, the
+        # accordion's header - and the conversation under it when unfolded.
+        self._face = tk.Frame(root, bg=ground)
         self._canvas = tk.Canvas(
-            self._face, bg=background, highlightthickness=0, height=round(ORB_HEIGHT * self._scale)
+            self._face, bg=ground, highlightthickness=0, height=round(ORB_HEIGHT * scale)
         )
         self._canvas.pack(fill="x")
         self._canvas.bind("<Configure>", self._resized)
-        self._label = tk.Label(self._face, bg=background, fg=INK, font=(FONT, 14))
-        self._label.pack()
-        self._meter = tk.Label(self._face, bg=background, fg=DIM_INK, font=(FONT, 10))
-        self._meter.pack(pady=(0, 8))
-        # The bar first and at the bottom: packed after a transcript that
-        # asks for twenty-four lines it would be pushed off the window.
-        bar = tk.Frame(self._face, bg=background)
-        bar.pack(side="bottom", fill="x", padx=12, pady=12)
-        # The switch is what the window is for, so it is the filled one; quit
-        # is quiet until the pointer is on it (U4).
-        self._switch = self._button(bar, "", window.toggle, style=ACCENT)
+        self._word = tk.Label(self._face, bg=ground, fg=hex_of(CHALK), font=DISPLAY_FONT)
+        self._word.pack(pady=(round(2 * scale), round(14 * scale)))
+        bar = tk.Frame(self._face, bg=ground)
+        # The ghosts' words start where the switch's plate does, not where
+        # their own invisible plates do.
+        bar.pack(fill="x", padx=inset - round(4 * scale), pady=(0, round(14 * scale)))
+        self._switch = self._button(bar, "", window.toggle, style=PLATE)
         self._switch.pack(side="left")
-        self._button(bar, view.said["window_settings"], window.settings).pack(side="left", padx=8)
-        self._button(bar, view.quit_label(), self._quit, style=DANGER).pack(side="right")
-        self._text = self._pane(self._face, height=6)
-        self._text.tag_configure("who", foreground=DIM_INK)
-        self._text.tag_configure("you", foreground=DIM_INK)
-        self._text.tag_configure("it", foreground=INK)
-        # No emoji in the row: Tcl 8.6.14 does not draw characters outside
-        # the Basic Multilingual Plane reliably.
-        self._text.tag_configure("searched", foreground=DIM_INK)
-        self._text.tag_configure("notice", foreground=NOTICE_INK)
-        self._text.pack(fill="both", expand=True, padx=12)
+        self._button(
+            bar, view.said["window_settings"], window.settings, style=GHOST, glyph=GEAR
+        ).pack(side="left", padx=(round(6 * scale), 0))
+        self._button(bar, view.quit_label(), self._quit, style=DANGER, glyph=POWER).pack(
+            side="right"
+        )
+        tk.Frame(self._face, bg=hex_of(HAIRLINE), height=1).pack(fill="x", padx=inset)
+        self._fold = Fold(
+            self._face,
+            text=view.said["window_conversation"],
+            command=self._fold_pressed,
+            scale=scale,
+        )
+        self._fold.pack(
+            fill="x", padx=inset - round(12 * scale), pady=(round(4 * scale), round(6 * scale))
+        )
+        self._talk = tk.Text(
+            self._face,
+            bg=ground,
+            fg=hex_of(CHALK),
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            wrap="word",
+            state="disabled",
+            font=BODY_FONT,
+            padx=0,
+            # No padding inside: Tk draws into it whatever of the row above
+            # the view reaches down - a cedilla, a comma. The room above and
+            # below is the packing's (`_fit`), so the view is cut at its edge.
+            pady=0,
+            cursor="arrow",
+            takefocus=False,
+            height=1,
+        )
+        self._talk_room = (0, round(14 * scale))
+        # Who said it is where it stands: the user's words to the right and
+        # dim, the answer to the left and bright (D33). No emoji in a row:
+        # Tcl 8.6.14 does not draw characters outside the Basic Multilingual
+        # Plane reliably.
+        indent = round(64 * scale)
+        self._talk.tag_configure(
+            "you",
+            justify="right",
+            foreground=hex_of(GRAPHITE),
+            spacing1=round(16 * scale),
+            lmargin1=indent,
+            lmargin2=indent,
+        )
+        self._talk.tag_configure(
+            "it", foreground=hex_of(CHALK), spacing1=round(4 * scale), rmargin=round(32 * scale)
+        )
+        self._talk.tag_configure(
+            "searched", foreground=hex_of(GRAPHITE), font=CAPTION_FONT, spacing1=round(5 * scale)
+        )
+        self._talk.tag_configure("glyph", font=(GLYPH_FAMILY, 8))
+        self._talk.tag_configure("notice", foreground=hex_of(AMBER), spacing1=round(16 * scale))
+        # Last, so that they win: the first row needs no gap above it, and
+        # the last one the room `_align_top` gives it.
+        self._talk.tag_configure("lead", spacing1=0)
+        self._talk.tag_configure("tail", spacing3=0)
         self._face.pack(fill="both", expand=True)
 
         # The wizard's page, packed instead of the face while a wizard runs.
-        self._page = tk.Frame(root, bg=background)
-        self._lines = self._pane(self._page, height=8)
-        self._lines.pack(fill="x", padx=12, pady=(12, 8))
+        self._page = tk.Frame(root, bg=ground)
+        self._lines = tk.Text(
+            self._page,
+            bg=ground,
+            fg=hex_of(GRAPHITE),
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            wrap="word",
+            state="disabled",
+            font=BODY_FONT,
+            padx=0,
+            pady=0,
+            cursor="arrow",
+            takefocus=False,
+            height=1,
+        )
+        self._lines.tag_configure("said", foreground=hex_of(GRAPHITE), spacing3=round(3 * scale))
+        self._lines.tag_configure("latest", foreground=hex_of(CHALK))
         self._question = tk.Label(
             self._page,
-            bg=background,
-            fg=INK,
-            font=(FONT, 11),
+            bg=ground,
+            fg=hex_of(CHALK),
+            font=QUESTION_FONT,
             justify="left",
             anchor="w",
-            wraplength=round((WINDOW_SIZE[0] - 40) * self._scale),
+            padx=0,
+            wraplength=round((WINDOW_SIZE[0] - 2 * INSET) * scale),
         )
-        self._question.pack(fill="x", padx=12)
-        self._filter = self._entry_widget(self._page)
-        self._filter.bind("<KeyRelease>", self._filtered)
-        self._list = tk.Listbox(
-            self._page,
-            bg=PANE,
-            fg=INK,
-            selectbackground=PRESSED,
-            selectforeground=INK,
-            relief="flat",
-            highlightthickness=0,
-            font=(FONT, 10),
-            activestyle="none",
-        )
-        self._list.bind("<Double-Button-1>", lambda _: self._continue_pressed())
-        self._list.bind("<Return>", lambda _: self._continue_pressed())
-        self._entry = self._entry_widget(self._page)
-        self._entry.bind("<Return>", lambda _: self._continue_pressed())
-        buttons = tk.Frame(self._page, bg=background)
-        buttons.pack(side="bottom", fill="x", padx=12, pady=12)
+        self._filter = Field(self._page, scale=scale, glyph=SEARCH, hint=view.said["wizard_filter"])
+        self._filter.entry.bind("<KeyRelease>", self._filtered, add="+")
+        self._list = Rows(self._page, scale=scale, on_activate=self._continue_pressed)
+        self._filter.entry.bind("<Down>", lambda _: self._list.focus_set())
+        self._filter.entry.bind("<Return>", lambda _: self._continue_pressed())
+        self._entry = Field(self._page, scale=scale)
+        self._entry.entry.bind("<Return>", lambda _: self._continue_pressed())
+        buttons = tk.Frame(self._page, bg=ground)
+        buttons.pack(side="bottom", fill="x", padx=inset, pady=round(14 * scale))
         self._continue = self._button(
-            buttons, view.said["wizard_continue"], self._continue_pressed, style=ACCENT
+            buttons, view.said["wizard_continue"], self._continue_pressed, style=SOLID
         )
         self._continue.pack(side="left")
-        self._cancel = self._button(buttons, view.said["wizard_cancel"], self._cancel_pressed)
+        self._cancel = self._button(
+            buttons, view.said["wizard_cancel"], self._cancel_pressed, style=GHOST
+        )
         self._cancel.pack(side="right")
         self._visible: list[Option] = []
         self._page_open = False
+        self._page_seen: WizardPage | None = None
         self._lines_shown = -1
         self._asked: Answer | None = None
         self._asked_first = True
@@ -920,12 +1493,32 @@ class TkPanel:
         self._dashes: list[list[int]] = []
         self._applied: list[float | None] = []
         self._caps: list[int] = []
+        self._readouts = (0, 0)
         self._colour: RGB | None = None
 
-        self._shown = ("", "", "")
+        self._shown: tuple[Any, ...] = ()
         self._rows_version = -1
+        self._talk_shown = False
+        # The accordion's height: where it is going, where it set out from
+        # and when, and the folded height - measured once the face is laid
+        # out, below.
+        self._compact = self._full
+        self._height = self._full
+        self._target = self._full
+        self._from = self._full
+        self._moving_since: float | None = None
         self._last = time.monotonic()
         self._paint()
+        # Laid out and mapped once, so that there is a frame to darken and a
+        # folded face to measure; then shown again at the height it wants.
+        root.update_idletasks()
+        self._frame = _frame_of(root)
+        _dark_title_bar(self._frame)
+        self._compact = self._face.winfo_reqheight()
+        self._height = self._target = self._from = self._wanted()
+        root.geometry(f"{self._width}x{self._height}")
+        root.withdraw()
+        root.deiconify()
         root.after(TICK_MS, self._tick)
 
     def run(self) -> None:
@@ -937,38 +1530,16 @@ class TkPanel:
     # -- widgets ---------------------------------------------------------------
 
     def _button(
-        self, parent: tk.Misc, text: str, command: Callable[[], None], *, style: Style = QUIET
+        self,
+        parent: tk.Misc,
+        text: str,
+        command: Callable[[], None],
+        *,
+        style: Style,
+        glyph: str = "",
     ) -> Button:
-        return Button(parent, text=text, command=command, style=style, scale=self._scale)
-
-    def _pane(self, parent: tk.Misc, *, height: int | None = None) -> tk.Text:
-        pane = tk.Text(
-            parent,
-            bg=PANE,
-            fg=INK,
-            relief="flat",
-            wrap="word",
-            state="disabled",
-            font=(FONT, 10),
-            padx=12,
-            pady=8,
-            highlightthickness=0,
-        )
-        if height is not None:
-            pane.configure(height=height)
-        return pane
-
-    def _entry_widget(self, parent: tk.Misc) -> tk.Entry:
-        return tk.Entry(
-            parent,
-            bg=PANE,
-            fg=INK,
-            insertbackground=INK,
-            relief="flat",
-            font=(FONT, 11),
-            highlightthickness=1,
-            highlightbackground=PRESSED,
-            highlightcolor=DIM_INK,
+        return Button(
+            parent, text=text, command=command, style=style, glyph=glyph, scale=self._scale
         )
 
     # -- the tick ---------------------------------------------------------------
@@ -984,6 +1555,7 @@ class TkPanel:
                 continue
             self._view.apply(message)
         self._paint()
+        self._fit(started)
         dt, self._last = min(started - self._last, MAX_DT), started
         self._draw(self._view.frame(dt))
         # The next frame is due `TICK_MS` after this one began, not after it
@@ -994,30 +1566,31 @@ class TkPanel:
 
     def _paint(self) -> None:
         view = self._view
-        shown = (view.label(), view.meter(), view.switch_label())
+        # The state's word in the state's colour; a phase - loading, a
+        # failed start - is no state, and is chalk.
+        state = orb.COLOURS[view.state]
+        tint = CHALK if view.phase is not None else blend(state, CHALK, WORD_TINT)
+        shown = (view.label(), tint, view.readouts(), view.switch_label(), view.listening)
         if shown != self._shown:
             self._shown = shown
-            self._label.configure(text=shown[0])
-            self._meter.configure(text=shown[1])
-            self._switch.set_text(shown[2])
+            self._word.configure(text=shown[0], fg=hex_of(tint))
+            if self._dashes:
+                session, minutes = shown[2]
+                self._canvas.itemconfigure(self._readouts[0], text=session)
+                self._canvas.itemconfigure(self._readouts[1], text=minutes)
+            # The glyph is what pressing does: a struck-out microphone to
+            # stop listening, a microphone to start.
+            self._switch.set_text(shown[3], MIC_OFF if view.listening else MIC)
+        self._fold.set_open(view.log_open)
         if view.version != self._rows_version:
             self._rows_version = view.version
-            self._text.configure(state="normal")
-            self._text.delete("1.0", "end")
-            for kind, text in view.rows:
-                who = view.row_label(kind)
-                if who:
-                    self._text.insert("end", f"{who}  ", "who")
-                self._text.insert("end", f"{text}\n", kind)
-            self._text.configure(state="disabled")
-            self._text.see("end")
+            self._fill_talk(view.rows)
         page_wanted = view.wizard is not None
         if page_wanted != self._page_open:
             self._page_open = page_wanted
             if page_wanted:
                 self._face.pack_forget()
                 self._page.pack(fill="both", expand=True)
-                self._lines_shown = -1
                 self._asked_first = True
             else:
                 self._page.pack_forget()
@@ -1025,48 +1598,184 @@ class TkPanel:
         if view.wizard is not None:
             self._paint_page(view.wizard)
 
-    def _paint_page(self, page: WizardPage) -> None:
-        if len(page.lines) != self._lines_shown:
-            self._lines_shown = len(page.lines)
-            self._lines.configure(state="normal")
-            self._lines.delete("1.0", "end")
-            self._lines.insert("end", "\n".join(page.lines))
-            self._lines.configure(state="disabled")
-            self._lines.see("end")
-        if page.answer is not self._asked or self._asked_first:
-            self._asked = page.answer
-            self._asked_first = False
-            self._question.configure(text=page.question)
-            for widget in (self._filter, self._list, self._entry):
-                widget.pack_forget()
-            self._entry.delete(0, "end")
-            self._filter.delete(0, "end")
-            if page.kind == "choose":
-                self._filter.pack(fill="x", padx=12, pady=(8, 4))
-                self._list.pack(fill="both", expand=True, padx=12)
-                self._fill_list(page.options)
-                self._filter.focus_set()
-            elif page.kind in ("secret", "ask"):
-                self._entry.configure(show="•" if page.kind == "secret" else "")
-                self._entry.pack(fill="x", padx=12, pady=8)
-                self._entry.focus_set()
-            self._continue.set_enabled(page.open)
-            self._cancel.set_enabled(page.open)
+    # -- the accordion ------------------------------------------------------------
 
-    def _fill_list(self, options: Sequence[Option]) -> None:
-        self._visible = list(options)
-        self._list.delete(0, "end")
-        for option in self._visible:
-            self._list.insert("end", option.label)
-        if self._visible:
-            self._list.selection_set(0)
+    def _fold_pressed(self) -> None:
+        self._view.toggle_log()
+        self._fold.set_open(self._view.log_open)
 
-    def _filtered(self, _: object) -> None:
-        page = self._view.wizard
-        if page is None:
+    def _wanted(self) -> int:
+        return self._full if self._view.wants_room() else self._compact
+
+    def _fit(self, now: float) -> None:
+        """Grows or folds the window towards the height the view wants, a
+        frame at a time; shows the conversation before it grows and lets it
+        go once it has folded."""
+        wanted = self._wanted()
+        if wanted != self._target:
+            self._from, self._target, self._moving_since = self._height, wanted, now
+            if wanted > self._height:
+                self._keep_on_screen(wanted)
+        if self._view.log_open and not self._talk_shown:
+            self._talk.pack(fill="both", expand=True, padx=self._inset, pady=self._talk_room)
+            self._talk_shown = True
+        if self._moving_since is None:
             return
-        needle = self._filter.get().casefold()
-        self._fill_list([option for option in page.options if needle in option.label.casefold()])
+        progress = (now - self._moving_since) / FOLD_SECONDS
+        height = round(self._from + (self._target - self._from) * _eased(progress))
+        if height != self._height:
+            self._height = height
+            self._root.geometry(f"{self._width}x{height}")
+            if self._talk_shown:
+                self._talk.see("end")
+        if progress >= 1:
+            self._moving_since = None
+            if not self._view.log_open and self._talk_shown:
+                self._talk.pack_forget()
+                self._talk_shown = False
+            elif self._talk_shown:
+                self._align_top()
+
+    def _keep_on_screen(self, height: int) -> None:
+        """A window about to grow past the bottom of its screen - into the
+        taskbar or off the edge - is first lifted by as much as it would."""
+        bottom = _work_area_bottom(self._frame)
+        if bottom is None:
+            return
+        root = self._root
+        border = max(0, root.winfo_rootx() - root.winfo_x())
+        over = root.winfo_rooty() + height + border - bottom
+        if over > 0:
+            root.geometry(f"+{root.winfo_x()}+{max(0, root.winfo_y() - over)}")
+
+    # -- the conversation ----------------------------------------------------------
+
+    def _fill_talk(self, rows: Sequence[tuple[str, str]]) -> None:
+        talk = self._talk
+        talk.configure(state="normal")
+        talk.delete("1.0", "end")
+        above: tuple[str, ...] = ()
+        for number, (kind, text) in enumerate(rows):
+            tags: tuple[str, ...] = (kind, "lead") if number == 0 else (kind,)
+            # The line break before a row belongs to the row above, and the
+            # last row has none: Tk's own final line would be an empty row.
+            if number:
+                talk.insert("end", "\n", above)
+            if kind == "searched":
+                talk.insert("end", SEARCH, (*tags, "glyph"))
+                talk.insert("end", f"  {text}", tags)
+            else:
+                talk.insert("end", text, tags)
+            above = tags
+        talk.configure(state="disabled")
+        talk.see("end")
+        self._align_top()
+
+    def _align_top(self) -> None:
+        """Scrolled to the newest row, the view's top edge cuts whatever row
+        is there in half. Tk will not scroll past the end, so the last row
+        is given just enough room beneath it to push that cut row out of
+        sight and start the view at a whole one."""
+        talk = self._talk
+        talk.tag_remove("tail", "1.0", "end")
+        if not self._talk_shown:
+            return
+        talk.update_idletasks()
+        if talk.yview()[0] <= 0:
+            return
+        line = talk.dlineinfo("@0,0")
+        if line is None:
+            return
+        _, top, _, height, _ = line
+        hidden = int(talk.cget("pady")) - top
+        if 0 < hidden < height:
+            talk.tag_configure("tail", spacing3=height - hidden)
+            talk.tag_add("tail", "end-1c linestart", "end-1c")
+            talk.see("end")
+            # Tk scrolls by copying what is on screen and repaints only the
+            # rows it thinks changed; a descender of the row that just left
+            # the view stayed behind in the gap above the new top row.
+            _repaint(talk.winfo_id())
+
+    # -- the wizard's page ----------------------------------------------------------
+
+    def _paint_page(self, page: WizardPage) -> None:
+        # A wizard closed and opened again within one tick is a new page:
+        # its lines are counted afresh.
+        if page is not self._page_seen or len(page.lines) != self._lines_shown:
+            self._page_seen = page
+            self._lines_shown = len(page.lines)
+            self._show_lines(page.lines)
+        if page.answer is self._asked and not self._asked_first:
+            return
+        self._asked = page.answer
+        self._asked_first = False
+        self._question.configure(text=page.question)
+        for widget in (self._question, self._filter, self._list, self._entry):
+            widget.pack_forget()
+        self._filter.clear()
+        self._entry.clear()
+        proceed, back = self._view.page_buttons()
+        self._continue.set_text(proceed)
+        self._cancel.set_text(back)
+        inset, scale = self._inset, self._scale
+        self._question.pack(fill="x", padx=inset, pady=(round(18 * scale), round(12 * scale)))
+        # The list's rows carry their own margin, so that the highlight runs
+        # past the words: the list itself starts that much further out.
+        list_inset = inset - round(14 * scale)
+        if page.kind == "choose":
+            self._filter.pack(fill="x", padx=inset, pady=(0, round(8 * scale)))
+            self._list.pack(fill="both", expand=True, padx=list_inset)
+            self._fill_list(page.options, two_lines=False)
+            self._filter.entry.focus_set()
+        elif page.kind == "menu":
+            # A handful of rows, each two lines: nothing to filter.
+            self._list.pack(fill="both", expand=True, padx=list_inset)
+            self._fill_list(page.options, two_lines=True)
+            self._list.focus_set()
+        elif page.kind in ("secret", "ask"):
+            self._entry.entry.configure(show="•" if page.kind == "secret" else "")
+            self._entry.pack(fill="x", padx=inset)
+            self._entry.entry.focus_set()
+        self._continue.set_enabled(page.open)
+        self._cancel.set_enabled(page.open)
+
+    def _show_lines(self, lines: Sequence[str]) -> None:
+        """What the wizard said so far, over the question: the last three,
+        the newest in chalk - a failure is always the newest line."""
+        shown = list(lines[-3:])
+        box = self._lines
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        for number, line in enumerate(shown):
+            last = number == len(shown) - 1
+            box.insert("end", line if last else line + "\n", ("said", "latest") if last else "said")
+        box.configure(state="disabled")
+        if not shown:
+            box.pack_forget()
+            return
+        placing = {"fill": "x", "padx": self._inset, "pady": (round(22 * self._scale), 0)}
+        if self._question.winfo_manager():
+            box.pack(placing, before=self._question)
+        else:
+            box.pack(placing)
+        box.update_idletasks()
+        count = box.count("1.0", "end", "displaylines", return_ints=True)
+        box.configure(height=max(1, min(5, count or 1)))
+
+    def _fill_list(self, options: Sequence[Option], *, two_lines: bool) -> None:
+        self._visible = list(options)
+        self._list.show([option.label for option in self._visible], two_lines=two_lines)
+
+    def _filtered(self, event: tk.Event[Any]) -> None:
+        page = self._view.wizard
+        if page is None or event.keysym in ("Return", "Down", "Up"):
+            return
+        needle = self._filter.entry.get().casefold()
+        self._fill_list(
+            [option for option in page.options if needle in option.label.casefold()],
+            two_lines=False,
+        )
 
     # -- clicks, on the Tk thread ------------------------------------------------
 
@@ -1074,14 +1783,12 @@ class TkPanel:
         page = self._view.wizard
         if page is None or not page.open:
             return
-        if page.kind == "choose":
-            # Untyped in the stubs; a tuple of indices in life.
-            chosen: tuple[int, ...] = self._list.curselection()  # type: ignore[no-untyped-call]
-            if not chosen:
+        if page.kind in ("choose", "menu"):
+            if not 0 <= self._list.chosen < len(self._visible):
                 return
-            value = self._visible[int(chosen[0])].value
+            value = self._visible[self._list.chosen].value
         else:
-            value = self._entry.get()
+            value = self._entry.entry.get()
         self._window.answer(self._view.take_answer(), value)
 
     def _cancel_pressed(self) -> None:
@@ -1106,9 +1813,9 @@ class TkPanel:
         # The outer ring, its width and a hair of room must fit the half.
         outer = orb.RINGS[-1]
         self._radius = min(width, height) / 2 / (outer.radius + outer.width + 0.04)
-        self._build()
+        self._build(width)
 
-    def _build(self) -> None:
+    def _build(self, width: float) -> None:
         canvas = self._canvas
         canvas.delete("all")
         cx, cy = self._centre
@@ -1125,7 +1832,7 @@ class TkPanel:
         for ring in orb.RINGS:
             r = ring.radius * radius
             box = (cx - r, cy - r, cx + r, cy + r)
-            width = max(1, round(ring.width * radius))
+            stroke = max(1, round(ring.width * radius))
             if ring.dashes >= DASHED_RING_MIN:
                 dash = max(1, round(r * math.radians(ring.extent)))
                 gap = max(1, round(r * math.radians(ring.step)) - dash)
@@ -1143,15 +1850,23 @@ class TkPanel:
             else:
                 items = [
                     canvas.create_arc(
-                        box, start=0, extent=ring.extent, style="arc", width=width, outline=""
+                        box, start=0, extent=ring.extent, style="arc", width=stroke, outline=""
                     )
                     for _ in range(ring.dashes)
                 ]
             self._dashes.append(items)
         self._applied = [None] * len(orb.RINGS)
         self._caps = [canvas.create_oval(0, 0, 1, 1, width=0) for _ in orb.CAPS]
-        # Recoloured at the next draw.
+        # The session and its minutes, read off the instrument's corners.
+        top = round(16 * self._scale)
+        ink = hex_of(GRAPHITE)
+        self._readouts = (
+            canvas.create_text(self._inset, top, anchor="nw", font=CAPTION_FONT, fill=ink),
+            canvas.create_text(width - self._inset, top, anchor="ne", font=CAPTION_FONT, fill=ink),
+        )
+        # Recoloured and reworded at the next draw.
         self._colour = None
+        self._shown = ()
 
     def _glow_image(self, colour: RGB, core: float) -> ImageTk.PhotoImage:
         """The mockup's halo and inner glow, painted once per colour: Tk

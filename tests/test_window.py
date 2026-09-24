@@ -3,8 +3,10 @@
 What is claimed: every `Screen` call is a queue put that returns at once -
 the loop never waits on the window (spec section 2); the view shows the
 state, the mode, the session and the phase in the pack's words; finished
-turns become rows and the oldest go after two hundred; the quiet-microphone
-sentence is said once, like the line; a level feeds the orb; the wizard's
+turns become rows and the oldest go after two hundred; the conversation is
+folded at the start, unfolds and folds at the header, and unfolds for a
+notice (D33); the quiet-microphone sentence is said once, like the line; a
+level feeds the orb; the wizard's
 page holds what was said and the open question, and an answer from the Tk
 thread resolves the future on the loop; buttons reach the loop through
 `call_soon_threadsafe`; closing hides with a tray and quits without. The
@@ -31,9 +33,7 @@ from allie.setup_wizard import Option
 from allie.ui import orb, status
 from allie.ui import window as window_ui
 from allie.ui.window import (
-    ACCENT,
     BACKGROUND,
-    QUIET,
     TEXT,
     TICK_MS,
     TRANSCRIPT_ROWS,
@@ -43,6 +43,7 @@ from allie.ui.window import (
     WindowError,
     WindowPrompter,
     plate,
+    split_row,
 )
 
 TR = locales.load("tr")
@@ -289,22 +290,23 @@ def test_an_idle_microphone_that_is_off_says_not_listening_and_offers_to_start(
     assert one.view.switch_label() == said("tray_stop_listening", window_ui.TRAY_TEXT)
 
 
-def test_the_meter_says_whether_a_session_is_open_and_the_minutes(built: Any) -> None:
+def test_the_orbs_corners_say_whether_a_session_is_open_and_the_minutes(built: Any) -> None:
+    """Two readouts rather than one line joined by a dot (D33)."""
     one = built()
     closed = said("session_closed", status.TEXT)
     opened = said("session_open", status.TEXT)
     minutes = said("session_minutes", status.TEXT)
 
-    assert one.view.meter() == f"{closed} · {minutes.format(minutes=0)}"
+    assert one.view.readouts() == (closed, minutes.format(minutes=0))
 
     one.window.session(True)
     one.settle()
     one.clock.now += 150
-    assert one.view.meter() == f"{opened} · {minutes.format(minutes=2)}"
+    assert one.view.readouts() == (opened, minutes.format(minutes=2))
 
     one.window.session(False)
     one.settle()
-    assert one.view.meter() == f"{closed} · {minutes.format(minutes=2)}"
+    assert one.view.readouts() == (closed, minutes.format(minutes=2))
 
 
 def test_the_quit_and_settings_buttons_wear_the_packs_words(built: Any) -> None:
@@ -325,9 +327,6 @@ def test_a_finished_turn_is_two_rows_you_and_the_assistant(built: Any) -> None:
     one.settle()
 
     assert one.view.rows == [("you", "saat kaç"), ("it", "On beş kırk iki.")]
-    assert one.view.row_label("you") == said("you_said", status.TEXT)
-    assert one.view.row_label("it") == said("it_said", status.TEXT)
-    assert one.view.row_label("notice") == ""
 
 
 def test_a_turn_with_nothing_heard_is_no_row(built: Any) -> None:
@@ -354,7 +353,6 @@ def test_a_turn_that_looked_something_up_has_the_searches_between(built: Any) ->
         ("searched", "BIST 100 · BIST kapanış"),
         ("it", "13.337 puan."),
     ]
-    assert one.view.row_label("searched") == said("searched", status.TEXT)
 
 
 def test_the_oldest_rows_go_after_two_hundred(built: Any) -> None:
@@ -368,12 +366,82 @@ def test_the_oldest_rows_go_after_two_hundred(built: Any) -> None:
     assert one.view.version == TRANSCRIPT_ROWS * 2
 
 
-def test_a_notice_is_a_row_of_its_own(built: Any) -> None:
+def test_a_notice_is_a_row_of_its_own_and_unfolds_the_conversation(built: Any) -> None:
+    """A notice is there to be read - "could not start, the reason is
+    below" - so it does not stay in a folded accordion (D33)."""
     one = built()
     one.window.notice("the model does not call tools")
     one.settle()
 
     assert one.view.rows == [("notice", "the model does not call tools")]
+    assert one.view.log_open is True
+
+
+# --------------------------------------------------------------------------
+# The accordion (D33)
+# --------------------------------------------------------------------------
+
+
+def test_the_conversation_starts_folded_and_the_header_unfolds_and_folds_it() -> None:
+    """At every start the window is the orb and nothing more."""
+    view = View(TR)
+    assert view.log_open is False
+
+    view.toggle_log()
+    assert view.log_open is True
+    view.toggle_log()
+    assert view.log_open is False
+
+
+def test_a_turn_is_written_into_the_conversation_without_unfolding_it(built: Any) -> None:
+    one = built()
+    one.window.turn(turn())
+    one.settle()
+
+    assert one.view.rows
+    assert one.view.log_open is False
+
+
+def test_the_window_wants_its_full_height_for_the_conversation_or_the_wizard() -> None:
+    """Folded, the window is as tall as the orb and the buttons; the
+    conversation and the wizard's page each need the full height."""
+    view = View(TR)
+    assert view.wants_room() is False
+
+    view.toggle_log()
+    assert view.wants_room() is True
+    view.toggle_log()
+
+    view.apply(("wizard", True))
+    assert view.wants_room() is True
+    view.apply(("wizard", False))
+    assert view.wants_room() is False
+
+
+def test_the_header_wears_the_packs_word() -> None:
+    assert View(TR).said["window_conversation"] == said("window_conversation")
+    assert said("window_conversation") == "Konuşma"
+
+
+# --------------------------------------------------------------------------
+# The settings list's rows
+# --------------------------------------------------------------------------
+
+
+def test_a_settings_row_is_split_into_what_it_is_and_its_value() -> None:
+    assert split_row("Asistan: Jarvis") == ("Asistan", "Jarvis")
+    assert split_row("Evet ya da hayırını kim duysun: Google'ın tanıyıcısı") == (
+        "Evet ya da hayırını kim duysun",
+        "Google'ın tanıyıcısı",
+    )
+
+
+def test_only_the_first_colon_splits_a_row_and_a_row_without_one_stays_whole() -> None:
+    """A microphone's name can carry a colon of its own; a pack that words
+    a row without one gets a single line, not a broken one."""
+    assert split_row("Mikrofon: Mic: USB, WASAPI") == ("Mikrofon", "Mic: USB, WASAPI")
+    assert split_row("gemini-3.8-live") == ("", "gemini-3.8-live")
+    assert split_row("ratio 16:9") == ("", "ratio 16:9")
 
 
 def test_a_quiet_microphone_is_said_once_like_the_line(built: Any) -> None:
@@ -531,6 +599,46 @@ async def test_the_prompter_asks_the_wizards_questions_through_the_window() -> N
         one.window.stop()
 
 
+async def test_the_settings_list_is_a_menu_page_with_change_and_close() -> None:
+    """D32: the list of settings is the same page - a `menu` question, no
+    filter box - and its buttons say Change and Close; every other question
+    keeps Continue and Cancel."""
+    one = Built(asyncio.get_running_loop())
+    try:
+        prompter = WindowPrompter(one.window, text=WIZARD_TEXT)
+        one.window.wizard(True)
+        rows = [Option("assistant", "Assistant: Vesper"), Option("model", "Model: fast")]
+
+        async def pick_then_close() -> None:
+            for value in ("model", None):
+                for _ in range(200):
+                    await asyncio.sleep(0.01)
+                    page = one.view.wizard
+                    if page is not None and page.open:
+                        break
+                else:
+                    raise AssertionError("no list opened")
+                kinds.append(page.kind)
+                buttons.append(one.view.page_buttons())
+                one.window.answer(one.view.take_answer(), value)
+
+        kinds: list[str] = []
+        buttons: list[tuple[str, str]] = []
+        answering = asyncio.create_task(pick_then_close())
+        chosen = await asyncio.wait_for(prompter.menu("settings", rows), 5)
+        closed = await asyncio.wait_for(prompter.menu("settings", rows), 5)
+        await answering
+
+        assert (chosen, closed) == ("model", None)
+        assert kinds == ["menu", "menu"]
+        assert buttons == [(said("wizard_change"), said("wizard_close"))] * 2
+        one.window.ask("choose", "which?", [Option("a", "A")])
+        one.settle()
+        assert one.view.page_buttons() == (said("wizard_continue"), said("wizard_cancel"))
+    finally:
+        one.window.stop()
+
+
 # --------------------------------------------------------------------------
 # The buttons, and closing
 # --------------------------------------------------------------------------
@@ -642,11 +750,27 @@ def test_a_plate_of_no_size_is_a_bug() -> None:
 
 
 def test_every_button_answers_the_pointer_and_says_when_it_is_out_of_use() -> None:
-    """A style carries four plates: at rest, under the pointer, held down,
-    and faded. They are four different colours, or the button would not
-    answer at all."""
-    for style in (QUIET, ACCENT, window_ui.DANGER):
+    """A style's plates at rest, under the pointer and held down are three
+    different colours, or the button would not answer at all."""
+    for style in (window_ui.SOLID, window_ui.PLATE, window_ui.GHOST, window_ui.DANGER):
         assert len({style.fill, style.hover, style.press}) == 3
+
+
+def test_one_button_is_filled_and_the_quiet_ones_are_words_on_the_ground() -> None:
+    """One filled button a page (D33): Continue and Change are solid, the
+    switch a plate, the rest ghosts until the pointer is on them."""
+    assert window_ui.GHOST.fill == BACKGROUND
+    assert window_ui.DANGER.fill == BACKGROUND
+    assert window_ui.PLATE.fill != BACKGROUND
+    assert sum(window_ui.SOLID.fill) > 3 * 200
+
+
+def test_the_ground_has_no_colour_of_its_own() -> None:
+    """The orb's colour is the only colour (D33): on the old blue-black
+    only the idle blue looked at home. Neutral means the three channels
+    within a hair of each other."""
+    assert max(BACKGROUND) - min(BACKGROUND) <= 6
+    assert max(BACKGROUND) < 20
 
 
 # --------------------------------------------------------------------------
@@ -678,15 +802,25 @@ def test_the_real_panel_comes_up_and_goes_down() -> None:
         real.state(State.SPEAKING)
         real.turn(turn())
         real.level(-20.0)
+        real.notice("a notice unfolds the conversation")
+        time.sleep(0.4)
+        assert real.view.log_open is True
         real.wizard(True)
         real.say("welcome")
-        question = real.ask("choose", "which?", [Option("a", "A")])
+        question = real.ask("choose", "which?", [Option("a", "A"), Option("b", "B")])
+        time.sleep(0.3)
+        real.say("saved")
+        menu = real.ask("menu", "settings", [Option("x", "What: value"), Option("y", "whole")])
+        time.sleep(0.3)
+        secret = real.ask("secret", "key?", ())
         time.sleep(0.3)
         real.wizard(False)
-        time.sleep(0.2)
+        # A tick that fell over on any page would leave this undrained.
+        real.state(State.IDLE)
+        time.sleep(0.4)
         assert real.pending() == 0
-        assert real.view.state is State.SPEAKING
-        assert not question.done()
+        assert real.view.state is State.IDLE
+        assert not question.done() and not menu.done() and not secret.done()
     finally:
         if real is not None:
             real.stop()

@@ -37,15 +37,6 @@ user_language_rule = "The user speaks Turkish. A short or quiet utterance is Tur
 # In Turkish, so that the same request shows the model understands it.
 question = "İstanbul'da saat kaç?"
 
-[tts.voice]
-# Tolga is the voice Windows itself ships for Turkish. It lives in the
-# Speech_OneCore registry hive, which `tts/sapi.py` reads on purpose.
-sapi = "Tolga"
-# Google's synthesiser (`[tts] provider = "gemini"`): the thirty voices read
-# every language, so this is a matter of timbre. Kore is a clear, even
-# female voice; Charon a calm male one.
-gemini = "Kore"
-
 [ui]
 welcome = "Asistan, senin API anahtarınla, seçtiğin yapay zekâ sağlayıcısına bağlanır."
 assistant = "Hangi asistanı istersin? Her birinin kendi adı, kendi sesi ve kendi uyandırma sözü var."
@@ -74,9 +65,6 @@ probe_refused = "Model sınanamadı: {problem}. Başka bir model seç ya da tekr
 hears = "Bir araç önce sorduğunda evet ya da hayırını kim duysun?"
 hears_local = "Whisper, bu makinede — hiçbir şey dışarı çıkmaz"
 hears_gemini = "Google'ın tanıyıcısı, aynı anahtarla — o iki kelime Google'a gider"
-reads = "Soruları ve hatırlatmaları kim okusun?"
-reads_sapi = "Windows'un kendi sesi — hiçbir şey dışarı çıkmaz"
-reads_gemini = "Google'ın sesi, aynı anahtarla — o cümleler Google'a gider"
 microphone = "Asistan hangi mikrofonu dinlesin?"
 windows_microphone = "Windows'un seçtiği mikrofon (şu an: {name})"
 no_microphones = "Hiç mikrofon bulunamadı."
@@ -84,6 +72,20 @@ microphone_raw = "Bu yolda yankı giderme yok: hoparlörde asistan kendi sesini 
 microphone_saved = "Mikrofon: {microphone}. Ayarlar: {path}"
 saved = "Hazır. Ayarlar: {path} — anahtarın kendisi Windows Kimlik Bilgisi Yöneticisi'nde."
 cancelled = "Kurulum iptal edildi. Hiçbir şey değiştirilmedi."
+settings = "Ayarlar — değiştirmek istediğini seç"
+settings_close = "Kapat"
+setting_assistant = "Asistan: {value}"
+setting_provider = "Sağlayıcı: {value}"
+setting_locale = "Dil: {value}"
+setting_api_key = "API anahtarı: {value}"
+key_stored = "kayıtlı"
+key_missing = "yok"
+setting_model = "Model: {value}"
+setting_hears = "Evet ya da hayırını kim duysun: {value}"
+hears_short_local = "Whisper, bu makinede"
+hears_short_gemini = "Google'ın tanıyıcısı"
+setting_microphone = "Mikrofon: {value}"
+setting_saved = "Kaydedildi: {setting}"
 
 # Spoken out loud rather than shown, so they are short (item 1.10).
 unreachable = "Sağlayıcıya bağlanamadım, tekrar dener misin?"
@@ -205,9 +207,12 @@ window_loading = "Başlıyor..."
 window_failed = "Başlatılamadı — sebebi aşağıda."
 window_settings = "Ayarlar"
 window_setting_up = "Ayarlar değiştiriliyor; bitince asistan yeniden başlar."
+window_conversation = "Konuşma"
 wizard_continue = "Devam"
 wizard_cancel = "Vazgeç"
 wizard_filter = "Süzmek için yaz"
+wizard_change = "Değiştir"
+wizard_close = "Kapat"
 
 # `allie autostart on | off | status`: the Run key of your own sign-in.
 autostart_on = "Asistan oturum açtığında başlayacak; komut: {command}"
@@ -236,15 +241,11 @@ doctor_verdict_failed = "  araç çağırma: KALDI, {days} gün önce denendi - 
 doctor_verdict_none = "  araç çağırma: henüz denenmedi (bir sonraki açılışta denenir)"
 doctor_stt_local = "  tanıyıcı: Whisper '{size}', bu makinede"
 doctor_stt_gemini = "  tanıyıcı: Google ({model}), arkasında Whisper '{size}'"
-doctor_tts_sapi = "  ses: Windows ({voice})"
-doctor_tts_gemini = "  ses: Google ({model}), arkasında Windows"
 doctor_leaves = "Bu makineden ne çıkıyor"
 doctor_voice_stays = "  sesin: burada kalıyor"
 doctor_voice_goes = "  sesin: Google'a gidiyor (tanıyıcı)"
 doctor_text_goes = "  söylediklerin, metin olarak: {provider} sağlayıcısına gidiyor"
 doctor_content_goes = "  sorduğun sayfalar, pano metni ve mailler: {provider} sağlayıcısına gidiyor"
-doctor_answer_stays = "  asistanın söyledikleri: burada kalıyor"
-doctor_answer_goes = "  asistanın söyledikleri: Google'a gidiyor (ses)"
 doctor_weather = "  havasını sorduğun yer: Open-Meteo'ya gidiyor"
 doctor_store = "  sende olmayan bir uygulamanın adı: Microsoft Store'a gidiyor"
 doctor_messages = "  bir mesaj: bu bilgisayardaki WhatsApp uygulaması ya da senin adına Telegram sunucuları"

@@ -63,20 +63,8 @@ user_language_rule = "The user speaks <your language>. A short or quiet utteranc
 # question is used.
 question = "What time is it in Istanbul?"
 
-[tts.voice]
-# The preferred voice per speech engine, matched against the voices actually
-# installed on the machine. It is a preference, not an identifier: when it is
-# missing, any other voice for your language is used instead. Leave it out if
-# Windows ships no voice for your language - the assistant will read in
-# whatever voice it can find.
-#
-# `allie setup` lists what is installed, and phase 3 adds more engines
-# here (azure, elevenlabs) with their own identifiers.
-sapi = "Name as Windows lists it"
-# The voice Google's synthesiser reads with when `[tts] provider = "gemini"`
-# is set. Its thirty voices - Kore, Charon, Puck, Zephyr and the rest - read
-# every language, so pick the one whose sound suits yours.
-gemini = "Kore"
+# No voice table: the program speaks in the assistant's voice, the one the
+# live model answers in (plan.md D32), and that is the same in every language.
 
 [ui]
 # Everything the assistant says in words rather than in speech: the setup
@@ -119,9 +107,6 @@ probe_refused = "The model could not be tested: {problem}. Choose another model,
 hears = "Who hears your yes or no when a tool asks first?"
 hears_local = "Whisper, on this machine - nothing leaves it"
 hears_gemini = "Google's recogniser, with the same key - those two words go to Google"
-reads = "Who reads the questions and the reminders out loud?"
-reads_sapi = "Windows' own voice - nothing leaves this machine"
-reads_gemini = "Google's voice, with the same key - those sentences go to Google"
 microphone = "Which microphone should the assistant listen through?"
 windows_microphone = "Whatever Windows has chosen (right now: {name})"
 no_microphones = "No microphone was found."
@@ -129,6 +114,25 @@ microphone_raw = "That path has no echo cancellation: on speakers the assistant 
 microphone_saved = "Microphone: {microphone}. Settings: {path}"
 saved = "Ready. Settings: {path} - the key itself is in the Windows Credential Manager."
 cancelled = "Setup cancelled. Nothing was changed."
+# The settings list (plan.md D32): after the first setup, the settings button
+# and `allie setup` show one row per setting, each changed on its own. Every
+# row is "title: {value}", {value} being the setting as it stands; the
+# words for a key's state and the recogniser's short names fill {value} too.
+# {setting} is the row as it reads after a change.
+settings = "Settings - choose one to change it"
+settings_close = "Close"
+setting_assistant = "Assistant: {value}"
+setting_provider = "Provider: {value}"
+setting_locale = "Language: {value}"
+setting_api_key = "API key: {value}"
+key_stored = "stored"
+key_missing = "not set"
+setting_model = "Model: {value}"
+setting_hears = "Who hears your yes or no: {value}"
+hears_short_local = "Whisper, on this machine"
+hears_short_gemini = "Google's recogniser"
+setting_microphone = "Microphone: {value}"
+setting_saved = "Saved: {setting}"
 
 # Spoken out loud, so keep them short and easy to hear (item 1.10).
 unreachable = "I could not reach the provider. Will you try again?"
@@ -267,9 +271,16 @@ window_loading = "Starting..."
 window_failed = "Could not start - the reason is below."
 window_settings = "Settings"
 window_setting_up = "Settings are being changed; the assistant starts again afterwards."
+# The accordion's header under the window's buttons: press it to unfold the
+# conversation, press it again to fold it away (D33).
+window_conversation = "Conversation"
 wizard_continue = "Continue"
 wizard_cancel = "Cancel"
 wizard_filter = "Type to filter the list"
+# The two buttons under the settings list: change the chosen row, or close
+# the list and start the assistant again with what was saved.
+wizard_change = "Change"
+wizard_close = "Close"
 
 # `allie autostart on | off | status`: the Run key of your own sign-in.
 autostart_on = "The assistant will start when you sign in, as: {command}"
@@ -298,15 +309,11 @@ doctor_verdict_failed = "  tool calling: FAILED, checked {days} days ago - most 
 doctor_verdict_none = "  tool calling: not checked yet (checked at the next start)"
 doctor_stt_local = "  recogniser: Whisper '{size}', on this machine"
 doctor_stt_gemini = "  recogniser: Google ({model}), Whisper '{size}' behind it"
-doctor_tts_sapi = "  voice: Windows ({voice})"
-doctor_tts_gemini = "  voice: Google ({model}), Windows behind it"
 doctor_leaves = "What leaves this machine"
 doctor_voice_stays = "  your voice: stays here"
 doctor_voice_goes = "  your voice: goes to Google (the recogniser)"
 doctor_text_goes = "  what you said, as text: goes to {provider}"
 doctor_content_goes = "  pages, clipboard text and mail you ask about: go to {provider}"
-doctor_answer_stays = "  what the assistant says: stays here"
-doctor_answer_goes = "  what the assistant says: goes to Google (the voice)"
 doctor_weather = "  a place you ask the weather for: goes to Open-Meteo"
 doctor_store = "  the name of an app you do not have: goes to the Microsoft Store"
 doctor_messages = "  a message: the WhatsApp app on this PC, or Telegram's servers as you"
