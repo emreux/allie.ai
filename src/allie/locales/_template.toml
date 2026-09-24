@@ -83,6 +83,11 @@ gemini = "Kore"
 # wizard, and the three things that can go wrong in a turn. Below is the
 # English it falls back to - translate the right-hand side only.
 welcome = "The assistant answers through an AI provider, using your own API key."
+# The first question: which of the assistants (Jarvis, Vesper, Allie, Friday),
+# each offered by its name and its voice. {name} is the assistant's name.
+assistant = "Which assistant do you want? Each has a name, a voice and a wake phrase of its own."
+assistant_male = "{name} - a man's voice, wakes to \"hey {name}\""
+assistant_female = "{name} - a woman's voice, wakes to \"hey {name}\""
 provider = "Which provider do you want to use?"
 only_provider = "Provider: {name} - the only one this version can talk to."
 no_provider = "This version cannot build any provider in the catalogue."
@@ -111,7 +116,6 @@ probe_refused = "The model could not be tested: {problem}. Choose another model,
 # The last question of setup, and the whole of `allie mic`. {name} is the
 # device Windows has chosen at that moment, as PortAudio names it; {microphone}
 # is the label of the choice that was just stored.
-voice = "Which voice should the model speak in? Leave it empty for the model's own."
 hears = "Who hears your yes or no when a tool asks first?"
 hears_local = "Whisper, on this machine - nothing leaves it"
 hears_gemini = "Google's recogniser, with the same key - those two words go to Google"
@@ -202,6 +206,8 @@ state_announcing = "reminding"
 state_reconnecting = "reconnecting"
 you_said = "you"
 it_said = "assistant"
+# The row between the two when the answer was looked up on Google.
+searched = "searched google"
 turn_cost = "{input} in, {output} out"
 # The session and the meter beside the state: a live model bills by the
 # minute while a session is open. {minutes} is a whole number.
@@ -255,6 +261,10 @@ tray_show_window = "Show the window"
 # The window (`run` without `--terminal`, D20): what it says beside the
 # status line's and the tray's words, and the wizard's page on it.
 window_loading = "Starting..."
+# Where the state would be, when the start stopped at something the user can
+# fix (a microphone another program holds, a key that is gone); the notice
+# under it says what.
+window_failed = "Could not start - the reason is below."
 window_settings = "Settings"
 window_setting_up = "Settings are being changed; the assistant starts again afterwards."
 wizard_continue = "Continue"

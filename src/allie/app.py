@@ -140,6 +140,7 @@ from allie.store.normalize import normalize_search
 from allie.stt.base import NO_SPEECH_CEILING, SAMPLE_RATE, Audio, STTProvider, Transcript
 from allie.tts.base import TTSProvider, choose_voice
 from allie.usage.tracker import UsageTracker
+from allie.web.search import Searched
 
 __all__ = [
     "CONFIRM_WINDOW_SECONDS",
@@ -311,6 +312,9 @@ class Turn:
     number a live product is about - and `None` when there was none, or
     nobody was heard to stop.
 
+    `searched` is what Google was asked while the turn ran (D29), for the
+    row the screen shows between the two; empty when nothing was looked up.
+
     It carried three more fields until 2026-09-22 - `missed`, `confidence`,
     `intent` - which the old pipeline set when its recogniser could not read a
     recording or when a short command was answered without the model (D7).
@@ -329,6 +333,7 @@ class Turn:
     first_sound_ms: float | None = None
     audio_in_ms: int = 0
     audio_out_ms: int = 0
+    searched: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -361,6 +366,9 @@ class _Turn:
     audio_in_ms: int = 0
     audio_out_ms: int = 0
     tool_calls: int = 0
+    # What was looked up during it (D29), taken the moment it ends so that
+    # the next turn's searches are never the last one's.
+    searched: tuple[str, ...] = ()
 
     @property
     def counts(self) -> bool:
@@ -475,6 +483,7 @@ class LiveAssistant:
         resume_minutes: float = RESUME_MINUTES,
         filler_delay: float = FILLER_DELAY_SECONDS,
         greeting: Greeting = "chime",
+        searched: Searched | None = None,
         on_state: Callable[[State], None] | None = None,
         on_turn: Callable[[Turn], None] | None = None,
         on_mode: Callable[[bool], None] | None = None,
@@ -484,6 +493,9 @@ class LiveAssistant:
         self._provider = provider
         # What is done at the wake word (D21).
         self._greeting = greeting
+        # What `look_up` and `x_trends` searched (D29), taken at every
+        # turn's end for the screen. Without one, no turn has searches.
+        self._searched = searched
         # What a session is opened with, read at every open: the prompt
         # carries the user's facts and the time, and both move.
         self._session_config = session_config
@@ -570,16 +582,19 @@ class LiveAssistant:
         self._capture.on_mode = self._mode_changed
         self._capture.on_wake = self._woken
 
+        # Where the machine stands before the microphone opens, so that the
+        # mode the capture reports as it starts finds it there (off stays off).
+        self._state = State.IDLE if self._capture.listening else State.OFF
+        self._capture.start()
         # Said out loud to whoever is watching, rather than merely being true:
         # the status line went on showing the last thing it was told until
         # something happened, and a program that looks like it never finished
-        # starting is one nobody speaks to.
-        self._enter(State.IDLE if self._capture.listening else State.OFF)
-        self._capture.start()
-        if self._capture.asleep:
-            # Behind the wake word (D21): the door is not watched until the
-            # phrase is heard.
-            self._enter(State.SLEEPING)
+        # starting is one nobody speaks to. Said only once the microphone is
+        # open (2026-09-23): a start that failed at the device left "ready" on
+        # the screen above the sentence saying why. Behind the wake word
+        # (D21) the first thing said is asleep - the door is not watched until
+        # the phrase is heard.
+        self._enter(State.SLEEPING if self._capture.asleep else self._state)
 
     async def run(self) -> None:
         """Opens the door and keeps it, until something stops the program.
@@ -978,11 +993,16 @@ class LiveAssistant:
         finished.audio_in_ms = session.audio_in_ms - finished.in_at
         finished.audio_out_ms = session.audio_out_ms - finished.out_at
         finished.tool_calls = self._runner.ran
+        finished.searched = self._take_searched()
         # A turn came through: whatever failed before, the network is fine.
         self._failures = 0
         self._quiet_at = None
         self._new_turn(session)
         self._spawn(self._settle(finished))
+
+    def _take_searched(self) -> tuple[str, ...]:
+        """What was looked up since the last turn ended (D29)."""
+        return self._searched.take() if self._searched is not None else ()
 
     async def _quieten(self) -> None:
         """Once the last of the model's voice has been heard: the microphone
@@ -1015,6 +1035,7 @@ class LiveAssistant:
             first_sound_ms=finished.first_sound_ms,
             audio_in_ms=finished.audio_in_ms,
             audio_out_ms=finished.audio_out_ms,
+            searched=finished.searched,
         )
 
     def _close_turn(self, session: LiveSession) -> None:
@@ -1023,6 +1044,7 @@ class LiveAssistant:
         turn = self._turn
         _drop(turn.filler)
         turn.tool_calls = self._runner.ran
+        turn.searched = self._take_searched()
         turn.audio_in_ms = session.audio_in_ms - turn.in_at
         turn.audio_out_ms = session.audio_out_ms - turn.out_at
         if turn.counts:

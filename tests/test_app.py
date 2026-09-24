@@ -57,6 +57,7 @@ from allie.app import (
     Turn,
     read_answer,
 )
+from allie.audio.capture import MicrophoneUnavailableError
 from allie.audio.player import PlaybackError
 from allie.audio.wake import CHIME_RATE, chime
 from allie.live.base import (
@@ -85,6 +86,7 @@ from allie.stt.base import SAMPLE_RATE, Audio, Transcript
 from allie.tools.registry import ToolRegistry, tool
 from allie.tts.base import VoiceInfo
 from allie.usage.tracker import Pricing, UsageTracker
+from allie.web.search import Searched
 from tests.live_contract import FakeLiveProvider, FakeLiveSession
 
 TOLGA = VoiceInfo(id=r"HKLM\...\TR-TR_TOLGA", display_name="Microsoft Tolga", language="tr")
@@ -494,6 +496,7 @@ def assistant_with(
     on_session: Callable[[bool], None] | None = None,
     config: Callable[[], SessionConfig] | None = None,
     greeting: Greeting = "chime",
+    searched: Searched | None = None,
 ) -> LiveAssistant:
     """An assistant over fakes. `events` scripts the one session the plain
     provider opens: the model answers with them and hangs up politely."""
@@ -519,6 +522,7 @@ def assistant_with(
         on_mode=on_mode,
         on_session=on_session,
         greeting=greeting,
+        searched=searched,
     )
 
 
@@ -1073,6 +1077,54 @@ async def test_every_turn_is_handed_to_whoever_is_watching() -> None:
 
     assert len(turns) == 2
     assert turns[0].turn_id != turns[1].turn_id
+
+
+class Searching(FakeGate):
+    """A gate whose tool looked something up, as `look_up` does (D29)."""
+
+    def __init__(self, searched: Searched) -> None:
+        super().__init__()
+        self.searched = searched
+
+    async def __call__(self, call: ToolCall, *, turn_id: str, confirm: Confirm) -> str:
+        self.searched.add([f"{call.name} query"])
+        return await super().__call__(call, turn_id=turn_id, confirm=confirm)
+
+
+async def test_what_was_looked_up_in_a_turn_is_written_down_with_it() -> None:
+    turns: list[Turn] = []
+    kept = Searched()
+    capture = FakeCapture()
+    room = Room(
+        InputText("BIST kaç"),
+        calls(),
+        TurnComplete(),
+        after_result=[voice("13.337."), OutputText("13.337."), TurnComplete(), Closed()],
+    )
+    assistant = assistant_with(
+        capture=capture,
+        provider=Provider(room),
+        runner=runner_with(Searching(kept)),
+        searched=kept,
+        on_turn=turns.append,
+    )
+
+    await one_turn(assistant, capture)
+
+    [turn] = turns
+    assert turn.searched == ("clock query",)
+    assert kept.take() == ()
+
+
+async def test_a_turn_that_looked_nothing_up_has_no_searches() -> None:
+    turns: list[Turn] = []
+    capture = FakeCapture()
+
+    await one_turn(
+        assistant_with(capture=capture, searched=Searched(), on_turn=turns.append), capture
+    )
+
+    assert turns[0].searched == ()
 
 
 async def test_a_sound_card_that_fails_loses_the_answer_and_not_the_program() -> None:
@@ -1984,6 +2036,8 @@ async def test_a_machine_with_no_voice_at_all_says_so_before_it_listens() -> Non
 
 
 async def test_a_sleeping_capture_starts_the_machine_asleep() -> None:
+    """And says nothing else first: "ready" on the screen of an assistant
+    that is asleep is a sentence the user reads as "talk to me"."""
     capture = FakeCapture(asleep=True)
     seen: list[State] = []
     assistant = assistant_with(capture=capture, on_state=seen.append)
@@ -1991,8 +2045,25 @@ async def test_a_sleeping_capture_starts_the_machine_asleep() -> None:
     await assistant.begin()
 
     assert assistant.state is State.SLEEPING
-    assert seen[-1] is State.SLEEPING
+    assert seen == [State.SLEEPING]
     assert capture.on_wake is not None
+
+
+async def test_a_microphone_that_will_not_open_announces_no_state() -> None:
+    """The owner's WDM-KS entry, held by Teams (2026-09-23): the start
+    failed at the device and the window went on saying "ready" above the
+    sentence saying why. No state is said until the microphone is open."""
+
+    class Held(FakeCapture):
+        def start(self) -> None:
+            raise MicrophoneUnavailableError("the microphone is held by another program")
+
+    seen: list[State] = []
+
+    with pytest.raises(MicrophoneUnavailableError):
+        await assistant_with(capture=Held(asleep=True), on_state=seen.append).begin()
+
+    assert seen == []
 
 
 async def test_a_voice_at_the_door_while_asleep_opens_nothing() -> None:

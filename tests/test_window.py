@@ -249,6 +249,19 @@ def test_it_starts_loading_and_shows_the_state_once_there_is_one(built: Any) -> 
     assert one.view.label() == label_of(State.IDLE)
 
 
+def test_a_start_that_failed_says_so_where_the_state_would_be(built: Any) -> None:
+    """2026-09-23: over a microphone Teams was holding, the line went on
+    saying "ready". A failed start replaces whatever it said."""
+    one = built()
+    one.window.state(State.IDLE)
+    one.window.starting()
+    one.window.failed()
+    one.settle()
+
+    assert one.view.label() == said("window_failed")
+    assert one.view.label() != label_of(State.IDLE)
+
+
 @pytest.mark.parametrize("state", list(State))
 def test_every_state_has_a_label_and_a_colour(built: Any, state: State) -> None:
     one = built()
@@ -326,6 +339,22 @@ def test_a_turn_with_nothing_heard_is_no_row(built: Any) -> None:
     one.settle()
 
     assert one.view.rows == [("you", "saat kaç"), ("it", "Üç buçuk.")]
+
+
+def test_a_turn_that_looked_something_up_has_the_searches_between(built: Any) -> None:
+    """D29: the row Google's terms ask for, in the chat, not a notice."""
+    one = built()
+    one.window.turn(
+        Turn(heard="BIST kaç", said="13.337 puan.", searched=("BIST 100", "BIST kapanış"))
+    )
+    one.settle()
+
+    assert one.view.rows == [
+        ("you", "BIST kaç"),
+        ("searched", "BIST 100 · BIST kapanış"),
+        ("it", "13.337 puan."),
+    ]
+    assert one.view.row_label("searched") == said("searched", status.TEXT)
 
 
 def test_the_oldest_rows_go_after_two_hundred(built: Any) -> None:

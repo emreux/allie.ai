@@ -52,6 +52,7 @@ from allie.config import (
     STTSettings,
     TTSSettings,
     WakeSettings,
+    WebSettings,
     config_path,
     load_settings,
     save_settings,
@@ -70,6 +71,8 @@ from allie.tools import system
 from allie.tools.system import AppCatalog, AppEntry
 from allie.ui import status
 from allie.usage.tracker import UsageTracker
+from allie.web import search as search_module
+from allie.web.search import Searched
 from tests.conftest import MemoryKeyring
 
 MODEL = "gemini-3.8-live"
@@ -642,10 +645,25 @@ def test_the_wake_word_is_built_from_the_wake_table_and_handed_to_the_capture(
     assert parts["greeting"] == "chime"
 
 
+def test_a_shipped_model_without_a_threshold_of_the_user_s_wakes_at_its_own(
+    configured: Path, wiring: Wiring
+) -> None:
+    """D31: the threshold ships with the model - Vesper's eval gave 0.61 -
+    and is read at every start rather than written by setup."""
+    configured_with(wake=WakeSettings(enabled=True, model="hey_vesper"))
+
+    main(["run", "--terminal"])
+
+    [(path, threshold)] = FakeWakeWord.built
+    assert path.name == "hey_vesper.onnx"
+    assert threshold == pytest.approx(0.61)
+
+
 def test_with_the_wake_word_off_the_capture_has_no_detector(
     configured: Path, wiring: Wiring
 ) -> None:
-    """The default until the model ships (2026-09-21): today's product."""
+    """The default for a file setup has not written since D31: the product
+    as it was before the wake word."""
     main(["run", "--terminal"])
 
     [capture] = wiring.captures
@@ -665,14 +683,67 @@ def test_a_wake_model_that_is_not_there_is_a_sentence(
     assert wiring.captures == []
 
 
-def test_web_search_off_leaves_the_prompt_as_it_was(configured: Path, wiring: Wiring) -> None:
-    """The default (2026-09-21: refused on the free-tier key): no tool, no
-    sentence, the frozen prompt as it was."""
+def test_without_google_s_key_there_is_no_look_up_and_the_prompt_is_as_it_was(
+    configured: Path, vault: MemoryKeyring, wiring: Wiring, other_provider: None
+) -> None:
+    """D29: `look_up` asks Google on the key the Gemini entry is filed under.
+    A live model elsewhere and no such key: no tool, no sentence, the frozen
+    prompt as it was - and the browser's search still on offer."""
+    save_settings(
+        Settings(live=LiveSettings(primary="other:some-model"), locale=LocaleSettings(code="tr"))
+    )
+    vault.vault.clear()
+    store_api_key("other", "sk-not-a-real-key")
+
     main(["run", "--terminal"])
 
     config = session_of(wiring)
     assert config.web_search is False
     assert SEARCH_RULE not in config.system_prompt
+    [runner] = wiring.runners
+    assert "look_up" not in runner.tools
+    assert "x_trends" not in runner.tools
+    assert "search_web" in runner.tools
+
+
+def test_look_up_on_offer_brings_the_search_rule_without_the_session_s_search(
+    configured: Path, wiring: Wiring
+) -> None:
+    """The rule says "look it up yourself, the browser only when asked" -
+    true of `look_up` as of the session's own search (D22, D29)."""
+    main(["run", "--terminal"])
+
+    config = session_of(wiring)
+    assert config.web_search is False
+    assert f"\n\n{SEARCH_RULE}\n\n" in config.system_prompt
+
+
+def test_look_up_asks_the_model_the_settings_name_on_the_gemini_key(
+    configured: Path, wiring: Wiring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built: list[dict[str, Any]] = []
+
+    class FakeSearch:
+        def __init__(self, api_key: str, **rest: Any) -> None:
+            built.append({"api_key": api_key, **rest})
+
+    monkeypatch.setattr(search_module, "GroundedSearch", FakeSearch)
+    configured_with(web=WebSettings(look_up_model="gemini-3.8-flash"))
+
+    main(["run", "--terminal"])
+
+    [made] = built
+    assert made["api_key"] == "AIza-not-a-real-key"
+    assert made["model"] == "gemini-3.8-flash"
+    assert isinstance(made["searched"], Searched)
+    assert wiring.built[0]["searched"] is made["searched"]
+
+
+def test_the_state_machine_is_handed_what_look_up_keeps(configured: Path, wiring: Wiring) -> None:
+    main(["run", "--terminal"])
+
+    [parts] = wiring.built
+    assert isinstance(parts["searched"], Searched)
 
 
 def test_the_tools_the_session_is_opened_with_are_the_runner_s(
@@ -786,9 +857,11 @@ def test_every_tool_of_phase_two_is_on_offer(configured: Path, wiring: Wiring) -
         "get_weather",
         "open_app",
         "open_url",
+        "look_up",
         "search_web",
         "read_clipboard",
         "fetch_page",
+        "x_trends",
         "read_latest_emails",
         "search_emails",
         "open_settings",
@@ -1105,7 +1178,9 @@ def test_the_prompt_is_the_frozen_rules_the_pack_s_language_rule_and_the_time(
 
 def test_a_pack_without_a_language_rule_adds_no_line(configured: Path, wiring: Wiring) -> None:
     """`en.toml` names no language (ADR-001): the prompt's own mirroring
-    rule is all there is, and the frozen prompt is followed by the time."""
+    rule is all there is, and the frozen prompt is followed by the search
+    rule - `configured` stores the Gemini key, so `look_up` is on offer
+    (D29) - and the time."""
     from allie.agent.prompts import SYSTEM_PROMPT
 
     configured_with(locale=LocaleSettings(code="en"))
@@ -1113,8 +1188,8 @@ def test_a_pack_without_a_language_rule_adds_no_line(configured: Path, wiring: W
     main(["run", "--terminal"])
 
     prompt = session_of(wiring).system_prompt
-    assert prompt.startswith(SYSTEM_PROMPT + "\n\n")
-    assert prompt.count("\n\n") == SYSTEM_PROMPT.count("\n\n") + 1
+    assert prompt.startswith(f"{SYSTEM_PROMPT}\n\n{SEARCH_RULE}\n\n")
+    assert prompt.count("\n\n") == SYSTEM_PROMPT.count("\n\n") + 2
 
 
 def test_a_memory_file_that_does_not_parse_is_a_sentence_rather_than_a_traceback(
@@ -1577,6 +1652,9 @@ class FakeWindow:
     def loading(self) -> None:
         self.told.append(("phase", "window_loading"))
 
+    def failed(self) -> None:
+        self.told.append(("phase", "window_failed"))
+
     def show(self) -> None:
         self.told.append(("show", None))
 
@@ -1779,6 +1857,34 @@ def test_a_fixable_failure_is_a_notice_on_the_window_and_waits_for_a_button(
         FakeWindow.notice = original_notice  # type: ignore[method-assign]
 
     assert pressed == [said("cannot_start").format(problem="no API key stored for 'gemini'")]
+
+
+def test_a_fixable_failure_says_it_did_not_start_where_the_state_would_be(
+    configured: Path, wiring: Wiring, windows: type[FakeWindow]
+) -> None:
+    """2026-09-23: the owner's microphone was held by Teams and the line
+    under the orb went on saying what it said before - "ready", or the
+    last phase of the start. It says the start failed, and the sentence
+    below says why."""
+    from allie.audio.capture import MicrophoneUnavailableError
+
+    wiring.stop = MicrophoneUnavailableError("the microphone is held by another program")
+
+    def notice_then_quit(self: FakeWindow, message: str) -> None:
+        self.told.append(("notice", message))
+        asyncio.get_running_loop().call_soon(self.parts["on_quit"])
+
+    original_notice = FakeWindow.notice
+    FakeWindow.notice = notice_then_quit  # type: ignore[method-assign]
+    try:
+        assert main(["run"]) == 0
+    finally:
+        FakeWindow.notice = original_notice  # type: ignore[method-assign]
+
+    [face] = windows.built
+    told = [kind_and_what for kind_and_what in face.told if kind_and_what[0] in ("phase", "notice")]
+    assert told[-2] == ("phase", "window_failed")
+    assert told[-1][0] == "notice"
 
 
 # --------------------------------------------------------------------------

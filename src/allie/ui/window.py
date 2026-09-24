@@ -101,6 +101,7 @@ __all__ = [
 
 TEXT: dict[str, str] = {
     "window_loading": "Starting...",
+    "window_failed": "Could not start - the reason is below.",
     "window_settings": "Settings",
     "window_setting_up": "Settings are being changed; the assistant starts again afterwards.",
     "wizard_continue": "Continue",
@@ -117,6 +118,7 @@ STATUS_KEYS = (
     "session_minutes",
     "you_said",
     "it_said",
+    "searched",
     "microphone_quiet",
 )
 TRAY_KEYS = ("tray_not_listening", "tray_stop_listening", "tray_start_listening", "tray_quit")
@@ -177,7 +179,7 @@ class View:
         # Shown instead of the state's label until the first state arrives:
         # loading, checking the model, starting again after the wizard.
         self.phase: str | None = self.said["window_loading"]
-        # (kind, text) with kind one of "you", "it", "notice".
+        # (kind, text) with kind one of "you", "searched", "it", "notice".
         self.rows: list[tuple[str, str]] = []
         # Bumped at every row, so that the Tk half redraws the transcript
         # only when it changed.
@@ -244,6 +246,8 @@ class View:
             return self._status["you_said"]
         if kind == "it":
             return self._status["it_said"]
+        if kind == "searched":
+            return self._status["searched"]
         return ""
 
     def frame(self, dt: float) -> Frame:
@@ -266,6 +270,9 @@ class View:
         if not finished.heard:
             return
         self._add("you", finished.heard)
+        if finished.searched:
+            # What Google searched for the answer (D29), between the two.
+            self._add("searched", " · ".join(finished.searched))
         self._add("it", finished.said)
 
     def _add(self, kind: str, text: str) -> None:
@@ -407,6 +414,12 @@ class Window:
 
     def loading(self) -> None:
         self._post(("phase", "window_loading"))
+
+    def failed(self) -> None:
+        """The start stopped at something the user can fix; the notice
+        below says what. Replaces whatever the line said before - a
+        "ready" over an assistant that never started is read as one."""
+        self._post(("phase", "window_failed"))
 
     def show(self) -> None:
         """Brings a hidden window back - the tray's line."""
@@ -845,6 +858,9 @@ class TkPanel:
         self._text.tag_configure("who", foreground=DIM_INK)
         self._text.tag_configure("you", foreground=DIM_INK)
         self._text.tag_configure("it", foreground=INK)
+        # No emoji in the row: Tcl 8.6.14 does not draw characters outside
+        # the Basic Multilingual Plane reliably.
+        self._text.tag_configure("searched", foreground=DIM_INK)
         self._text.tag_configure("notice", foreground=NOTICE_INK)
         self._text.pack(fill="both", expand=True, padx=12)
         self._face.pack(fill="both", expand=True)

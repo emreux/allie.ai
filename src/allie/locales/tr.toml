@@ -48,6 +48,9 @@ gemini = "Kore"
 
 [ui]
 welcome = "Asistan, senin API anahtarınla, seçtiğin yapay zekâ sağlayıcısına bağlanır."
+assistant = "Hangi asistanı istersin? Her birinin kendi adı, kendi sesi ve kendi uyandırma sözü var."
+assistant_male = "{name} — erkek sesi, \"hey {name}\" deyince uyanır"
+assistant_female = "{name} — kadın sesi, \"hey {name}\" deyince uyanır"
 provider = "Hangi sağlayıcıyı kullanmak istiyorsun?"
 only_provider = "Sağlayıcı: {name} — bu sürümün konuşabildiği tek sağlayıcı."
 no_provider = "Bu sürüm, listedeki sağlayıcıların hiçbirini kuramıyor."
@@ -68,7 +71,6 @@ probing_tools = "Modelin araç çağırıp çağıramadığı sınanıyor..."
 tools_ok = "Model araç çağırabiliyor — ilk yanıt {ms} ms'de geldi."
 tools_failed = "Bu model araç çağıramıyor; asistanın işlerinin çoğu buna bağlı. Başka bir model seç."
 probe_refused = "Model sınanamadı: {problem}. Başka bir model seç ya da tekrar dene."
-voice = "Model hangi sesle konuşsun? Modelin kendi sesi için boş bırak."
 hears = "Bir araç önce sorduğunda evet ya da hayırını kim duysun?"
 hears_local = "Whisper, bu makinede — hiçbir şey dışarı çıkmaz"
 hears_gemini = "Google'ın tanıyıcısı, aynı anahtarla — o iki kelime Google'a gider"
@@ -147,6 +149,7 @@ state_announcing = "hatırlatıyor"
 state_reconnecting = "yeniden bağlanıyor"
 you_said = "sen"
 it_said = "asistan"
+searched = "google'da arandı"
 turn_cost = "{input} girdi, {output} çıktı"
 # The session and the meter beside the state (plan.md 4.2): a live model
 # bills by the minute while a session is open.
@@ -199,6 +202,7 @@ tray_show_window = "Pencereyi göster"
 # The window (`run` without `--terminal`, D20): what it says beside the
 # status line's and the tray's words, and the wizard's page on it.
 window_loading = "Başlıyor..."
+window_failed = "Başlatılamadı — sebebi aşağıda."
 window_settings = "Ayarlar"
 window_setting_up = "Ayarlar değiştiriliyor; bitince asistan yeniden başlar."
 wizard_continue = "Devam"

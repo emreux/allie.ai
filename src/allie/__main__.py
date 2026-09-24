@@ -145,16 +145,20 @@ PURGE_WORD = "yes"
 
 # The tools `run` puts on offer, by name and in order, so that `doctor` can
 # count them without building them. `test_cli.py` checks that the registry
-# `run` builds is this list followed by the user's own.
+# `run` builds is this list followed by the user's own. `look_up` and
+# `x_trends` need the stored `gemini` key (D29, D30); without it they are
+# not offered.
 BUILTIN_TOOLS: tuple[str, ...] = (
     "get_current_time",
     "system_status",
     "get_weather",
     "open_app",
     "open_url",
+    "look_up",
     "search_web",
     "read_clipboard",
     "fetch_page",
+    "x_trends",
     "read_latest_emails",
     "search_emails",
     "open_settings",
@@ -1015,6 +1019,7 @@ async def _session(
                     continue
                 return
             except fixable as problem:
+                window.failed()
                 window.notice(cannot_start(problem))
                 await wants.pressed()
                 continue
@@ -1048,6 +1053,7 @@ async def _talk(
     from allie.agent.limits import Limits
     from allie.announce.queue import AnnounceQueue
     from allie.app import LiveAssistant, confirm_prompt
+    from allie.assistants import threshold_for
     from allie.audio.capture import LiveCapture, SystemMicrophone
     from allie.audio.player import SystemSpeaker
     from allie.audio.vad import Endpoint, SileroVAD
@@ -1098,12 +1104,15 @@ async def _talk(
         open_settings,
         open_url,
     )
-    from allie.tools.web import fetch_page_for, read_clipboard_for, search_web_for
+    from allie.tools.trends import x_trends_for
+    from allie.tools.web import fetch_page_for, look_up_for, read_clipboard_for, search_web_for
     from allie.tts.gemini_tts import GeminiTTS
     from allie.tts.sapi import SapiTTS
     from allie.ui import tray as tray_ui
     from allie.usage.tracker import Pricing, UsageTracker
+    from allie.web import search as search_module
     from allie.web.page import PageReader
+    from allie.web.trends import TrendsPage
 
     # First, and before anything slow: a provider that cannot be built is the
     # likeliest thing to be wrong, and the cheapest to find out about. The
@@ -1112,11 +1121,14 @@ async def _talk(
     live = settings.live
     provider = create_provider(live.provider, base_url=live.base_url or None)
     # The wake word (D21), resolved before anything slow is loaded: a model
-    # that is not there is a sentence now, not after Whisper.
+    # that is not there is a sentence now, not after Whisper. The threshold
+    # is the user's when they wrote one, else the one the model shipped
+    # with (D31).
     wake_word: LiveKitWakeWord | None = None
     if settings.wake.enabled:
         wake_word = LiveKitWakeWord(
-            wake_model_path(settings.wake.model), threshold=settings.wake.threshold
+            wake_model_path(settings.wake.model),
+            threshold=settings.wake.threshold or threshold_for(settings.wake.model),
         )
     # What the user asked to be kept, and the assistant's name (section
     # 3.7, 2.10): read once here, written by the two tools below, and read
@@ -1148,6 +1160,25 @@ async def _talk(
     # Pages the user asks about (17 Sep 2026), over a kept connection like
     # the weather; how long one may take is the user's `[web]` setting.
     reader = PageReader(seconds=settings.web.timeout_seconds)
+    # Looking things up (D29): Google's search through the model the free
+    # key may search with, on the key the Gemini entry is filed under. What
+    # it searched is kept for the screen until the turn ends. No key, no
+    # `look_up` - `search_web` still opens the browser.
+    search_key = load_api_key("gemini")
+    searched = search_module.Searched()
+    search = (
+        search_module.GroundedSearch(
+            search_key, model=settings.web.look_up_model, searched=searched
+        )
+        if search_key
+        else None
+    )
+    looking_up = [] if search is None else [look_up_for(search)]
+    # X's trends by country (D30): trends24's latest hour over a kept
+    # connection, explained by the same search; given back in the same
+    # `finally` as the weather and the pages.
+    trends = TrendsPage(seconds=settings.web.timeout_seconds)
+    trending = [] if search is None else [x_trends_for(trends, search)]
     # The two ways of sending a message (spec of 2026-09-15). WhatsApp is
     # the installed application, asked for at every send; Telegram is the
     # user's own account, logged in once with `allie telegram login` -
@@ -1248,12 +1279,17 @@ async def _talk(
                     ),
                 ),
                 open_url,
+                # A question is looked up and answered (D29); the browser
+                # opens only when the user asks to see the search.
+                *looking_up,
                 # The engine is the user's (`[web] search_url`).
                 search_web_for(settings.web.search_url),
                 # What was copied, and what a page says: both come back
                 # inside the `<untrusted>` block the prompt explains.
                 read_clipboard_for(),
                 fetch_page_for(reader),
+                # What is trending on X, and why (D30).
+                *trending,
                 # The user's mail, read and never written, inside the
                 # same block.
                 mail_tools.read_latest_emails_for(mailbox),
@@ -1380,7 +1416,9 @@ async def _talk(
             return SessionConfig(
                 model=live.model,
                 voice=live.voice,
-                system_prompt=_system_prompt(memory, pack, web_search=live.web_search),
+                system_prompt=_system_prompt(
+                    memory, pack, web_search=live.web_search or search is not None
+                ),
                 tools=runner.specs(),
                 transcripts=live.transcripts,
                 language_code=pack.language_code,
@@ -1415,6 +1453,8 @@ async def _talk(
             idle_close_seconds=live.idle_close_seconds,
             resume_minutes=live.resume_minutes,
             greeting=settings.wake.greeting,
+            # What `look_up` and `x_trends` searched, for the screen (D29).
+            searched=searched,
             on_state=screen.state if icon is None else _each(screen.state, icon.state),
             on_turn=_finished(screen),
             # The toggle's news goes to the state machine first - off is
@@ -1442,6 +1482,7 @@ async def _talk(
         await player.aclose()
         await weather.aclose()
         await reader.aclose()
+        await trends.aclose()
         await telegram.close()
         database.close()
 
@@ -1452,12 +1493,12 @@ def _system_prompt(memory: UserMemory, pack: Locale, *, web_search: bool = False
     The frozen rules first, byte for byte; then the pack's sentence naming
     the language the user speaks (D19 - measured 2026-09-18: without it a
     short "Saat kaç" is heard as Hindi), when the pack has one; then, when
-    the session carries a search tool, the sentence that says when to use
-    it (D22) - after the pack's rule, before the user's facts, so that the
-    frozen bytes stay frozen for a session without one; then the user's
-    facts (section 3.7); the time last of all, so that "yarın" is a date
-    (4.2). `prompts.py` stays without an import, and no language is named
-    in the code.
+    the session carries a search tool (D22) or `look_up` is on offer (D29),
+    the sentence that says when to use it - after the pack's rule, before
+    the user's facts, so that the frozen bytes stay frozen for a session
+    without one; then the user's facts (section 3.7); the time last of all,
+    so that "yarın" is a date (4.2). `prompts.py` stays without an import,
+    and no language is named in the code.
     """
     from allie.agent.prompts import SEARCH_RULE, SYSTEM_PROMPT
     from allie.tools.reminders import current_time_line
