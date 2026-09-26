@@ -391,6 +391,31 @@ async def test_a_front_page_with_nothing_playable_asks_rather_than_guesses() -> 
         await music(Catalogue(home=[{"title": "Empty", "contents": []}])).anything()
 
 
+class ShortFrontPage(Catalogue):
+    """The front page as it answered on 2026-09-25: asked for `ytmusicapi`'s
+    default three shelves, playlists and albums only; asked for more, the
+    songs shelf as well."""
+
+    def get_home(self, limit: int = 3, *_: object, **__: object) -> list[dict[str, Any]]:
+        self.threads.append(threading.current_thread())
+        shelves: list[dict[str, Any]] = [
+            {"title": "Trending community playlists", "contents": [{"playlistId": "PL1"}]},
+            {"title": "New releases", "contents": [{"browseId": "MPREb_1", "title": "An album"}]},
+        ]
+        if limit > 3:
+            shelves.append({"title": "Quick picks", "contents": [song("kM4-V9uIffI", "Dur Leyla")]})
+        return shelves
+
+
+async def test_the_front_page_is_asked_for_enough_shelves_to_reach_a_song() -> None:
+    """The owner's "play some music" failed twice on 2026-09-25. Asked for
+    the default three shelves, the front page held no song in four answers
+    of six; asked for ten, it held the songs shelf in all six."""
+    found = await music(ShortFrontPage()).anything()
+
+    assert found.target.endswith("kM4-V9uIffI")
+
+
 async def test_the_music_client_is_asked_off_the_event_loop() -> None:
     """`ytmusicapi` is synchronous and talks to the network (rule 4)."""
     catalogue = Catalogue([song("goodgoodgoo", "Good")])

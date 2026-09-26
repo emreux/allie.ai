@@ -8,15 +8,24 @@ and `shell.browse` is replaced the way `test_media_player.py` replaces it.
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import os
 import threading
 import winreg
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from ctypes import wintypes
 from pathlib import Path
 
 import pytest
 
 from allie import shell
-from allie.media.window import HTTPS_CHOICE, Browser, MediaWindow, default_browser
+from allie.media.window import (
+    HTTPS_CHOICE,
+    Browser,
+    MediaWindow,
+    Win32Desktop,
+    default_browser,
+)
 
 MAIN = threading.current_thread()
 CHROME = Browser(
@@ -38,6 +47,9 @@ class FakeDesktop:
         self.windows: set[int] = set(existing)
         self.events: list[str] = []
         self.threads: list[threading.Thread] = []
+        # The process behind each window; the browser's, 42, unless a test
+        # says a window belongs to another.
+        self.processes: dict[int, int] = {}
         self._next = 100
         self._appears_after = appears_after
         self._polls = 0
@@ -63,13 +75,18 @@ class FakeDesktop:
     def is_window(self, handle: int) -> bool:
         return handle in self.windows
 
+    def process_of(self, handle: int) -> int | None:
+        return self.processes.get(handle, 42) if handle in self.windows else None
+
     def close(self, handle: int) -> None:
         self.events.append(f"close {handle}")
         self.windows.discard(handle)
 
 
-def window(desktop: FakeDesktop, browser: Browser | None = CHROME) -> MediaWindow:
-    return MediaWindow(browser, desktop, appear_seconds=0.2, poll_seconds=0.001)
+def window(
+    desktop: FakeDesktop, browser: Browser | None = CHROME, *, kept: Path | None = None
+) -> MediaWindow:
+    return MediaWindow(browser, desktop, appear_seconds=0.2, poll_seconds=0.001, kept=kept)
 
 
 @pytest.fixture
@@ -196,6 +213,182 @@ async def test_two_requests_do_not_race_each_other_into_two_windows() -> None:
 
     assert shown.handle == 101
     assert desktop.events.count("close 100") == 1
+
+
+# --------------------------------------------------------------------------
+# The window of the run before (2026-09-25)
+# --------------------------------------------------------------------------
+
+
+async def test_the_window_is_written_down_with_its_browser_s_process(tmp_path: Path) -> None:
+    kept = tmp_path / "media-window"
+    shown = window(FakeDesktop(), kept=kept)
+
+    await shown.show(SONG)
+
+    assert kept.read_text(encoding="utf-8").split() == ["100", "42"]
+
+
+async def test_the_next_run_s_first_song_closes_the_window_of_the_run_before(
+    tmp_path: Path,
+) -> None:
+    """The owner, 2026-09-25: a song, the assistant restarted, another song -
+    and both played. The window was remembered only in the memory of the
+    run that opened it, and it keeps playing after that run ends."""
+    kept = tmp_path / "media-window"
+    kept.write_text("7 42", encoding="utf-8")
+    desktop = FakeDesktop(existing=frozenset({7}))
+    shown = window(desktop, kept=kept)
+
+    await shown.show(SONG)
+
+    assert desktop.events == [f"start {CHROME.executable} --new-window {SONG}", "close 7"]
+    assert shown.handle == 100
+    assert kept.read_text(encoding="utf-8").split() == ["100", "42"]
+
+
+async def test_a_window_written_down_whose_process_changed_is_not_the_one(
+    tmp_path: Path,
+) -> None:
+    """A browser that restarted may have given the number to a window of
+    the user's own; the process tells them apart."""
+    kept = tmp_path / "media-window"
+    kept.write_text("7 42", encoding="utf-8")
+    desktop = FakeDesktop(existing=frozenset({7}))
+    desktop.processes[7] = 99
+    shown = window(desktop, kept=kept)
+
+    await shown.show(SONG)
+
+    assert "close 7" not in desktop.events
+    assert shown.handle == 100
+
+
+async def test_a_window_written_down_that_is_gone_is_not_closed(tmp_path: Path) -> None:
+    kept = tmp_path / "media-window"
+    kept.write_text("7 42", encoding="utf-8")
+    desktop = FakeDesktop()
+    shown = window(desktop, kept=kept)
+
+    await shown.show(SONG)
+
+    assert "close 7" not in desktop.events
+    assert shown.handle == 100
+
+
+@pytest.mark.parametrize("text", ["", "seven", "7", "7 42 extra", "-1 42"])
+async def test_a_note_that_cannot_be_read_is_ignored(tmp_path: Path, text: str) -> None:
+    kept = tmp_path / "media-window"
+    kept.write_text(text, encoding="utf-8")
+    desktop = FakeDesktop(existing=frozenset({7}))
+    shown = window(desktop, kept=kept)
+
+    assert await shown.show(SONG) is True
+
+    assert desktop.events == [f"start {CHROME.executable} --new-window {SONG}"]
+    assert shown.handle == 100
+
+
+async def test_no_window_to_remember_leaves_nothing_written_down(tmp_path: Path) -> None:
+    kept = tmp_path / "media-window"
+    kept.write_text("7 42", encoding="utf-8")
+    shown = window(FakeDesktop(appears_after=-1), kept=kept)
+
+    await shown.show(SONG)
+
+    assert not kept.exists()
+
+
+async def test_the_run_before_is_asked_about_once(tmp_path: Path) -> None:
+    """Its window, once closed, is not looked for again at the next song."""
+    kept = tmp_path / "media-window"
+    kept.write_text("7 42", encoding="utf-8")
+    desktop = FakeDesktop(existing=frozenset({7}))
+    shown = window(desktop, kept=kept)
+
+    await shown.show(SONG)
+    await shown.show(VIDEO)
+
+    assert desktop.events.count("close 7") == 1
+    assert desktop.events[-1] == "close 100"
+
+
+def test_the_player_s_own_window_is_written_down_in_the_data_folder() -> None:
+    from allie.config import data_dir
+    from allie.media.player import Player
+    from allie.media.window import KEPT_FILE_NAME
+
+    assert Player().window.kept == data_dir() / KEPT_FILE_NAME
+
+
+# --------------------------------------------------------------------------
+# The real desktop: which windows are the browser's own
+# --------------------------------------------------------------------------
+
+WS_POPUP = 0x80000000
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_NOACTIVATE = 0x08000000
+SW_SHOWNOACTIVATE = 4
+
+
+@pytest.fixture
+def frame_and_bubble() -> Iterator[tuple[int, int]]:
+    """Two real windows of this process, one pixel each and off the screen:
+    a frame, unowned as a browser window is, and a bubble the frame owns, as
+    Chrome's "Translate this page?" is (measured 2026-09-25: owned by the
+    song's window, `WS_POPUP`, `WS_EX_TOOLWINDOW`)."""
+    user32 = ctypes.windll.user32
+    user32.CreateWindowExW.restype = wintypes.HWND
+    user32.CreateWindowExW.argtypes = [
+        wintypes.DWORD,
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.HWND,
+        wintypes.HMENU,
+        wintypes.HINSTANCE,
+        wintypes.LPVOID,
+    ]
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.DestroyWindow.argtypes = [wintypes.HWND]
+
+    def made(extended: int, owner: int | None) -> int:
+        handle = user32.CreateWindowExW(
+            extended, "STATIC", "", WS_POPUP, -32000, -32000, 1, 1, owner, None, None, None
+        )
+        assert handle, ctypes.WinError()
+        user32.ShowWindow(handle, SW_SHOWNOACTIVATE)
+        return int(handle)
+
+    frame = made(WS_EX_NOACTIVATE, None)
+    bubble = made(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, frame)
+    try:
+        yield frame, bubble
+    finally:
+        user32.DestroyWindow(bubble)
+        user32.DestroyWindow(frame)
+
+
+def test_a_bubble_the_browser_shows_over_its_window_is_not_one_of_its_windows(
+    frame_and_bubble: tuple[int, int],
+) -> None:
+    """Chrome's "Translate this page?" appears two seconds after a song's
+    page, as a visible top-level window of chrome.exe. Counted as one, it
+    could be taken for the next song's window - which was then never closed,
+    and played on under the song after it."""
+    frame, bubble = frame_and_bubble
+    desktop = Win32Desktop()
+    image = desktop._image_of(os.getpid())
+    assert image is not None
+
+    found = desktop.windows_of(Path(image))
+
+    assert frame in found
+    assert bubble not in found
 
 
 # --------------------------------------------------------------------------

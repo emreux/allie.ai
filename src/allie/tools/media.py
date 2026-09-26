@@ -10,14 +10,22 @@ has the media keys, which every player - Spotify, a browser tab, the Music app
 to do that and still the one every player answers to, and it returns at once,
 so it runs on the loop.
 
-One key is pressed twice. Spotify and YouTube Music both read a single
-"previous" a few seconds into a song as "start it over", and go to the track
-before only when the position is already at zero - so the user who asked for
-the previous song heard the same one again (owner, 2026-09-13). The second
-press, a moment after the first, is what they would have done by hand. The
-one case this gets wrong is a request made inside the first seconds of a
-song, which then goes back two tracks; a spoken turn takes longer than that
-to arrive, so it is rare enough not to be worth reading the player's position.
+**Next and previous are watched** (2026-09-25). Spotify and YouTube Music
+both read a single "previous" a few seconds into a song as "start it over",
+and go to the track before only near its start - so the user who asked for
+the previous song heard the same one again (owner, 2026-09-13). From then
+until 2026-09-25 the key was pressed twice, a quarter of a second apart, and
+that went wrong both ways for the owner: twice nothing moved, and once a
+request went from the third song to the first. The position that would
+settle it is not to be had - Chrome reports 0 for it whatever is playing -
+but the track's name is (`media/now_playing.py`): a track that changes
+leaves the media session for a moment and comes back as another name, and
+one that only started over changes nothing. So `previous` is pressed once,
+the name is watched, and it is pressed again only when nothing changed.
+
+And the answer names the track now playing. "Pressed the key twice" told the
+model nothing it could check, so it said "let me look" and pressed again -
+two more tracks back.
 
 **Setting the volume to a number** is `set_volume` (2026-09-21, D24), a
 closure over a `Volume` (`audio/volume.py`): the keys step, this one lands
@@ -43,12 +51,16 @@ import ctypes
 from typing import Annotated, Literal
 
 from allie.audio.volume import Volume
+from allie.media.now_playing import current_track
 from allie.media.player import Player, service_keys
 from allie.tools.registry import Tool, tool
 
 __all__ = [
+    "CHANGE_SECONDS",
     "KEYS",
+    "POLL_SECONDS",
     "PREVIOUS_GAP_SECONDS",
+    "SETTLE_SECONDS",
     "Action",
     "media_control",
     "open_media_for",
@@ -71,11 +83,23 @@ KEYS: dict[str, int] = {
 
 KEY_UP = 0x0002  # KEYEVENTF_KEYUP
 
-# Between the two presses of `previous`. Long enough for the player to have
-# moved the position to zero after the first - a second press that lands
-# before that restarts the song again - and short enough that nobody hears
-# two events.
+# Between the two presses of `previous` when nothing names what is playing,
+# so that nothing can be watched. Long enough for the player to have moved
+# the position to zero after the first - a second press that lands before
+# that restarts the song again - and short enough that nobody hears two
+# events.
 PREVIOUS_GAP_SECONDS = 0.25
+
+# How long a press is watched for a change before it counts as having
+# started the track over. Measured 2026-09-25, YouTube Music in Chrome: the
+# session is gone 0.08-0.26 s after a press that changes the track, and a
+# restart changes nothing for as long as it was watched (3 s). A second
+# press after this is still near the start of the track, where it goes back.
+CHANGE_SECONDS = 1.5
+# How long a changing track is waited for to name itself: 0.58-1.14 s
+# measured, a slow network given the rest.
+SETTLE_SECONDS = 4.0
+POLL_SECONDS = 0.1
 
 
 def _press(code: int) -> None:
@@ -90,18 +114,76 @@ def _press(code: int) -> None:
 async def media_control(action: Action) -> str:
     """Controls whatever is playing, the way the media keys on a keyboard do.
     play_pause toggles between playing and paused - use it both to stop the
-    music and to resume it; next and previous change the track; volume_up and
-    volume_down step the system volume; mute silences it and unsilences it."""
+    music and to resume it; next and previous move one track and answer with
+    the track now playing, so one call is one track: tell the user what is
+    playing rather than calling again to check; volume_up and volume_down
+    step the system volume; mute silences it and unsilences it."""
     code = KEYS.get(action)
     if code is None:
         return f"No action called {action!r}; the actions are: {', '.join(KEYS)}."
+    if action in ("next", "previous"):
+        return await _change_track(action, code)
 
     _press(code)
-    if action == "previous":
+    return f"Pressed the {action} key."
+
+
+async def _change_track(action: str, code: int) -> str:
+    """Presses next or previous, and says which track is playing after it."""
+    before = await current_track()
+    _press(code)
+    if before is None:
+        # Nothing names what is playing, so no change can be seen: the keys
+        # as a hand would press them, and no claim about where they landed.
+        unknown = "Nothing reports what is playing, so which track is on now is not known."
+        if action == "next":
+            return f"Pressed the next key. {unknown}"
         await asyncio.sleep(PREVIOUS_GAP_SECONDS)
         _press(code)
-        return "Pressed the previous key twice: once only restarts the current track."
-    return f"Pressed the {action} key."
+        return f"Pressed the previous key twice: once only restarts a track. {unknown}"
+
+    if action == "next":
+        changed, now = await _watch(before, SETTLE_SECONDS)
+    else:
+        changed, now = await _watch(before, CHANGE_SECONDS)
+        if not changed:
+            # A few seconds in, the player started the track over; the one
+            # before is a second press away while this one is at its start.
+            _press(code)
+            changed, now = await _watch(before, SETTLE_SECONDS)
+
+    if not changed:
+        if action == "next":
+            return f"Pressed next, but {before} is still playing: there may be no track after it."
+        return (
+            f"{before} started over, and a second press did not go back: there may be "
+            "no track before it."
+        )
+    if now is None:
+        return f"The track changed from {before}, but nothing names the new one yet."
+    return f"{'Skipped to' if action == 'next' else 'Went back to'} {now} (was {before})."
+
+
+async def _watch(before: str, seconds: float) -> tuple[bool, str | None]:
+    """Whether the track changed from `before` after a press, and what the
+    session names now.
+
+    A change shows as the session going away or naming another track. Once
+    it has gone, the wait is for a name, up to `SETTLE_SECONDS`: the same
+    name coming back is a track that only started over; none coming back is
+    a change not yet named.
+    """
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    gone = False
+    while True:
+        now = await current_track()
+        if now is not None and (now != before or gone):
+            return now != before, now
+        gone = gone or now is None
+        if loop.time() - start >= (SETTLE_SECONDS if gone else seconds):
+            return gone, None
+        await asyncio.sleep(POLL_SECONDS)
 
 
 def set_volume_for(volume: Volume) -> Tool:

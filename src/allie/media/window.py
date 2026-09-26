@@ -21,6 +21,12 @@ Edge, Brave and Firefox are the same code. The new window is opened
 *before* the old one is closed: a browser whose only window was ours would
 otherwise shut down between the two and lose the address.
 
+The window outlives the run of the program that opened it - the user may
+still be listening - so its handle is also written down in the data folder,
+with the browser process that owns it, and the next run's first song closes
+it (2026-09-25). Until then a restart forgot it, and the song from before
+the restart played on under the new one.
+
 Everything here that touches Win32 runs off the event loop (design.md
 section 3.1 rule 4): starting a process can wait on a cold browser, and the
 window may take a second or two to appear.
@@ -46,6 +52,7 @@ __all__ = [
     "APPEAR_POLL_SECONDS",
     "APPEAR_SECONDS",
     "HTTPS_CHOICE",
+    "KEPT_FILE_NAME",
     "Browser",
     "Desktop",
     "MediaWindow",
@@ -58,6 +65,10 @@ __all__ = [
 # the answer would be waiting on a window that is not coming.
 APPEAR_SECONDS = 3.0
 APPEAR_POLL_SECONDS = 0.1
+
+# Where the window is written down between runs, in the data folder: its
+# handle and the process that owns it, on one line.
+KEPT_FILE_NAME = "media-window.txt"
 
 # Where Windows keeps the user's choice of browser for `https` links.
 HTTPS_CHOICE = r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice"
@@ -129,12 +140,17 @@ class Desktop(Protocol):
 
     def is_window(self, handle: int) -> bool: ...
 
+    def process_of(self, handle: int) -> int | None: ...
+
     def close(self, handle: int) -> None: ...
 
 
 WM_CLOSE = 0x0010
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 KEYEVENTF_KEYUP = 0x0002
+GW_OWNER = 4
+GWL_EXSTYLE = -20
+WS_EX_TOOLWINDOW = 0x00000080
 
 # UI Automation, for `text_boxes`: the property and control-type ids from
 # `UIAutomationClient.h`, and the scope that means "everything below".
@@ -170,6 +186,10 @@ class Win32Desktop:
             wintypes.LPARAM,
         ]
         self._user32.EnumWindows.argtypes = [_EnumWindowsProc, wintypes.LPARAM]
+        self._user32.GetWindow.restype = wintypes.HWND
+        self._user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+        self._user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        self._user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
         self._user32.GetForegroundWindow.restype = wintypes.HWND
         self._kernel32.OpenProcess.restype = wintypes.HANDLE
         self._kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -185,9 +205,28 @@ class Win32Desktop:
         shell.start(command)
 
     def windows_of(self, executable: Path) -> set[int]:
-        """The visible top-level windows owned by `executable`."""
+        """The browser windows `executable` has on screen: visible, top-level
+        and its own - not the bubbles and popups it shows over one of them.
+
+        Chrome's "Translate this page?" is a visible top-level window of
+        chrome.exe that appears two seconds after a song's page, owned by
+        that page's window and a tool window (measured 2026-09-25). Counted,
+        it could be taken for the next song's window, which then went
+        untracked and was never closed.
+        """
         wanted = str(executable).casefold()
-        return self._windows_where(lambda image: image.casefold() == wanted)
+        return {
+            handle
+            for handle in self._windows_where(lambda image: image.casefold() == wanted)
+            if self._is_frame(handle)
+        }
+
+    def _is_frame(self, handle: int) -> bool:
+        """Whether `handle` is a window of its own rather than one shown over
+        another: no owner, and not a tool window."""
+        if self._user32.GetWindow(handle, GW_OWNER):
+            return False
+        return not self._user32.GetWindowLongPtrW(handle, GWL_EXSTYLE) & WS_EX_TOOLWINDOW
 
     def windows_named(self, image: str) -> set[int]:
         """The visible top-level windows of any program whose file is called
@@ -312,6 +351,14 @@ class Win32Desktop:
     def is_window(self, handle: int) -> bool:
         return bool(self._user32.IsWindow(handle))
 
+    def process_of(self, handle: int) -> int | None:
+        """The process that owns the window `handle`, or `None` when there is
+        no such window."""
+        pid = wintypes.DWORD()
+        if not self._user32.GetWindowThreadProcessId(handle, ctypes.byref(pid)):
+            return None
+        return int(pid.value)
+
     def close(self, handle: int) -> None:
         # Posted, not sent: the browser closes the window on its own thread,
         # and this one is not kept waiting for it.
@@ -328,6 +375,7 @@ class MediaWindow:
         *,
         appear_seconds: float = APPEAR_SECONDS,
         poll_seconds: float = APPEAR_POLL_SECONDS,
+        kept: Path | None = None,
     ) -> None:
         self.browser = browser
         self._desktop: Desktop = desktop if desktop is not None else Win32Desktop()
@@ -337,6 +385,11 @@ class MediaWindow:
         # whoever wants to know, never closed at shutdown: the user may still
         # be listening.
         self.handle: int | None = None
+        # Where the window is written down for the next run, or `None` to
+        # keep it in this run's memory only. The note is read once, at the
+        # first address this run shows.
+        self.kept = kept
+        self._recalled = kept is None
         # One window at a time: two requests that overlapped would each take
         # the other's window for their own and close the wrong one.
         self._turn = asyncio.Lock()
@@ -353,6 +406,10 @@ class MediaWindow:
             return await asyncio.to_thread(self._show, self.browser, address)
 
     def _show(self, browser: Browser, address: str) -> bool:
+        if not self._recalled:
+            self._recalled = True
+            if self.handle is None:
+                self.handle = self._recall(browser.executable)
         before = self._desktop.windows_of(browser.executable)
         try:
             self._desktop.start([str(browser.executable), browser.new_window, address])
@@ -363,6 +420,7 @@ class MediaWindow:
         appeared = self._appeared(browser.executable, before)
         self._close_previous()
         self.handle = appeared
+        self._write_down(appeared)
         if appeared is None:
             logger.debug(
                 "no new {} window appeared within {} s",
@@ -370,6 +428,47 @@ class MediaWindow:
                 self._appear_seconds,
             )
         return True
+
+    def _recall(self, executable: Path) -> int | None:
+        """The window the run before wrote down, while it is still that one:
+        a window of the browser's, owned by the same process.
+
+        The process is what makes the number safe to close. A browser that
+        was restarted in between may have given the same number to a window
+        of the user's own; it cannot have given it the same process.
+        """
+        if self.kept is None:
+            return None
+        try:
+            note = self.kept.read_text(encoding="utf-8")
+        except OSError:
+            return None  # nothing written down: the first run, or no window
+        parts = note.split()
+        if len(parts) != 2 or not all(part.isdigit() for part in parts):
+            logger.debug("the media window note {!r} is not a handle and a process", note)
+            return None
+        handle, process = int(parts[0]), int(parts[1])
+        if handle not in self._desktop.windows_of(executable):
+            return None
+        if self._desktop.process_of(handle) != process:
+            return None
+        return handle
+
+    def _write_down(self, handle: int | None) -> None:
+        """Keeps `handle` for the next run, or forgets the one kept when this
+        run has no window. A disk that refuses costs only the next run's
+        chance to close it."""
+        if self.kept is None:
+            return
+        process = None if handle is None else self._desktop.process_of(handle)
+        try:
+            if handle is None or process is None:
+                self.kept.unlink(missing_ok=True)
+            else:
+                self.kept.parent.mkdir(parents=True, exist_ok=True)
+                self.kept.write_text(f"{handle} {process}\n", encoding="utf-8")
+        except OSError as failure:
+            logger.debug("the media window could not be written down: {}", failure)
 
     def _appeared(self, executable: Path, before: set[int]) -> int | None:
         deadline = time.monotonic() + self._appear_seconds

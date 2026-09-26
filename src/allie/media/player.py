@@ -40,12 +40,12 @@ from typing import Protocol
 
 from loguru import logger
 
-from allie.config import MediaSettings
+from allie.config import MediaSettings, data_dir
 from allie.media.deezer import Deezer
 from allie.media.now_playing import pause_current
 from allie.media.spotify import Spotify
 from allie.media.track import Recording, SearchError, Track
-from allie.media.window import MediaWindow, default_browser
+from allie.media.window import KEPT_FILE_NAME, MediaWindow, default_browser
 from allie.media.youtube import YouTube, YouTubeMusic
 from allie.store.normalize import normalize_search
 
@@ -179,9 +179,14 @@ class Player:
         # replaceable function rather than a branch in here.
         self.pause = pause
         # Where a web address opens: one window of the user's browser, the
-        # previous one closed once the next is there (`media/window.py`).
+        # previous one closed once the next is there (`media/window.py`) -
+        # the previous run's too, which is written down in the data folder.
         # Injected so that a test sees the address without a browser.
-        self.window = window if window is not None else MediaWindow(default_browser())
+        self.window = (
+            window
+            if window is not None
+            else MediaWindow(default_browser(), kept=data_dir() / KEPT_FILE_NAME)
+        )
         # One song at a time: two overlapping requests would otherwise pause
         # each other's window and leave two of them playing.
         self._turn = asyncio.Lock()

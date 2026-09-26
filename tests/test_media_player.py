@@ -244,6 +244,9 @@ class Desk:
     def is_window(self, handle: int) -> bool:
         return True
 
+    def process_of(self, handle: int) -> int | None:
+        return 42
+
     def close(self, handle: int) -> None:
         pass
 

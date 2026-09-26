@@ -62,6 +62,12 @@ SEARCH_SECONDS = 8.0
 # ranking below more covers to sift through.
 RESULTS = 10
 
+# How many front-page shelves "play some music" asks for. `ytmusicapi`'s
+# default is three, and three were playlists and albums only - no song to
+# play - in four answers of six on 2026-09-25; ten reached the songs shelf
+# in six of six, in the same second or so.
+HOME_SHELVES = 10
+
 # How many places a result may climb for being by the artist the user named.
 # Three rather than a sort by similarity: the service's own order knows more
 # than anything computed here, and this only has to beat a cover listed above
@@ -170,7 +176,7 @@ class YouTubeMusic:
         this listener wherever it knows one. Choosing here instead would be
         the assistant having a taste in music, which nobody asked it for.
         """
-        for shelf in await self._ask(lambda catalogue: catalogue.get_home()):
+        for shelf in await self._ask(lambda catalogue: catalogue.get_home(limit=HOME_SHELVES)):
             for item in shelf.get("contents") or []:
                 track = _song(item) if isinstance(item, dict) else None
                 if track is not None:

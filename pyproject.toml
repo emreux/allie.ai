@@ -37,6 +37,7 @@ dependencies = [
     # (`google-genai` brings this version; the OpenAI adapter may use it
     # directly, L2.1).
     "websockets>=16.1.1",
+    "winrt-windows-foundation>=3.2.1",
     "winrt-windows-media-control>=3.2.1",
     "ytmusicapi>=1.12.2",
 ]
