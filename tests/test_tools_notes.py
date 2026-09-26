@@ -86,7 +86,7 @@ def test_add_and_search_are_safe_and_delete_asks(
     assert search_notes.spec.parameters["required"] == []
     assert delete_note.spec.parameters["required"] == ["note_id", "text"]
     assert delete_note.confirm_prompt == "'{text}' notu silinecek."
-    assert TEXT["note_delete_confirm"] == "The note '{text}' will be deleted."
+    assert TEXT["note_delete_confirm"] == "Shall I delete the note '{text}'?"
 
 
 async def test_a_note_is_kept_as_said_and_numbered(add_note: Tool, notes: NotesRepo) -> None:

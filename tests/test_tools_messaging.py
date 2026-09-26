@@ -11,6 +11,8 @@ from collections.abc import Sequence
 
 import pytest
 
+from allie.agent.policy import dispatch
+from allie.live.base import ToolCall
 from allie.messaging.contacts import AddressBook, Contact
 from allie.messaging.whatsapp import MAX_TEXT_CHARS, Outcome
 from allie.tools.messaging import (
@@ -25,7 +27,7 @@ from allie.tools.messaging import (
     WhatsAppChannel,
     send_message_for,
 )
-from allie.tools.registry import Tool
+from allie.tools.registry import Tool, ToolRegistry
 
 AHMET = Contact(name="Ahmet Yılmaz", aliases=("Ahmet",), phone="905320000000")
 MEHMET = Contact(name="Mehmet Kaya", aliases=("Mehmet",))  # no number
@@ -241,8 +243,8 @@ async def test_the_channel_hands_the_digits_and_the_text_to_whatsapp() -> None:
     ("outcome", "said"),
     [
         ("sent", "Sent to"),
-        ("pressed", "Handed to WhatsApp and Enter pressed"),
-        ("placed", "Enter was not pressed"),
+        ("pressed", "Handed to WhatsApp and its Send button pressed"),
+        ("placed", "waiting, not sent"),
         ("unseen", "did not show the message"),
         ("no_window", "did not open a window"),
         ("not_installed", "not installed"),
@@ -274,7 +276,7 @@ async def test_a_guessed_person_is_named_and_not_sent_to_until_named_back() -> N
     said = await tool.run(app="WhatsApp", contact="Ahmet Yılmaz", text="geç kalıyorum")
 
     assert app.sent == [("905320000000", "geç kalıyorum")]
-    assert "Ahmet Yılmaz" in said and "Enter was not pressed" in said
+    assert "Ahmet Yılmaz" in said and "waiting, not sent" in said
 
 
 async def test_a_name_that_is_not_in_the_book_is_not_sent_to_a_near_one() -> None:
@@ -299,3 +301,98 @@ async def test_a_listed_name_an_alias_or_a_word_of_one_sends_at_once(spoken: str
     await tool.run(app="WhatsApp", contact=spoken, text="selam")
 
     assert app.sent == [("905320000000", "selam")]
+
+
+# --------------------------------------------------------------------------
+# One question, with the name the message goes to (2026-09-26)
+# --------------------------------------------------------------------------
+
+
+class Answering:
+    """The user at the gate: says yes, and keeps the questions."""
+
+    def __init__(self) -> None:
+        self.questions: list[str] = []
+
+    async def __call__(self, question: str) -> bool:
+        self.questions.append(question)
+        return True
+
+
+async def through_the_gate(tool: Tool, **arguments: str) -> tuple[str, list[str]]:
+    user = Answering()
+    answer = await dispatch(
+        ToolCall(id="c1", name="send_message", arguments=arguments),
+        turn_id="t1",
+        registry=ToolRegistry([tool]),
+        confirm=user,
+    )
+    return answer, user.questions
+
+
+def whatsapp_tool(app: FakeWhatsApp) -> Tool:
+    return send_message_for(
+        {"whatsapp": WhatsAppChannel(app, BOOK)}, confirm_prompt="{text} -> {contact} ({app})"
+    )
+
+
+async def test_a_guessed_person_is_asked_about_once_by_their_full_name() -> None:
+    """The owner's evening of 2026-09-25: "Beho" was asked about, then
+    "Behoo" - two questions for one message. The person is found before the
+    question now, and the question reads the name the message goes to: the
+    ear still catches the wrong person, and only one question is asked."""
+    app = FakeWhatsApp("sent")
+
+    answer, questions = await through_the_gate(
+        whatsapp_tool(app), app="WhatsApp", contact="ahmede", text="geç kalıyorum"
+    )
+
+    assert questions == ["geç kalıyorum -> Ahmet Yılmaz (WhatsApp)"]
+    assert app.sent == [("905320000000", "geç kalıyorum")]
+    assert "Ahmet Yılmaz" in answer
+
+
+async def test_an_alias_is_asked_about_by_the_listed_name() -> None:
+    app = FakeWhatsApp("sent")
+
+    _, questions = await through_the_gate(
+        whatsapp_tool(app), app="whatsapp", contact="ahmet", text="selam"
+    )
+
+    assert questions == ["selam -> Ahmet Yılmaz (WhatsApp)"]
+
+
+async def test_nobody_is_asked_about_a_person_who_is_not_in_the_book() -> None:
+    app = FakeWhatsApp()
+
+    answer, questions = await through_the_gate(
+        whatsapp_tool(app), app="WhatsApp", contact="Memet", text="selam"
+    )
+
+    assert questions == []
+    assert answer == NO_CONTACT.format(
+        contact="Memet", closest="; closest names: Mehmet Kaya, Ahmet Yılmaz"
+    )
+    assert app.sent == []
+
+
+async def test_nobody_is_asked_about_a_person_the_channel_cannot_reach() -> None:
+    app = FakeWhatsApp()
+
+    answer, questions = await through_the_gate(
+        whatsapp_tool(app), app="WhatsApp", contact="Mehmet", text="selam"
+    )
+
+    assert questions == []
+    assert answer == NO_NUMBER.format(name="Mehmet Kaya")
+
+
+async def test_nobody_is_asked_about_an_app_that_is_not_a_channel() -> None:
+    app = FakeWhatsApp()
+
+    answer, questions = await through_the_gate(
+        whatsapp_tool(app), app="Signal", contact="Ahmet", text="selam"
+    )
+
+    assert questions == []
+    assert answer == NO_CHANNEL.format(app="Signal")

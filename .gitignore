@@ -50,6 +50,9 @@ debug_audio/
 # ...except the wake-word classifiers the program ships (plan.md D21, D31):
 # under a megabyte each, trained for this program, and it cannot wake without them.
 !src/allie/wake/*.onnx
+# ...and Silero's speech detector (plan.md D36), which came inside faster-whisper
+# until that left: 1.2 MB, MIT, and the doorman cannot open without it.
+!src/allie/audio/silero_vad_v6.onnx
 *.bin
 *.pt
 *.gguf

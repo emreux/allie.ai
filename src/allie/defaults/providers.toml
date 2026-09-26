@@ -7,9 +7,10 @@
 # after they typed their key in, so entries arrive with their adapter.
 #
 # The entry id is the vendor, not the API: the key is filed under it in the
-# Credential Manager, and `[stt]` and `[tts]` share the same entry when they
-# name the same vendor - one key, stored once. The OpenAI entry arrives with
-# its adapter (plan.md L2.2), under whichever API the owner picks in L2.0.
+# Credential Manager, and whatever else asks the same vendor - Google's
+# recogniser, `look_up`, the documents - shares the entry: one key, stored
+# once. The OpenAI entry arrives with its adapter (plan.md L2.2), under
+# whichever API the owner picks in L2.0.
 #
 # Fields:
 #   adapter          which adapter class builds it            (required)

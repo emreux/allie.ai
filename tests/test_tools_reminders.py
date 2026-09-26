@@ -102,7 +102,9 @@ def test_create_and_list_are_safe_and_cancel_asks(
         "monthly",
     ]
     assert cancel_reminder.spec.parameters["required"] == ["reminder_id", "text"]
-    assert TEXT["reminder_cancel_confirm"] == "The reminder '{text}' will be cancelled."
+    # "remove", not "cancel": "cancel" is a no word, and "yes, cancel it"
+    # would have been heard as a no (2026-09-26).
+    assert TEXT["reminder_cancel_confirm"] == "Shall I remove the reminder '{text}'?"
 
 
 async def test_a_reminder_is_set_for_a_local_time_and_said_back(

@@ -33,7 +33,7 @@ __all__ = ["TEXT", "forget_for", "remember_for"]
 # hears from these tools: the question before a fact is removed. `{fact}`
 # is the fact as the model named it.
 TEXT: dict[str, str] = {
-    "forget_confirm": "'{fact}' will be forgotten.",
+    "forget_confirm": "Shall I forget '{fact}'?",
 }
 
 # The answers, addressed to the model.

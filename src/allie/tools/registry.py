@@ -15,19 +15,25 @@ from __future__ import annotations
 
 import inspect
 import string
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, get_args, get_origin, get_type_hints
 
 from allie.live.base import ToolSpec
 
-__all__ = ["Risk", "Tool", "ToolFunction", "ToolRegistry", "build_spec", "tool"]
+__all__ = ["Prepare", "Risk", "Tool", "ToolFunction", "ToolRegistry", "build_spec", "tool"]
 
 Risk = Literal["safe", "confirm", "blocked"]
 
 # Every tool is `async def` and answers with text: what it returns goes straight
 # back to the model as a tool result, and the model reads words.
 ToolFunction = Callable[..., Awaitable[str]]
+
+# What a tool that asks first may do before the question (2026-09-26): take
+# the model's arguments and answer with the ones the action will really use -
+# a person as the address book names them - or with a sentence for the model
+# when there is nothing to ask about.
+Prepare = Callable[..., Awaitable[Mapping[str, Any] | str]]
 
 # The Python types a parameter may have, and what JSON Schema calls each. A type
 # missing here is refused at definition time rather than guessed at.
@@ -41,12 +47,17 @@ class Tool:
     `confirm_prompt` is the sentence the user hears before a `confirm` tool
     runs, with `{name}` placeholders for the arguments the model chose. The
     gate fills them with the real values (architecture-guide section 6).
+
+    `prepare`, when there is one, runs before that question: the question
+    is filled from what it answers, and the tool runs with the same - so
+    the user hears what will really happen, once (`agent/policy.py`).
     """
 
     spec: ToolSpec
     risk: Risk
     run: ToolFunction
     confirm_prompt: str | None = None
+    prepare: Prepare | None = None
 
 
 def build_spec(fn: ToolFunction) -> ToolSpec:

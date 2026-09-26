@@ -70,7 +70,7 @@ TEXT: dict[str, str] = {
         "Listening - just talk. {toggle} stops listening (and cuts an answer short). "
         "Ctrl+C stops everything."
     ),
-    "loading_speech": "Loading the speech model...",
+    "starting_up": "Starting...",
     "checking_model": "Checking whether the model calls tools...",
     "state_off": "off",
     "state_idle": "ready",
@@ -262,9 +262,10 @@ class StatusLine:
         self._live.stop()
 
     def starting(self) -> None:
-        """Whisper is loading. It takes seconds, and a blank terminal during
-        them reads as a program that failed to start."""
-        self._show(self._said["loading_speech"], "yellow", hint=False)
+        """The apps, the detector and the wake word are loading. It takes
+        seconds, and a blank terminal during them reads as a program that
+        failed to start."""
+        self._show(self._said["starting_up"], "yellow", hint=False)
 
     def checking_model(self) -> None:
         """The probe of 2.6 is asking the model one question: a second or two

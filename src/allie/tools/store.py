@@ -71,7 +71,7 @@ __all__ = [
 # from this module: the question before anything is downloaded. Both
 # placeholders are arguments the model must send (`registry.tool` checks).
 TEXT: dict[str, str] = {
-    "store_install_confirm": "'{name}' ({publisher}) will be downloaded from the Microsoft Store.",
+    "store_install_confirm": "Shall I download '{name}' ({publisher}) from the Microsoft Store?",
 }
 
 # The answers, addressed to the model.

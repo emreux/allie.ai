@@ -245,7 +245,7 @@ def test_it_starts_loading_and_shows_the_state_once_there_is_one(built: Any) -> 
 
     one.window.starting()
     one.settle()
-    assert one.view.label() == said("loading_speech", status.TEXT)
+    assert one.view.label() == said("starting_up", status.TEXT)
 
     one.window.state(State.IDLE)
     one.settle()

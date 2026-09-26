@@ -1,11 +1,13 @@
-"""Google's recogniser behind the STTProvider protocol (design.md section 3.4, on trial).
+"""Google's recogniser: the one thing that hears the yes or no of the gate's window.
 
-ADR-001 kept local Whisper as the default and said a cloud recogniser would
-be the user's choice, made in a file, announced by the wizard. This is that
-recogniser, on trial since 2026-09-14 with the owner's own key: the same
-protocol as `local_whisper.py`, so `app.py` does not know which of the two
-it is talking to, and `[stt] provider = "gemini"` in `config.toml` is the
-whole switch. `local` is the default and never leaves.
+ADR-001 kept local Whisper as the default and made this a choice; on
+2026-09-26 the owner removed the choice and the local engine with it
+(plan.md D36). Measured that day with the same clips at four levels:
+Whisper, prompted with the pack's yes and no words, wrote a clear "Evet." as
+"iptal." seven times in twenty-eight and declined for the user; this engine
+heard 27 of the 28 yeses and 18 of the 20 noes, took no answer for its
+opposite, and answered in 1.6-2.1 s against Whisper's 2.2. Nothing on this
+machine turns speech into text any more, and there is no setting for it.
 
 **It is the Live API, and an ASR endpoint rather than a prompt.** The model
 is `gemini-3.5-transcribe-live`: a WebSocket session per utterance, the
@@ -33,26 +35,23 @@ interim words are the partial transcripts section 4 wants one day.
 **Silence sends nothing back, noise sends an interim and no final.** So a
 final is waited for as long as the audio warrants, and none is reported as
 `no_speech_probability = 1.0` - the value `Transcript` reserves for "there
-was nothing to decode" - which keeps a cough unanswered here as it is with
+was nothing to decode" - which keeps a cough unanswered here as it was with
 Whisper. Words come back with no opinion (`None`): this engine does not say
 how sure it is.
 
-**A network is a network.** A fallback - the local engine, loaded as it
-always was - can stand behind this one: a refused key, a dropped socket, a
-host that does not resolve or an answer that does not come in time is
-logged in one line and the same audio goes to Whisper. Without a fallback
-the answer is an empty transcript with no opinion, which `app.hear` reads
-as "say it again" rather than as silence.
+**A network is a network.** A refused key, a dropped socket, a host that
+does not resolve or an answer that does not come in time is logged in one
+line, and the answer is an empty transcript with no opinion, which
+`app.hear` reads as "say it again" rather than as silence. Nothing stands
+behind this engine: a second failure is a no, as silence is.
 
-The key is the Gemini entry of the Credential Manager - the one the LLM
-uses when the LLM is Gemini. The audio leaves the machine; the README says
-so under the setting, and nowhere else does anything change.
+The key is the Gemini entry of the Credential Manager - the one the live
+model uses. The answer's audio leaves the machine, as the conversation's does.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from typing import Any
 
 from google import genai
@@ -63,7 +62,7 @@ from loguru import logger
 # dropped or refused socket looks like from here.
 from websockets.exceptions import WebSocketException
 
-from allie.stt.base import SAMPLE_RATE, Audio, STTProvider, Transcript, to_pcm16
+from allie.stt.base import SAMPLE_RATE, Audio, Transcript, to_pcm16
 
 __all__ = [
     "CHUNK_SECONDS",
@@ -82,8 +81,8 @@ __all__ = [
 DEFAULT_MODEL = "gemini-3.5-transcribe-live"
 
 # Longer than a slow answer, shorter than the turn's patience: past this the
-# fallback is asked, or the user is. Covers opening the session, sending
-# the audio and waiting for the words.
+# user is asked again. Covers opening the session, sending the audio and
+# waiting for the words.
 TIMEOUT_SECONDS = 8.0
 
 # The SDK sends its HTTP timeout to Google as the request's deadline, and
@@ -117,7 +116,7 @@ DESCRIBED_CHARS = 240
 
 
 class GeminiSTT:
-    """Google's live transcriber, with an optional engine behind it."""
+    """Google's live transcriber."""
 
     id = "gemini"
 
@@ -126,12 +125,10 @@ class GeminiSTT:
         api_key: str,
         *,
         model: str = DEFAULT_MODEL,
-        fallback: STTProvider | None = None,
         timeout_seconds: float = TIMEOUT_SECONDS,
         client: Any | None = None,
     ) -> None:
         self._model = model
-        self._fallback = fallback
         self._timeout = timeout_seconds
         # No retry options: the SDK then makes one attempt, and a refusal
         # costs a third of a second rather than a minute of backing off.
@@ -145,27 +142,13 @@ class GeminiSTT:
             )
         )
 
-    async def load(self) -> None:
-        """Loads the engine behind this one, if there is one; the client
-        itself has nothing to load."""
-        load: Callable[[], Awaitable[None]] | None = getattr(self._fallback, "load", None)
-        if load is not None:
-            await load()
-        logger.info(
-            "recogniser: {}, fallback {}",
-            self._model,
-            getattr(self._fallback, "id", "none"),
-        )
-
     async def transcribe(self, pcm: Audio, *, hint: str | None = None) -> Transcript:
         try:
             async with asyncio.timeout(self._timeout):
                 finals = await self._ask(pcm, hint)
         except (errors.APIError, WebSocketException, OSError, TimeoutError) as failure:
             logger.warning("recogniser {} failed: {}", self._model, self._describe(failure))
-            if self._fallback is None:
-                return Transcript(text="", language=hint or "")
-            return await self._fallback.transcribe(pcm, hint=hint)
+            return Transcript(text="", language=hint or "")
         return _transcript(finals, hint)
 
     async def _ask(self, pcm: Audio, hint: str | None) -> list[Any]:

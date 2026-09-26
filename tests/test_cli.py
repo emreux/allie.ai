@@ -2,17 +2,17 @@
 
 `setup` is wired to the wizard here rather than driven through it - the wizard
 has its own suite, and a test that opened a real prompt would hang. `run` is
-the same idea one level up: the state machine, the speech model and the model
+the same idea one level up: the state machine, the recogniser and the model
 that answers all have their own suites, so what is tested here is that they are
 handed to each other correctly and that starting up fails in words.
 
-**Nothing may touch the hardware.** A test that loaded Whisper would take two
-seconds and a gigabyte, and one that opened the microphone would record the
-room. Both are replaced; everything else is the code that ships.
+**Nothing may touch the hardware.** A test that opened the microphone would
+record the room, and one that built Google's recogniser would reach for the
+network. Both are replaced; everything else is the code that ships.
 
 **A machine that is not set up is not a crash.** No settings, or a key that has
 been removed from the Credential Manager, are things the user can fix - so they
-are a sentence and an exit code, and neither of them costs a model load.
+are a sentence and an exit code, and neither of them costs a load.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from allie.agent import core
 from allie.agent.limits import Limits
 from allie.agent.policy import NO_SUCH_TOOL
 from allie.agent.prompts import DOCUMENTS_RULE, SEARCH_RULE, SYSTEM_PROMPT
-from allie.app import State, Turn, confirm_prompt
+from allie.app import State, Turn
 from allie.audio import capture
 from allie.audio import wake as wake_module
 from allie.config import (
@@ -50,7 +50,6 @@ from allie.config import (
     MessagingSettings,
     RetentionSettings,
     Settings,
-    STTSettings,
     WakeSettings,
     WebSettings,
     config_path,
@@ -67,7 +66,7 @@ from allie.store import db
 from allie.store.memory import MEMORY_FILE_NAME
 from allie.store.repos import AuditRepo, SettingsRepo, UsageRepo
 from allie.store.retention import SECONDS_PER_DAY
-from allie.stt import gemini_stt, local_whisper
+from allie.stt import gemini_stt
 from allie.tools import system
 from allie.tools.system import AppCatalog, AppEntry
 from allie.ui import status
@@ -260,11 +259,8 @@ class Wiring:
     captures: list[FakeLiveCapture] = field(default_factory=list)
     microphones: list[Any] = field(default_factory=list)
     databases: list[sqlite3.Connection] = field(default_factory=list)
-    # What the speech model was told to expect: the words of the confirmation
-    # window, since that is all it hears (D3, D10).
-    prompts_for_speech: list[str] = field(default_factory=list)
-    # Google's recogniser, when the settings ask for it: what it was built
-    # with (2026-09-14).
+    # Google's recogniser, the one thing that hears the yes or no (D36):
+    # what it was built with.
     recognisers: list[dict[str, Any]] = field(default_factory=list)
     stop: BaseException | None = None
     # The probe of 2.6 at startup: what it was asked, as (provider id,
@@ -360,28 +356,10 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
         seen.databases.append(connection)
         return connection
 
-    class FakeWhisper:
-        def __init__(self, *, prompt: str = "") -> None:
-            seen.prompts_for_speech.append(prompt)
-
-        async def load(self) -> None:
-            seen.happened.append("speech model")
-
     class FakeGemini:
         def __init__(self, api_key: str, **rest: Any) -> None:
-            self.fallback = rest.get("fallback")
-            seen.recognisers.append(
-                {
-                    "api_key": api_key,
-                    "model": rest.get("model"),
-                    "fallback": self.fallback,
-                }
-            )
-
-        async def load(self) -> None:
-            if self.fallback is not None:
-                await self.fallback.load()
-            seen.happened.append("gemini")
+            seen.happened.append("recogniser")
+            seen.recognisers.append({"api_key": api_key, **rest})
 
     async def catalogue_here(**_: Any) -> AppCatalog:
         seen.happened.append("app catalogue")
@@ -428,7 +406,6 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
         return seen.verdict
 
     monkeypatch.setattr(probe, "probe_tool_support", probed)
-    monkeypatch.setattr(local_whisper, "LocalWhisper", FakeWhisper)
     monkeypatch.setattr(gemini_stt, "GeminiSTT", FakeGemini)
     monkeypatch.setattr(system.AppCatalog, "load", catalogue_here)
     monkeypatch.setattr(capture, "SystemMicrophone", FakeMicrophone)
@@ -505,8 +482,8 @@ def test_a_machine_that_was_never_set_up_is_told_to_run_setup(
 def test_nothing_is_loaded_before_it_is_known_there_is_anything_to_run(
     config_home: Path, wiring: Wiring
 ) -> None:
-    """Whisper is two seconds and a gigabyte. Neither is spent finding out that
-    the user has not run setup."""
+    """Nothing is built, loaded or asked finding out that the user has not
+    run setup."""
     main(["run", "--terminal"])
 
     assert wiring.happened == []
@@ -529,16 +506,15 @@ def test_a_key_that_is_gone_is_a_sentence_rather_than_a_traceback(
 @pytest.mark.parametrize(
     "problem",
     [
-        local_whisper.ModelUnavailableError("the speech model 'small' could not be loaded"),
         capture.MicrophoneUnavailableError("the microphone 'nope' could not be opened"),
     ],
-    ids=["model", "microphone"],
+    ids=["microphone"],
 )
 def test_what_the_user_can_fix_is_a_sentence_rather_than_a_traceback(
     configured: Path, wiring: Wiring, capsys: pytest.CaptureFixture[str], problem: Exception
 ) -> None:
-    """Weights that could not be fetched, a microphone that would not open.
-    Each is the user's to fix, and a traceback tells them nothing about how."""
+    """A microphone that would not open.
+    It is the user's to fix, and a traceback tells them nothing about how."""
     wiring.stop = problem
 
     assert main(["run", "--terminal"]) == 1
@@ -707,31 +683,6 @@ def test_a_wake_model_that_is_not_there_is_a_sentence(
     out = capsys.readouterr().out
     assert "nope.onnx" in out
     assert wiring.captures == []
-
-
-def test_without_google_s_key_there_is_no_look_up_and_the_prompt_is_as_it_was(
-    configured: Path, vault: MemoryKeyring, wiring: Wiring, other_provider: None
-) -> None:
-    """D29: `look_up` asks Google on the key the Gemini entry is filed under.
-    A live model elsewhere and no such key: no tool, no sentence, the frozen
-    prompt as it was - and the browser's search still on offer."""
-    save_settings(
-        Settings(live=LiveSettings(primary="other:some-model"), locale=LocaleSettings(code="tr"))
-    )
-    vault.vault.clear()
-    store_api_key("other", "sk-not-a-real-key")
-
-    main(["run", "--terminal"])
-
-    config = session_of(wiring)
-    assert config.web_search is False
-    assert SEARCH_RULE not in config.system_prompt
-    [runner] = wiring.runners
-    assert "look_up" not in runner.tools
-    assert "x_trends" not in runner.tools
-    assert "open_documents" not in runner.tools
-    assert "ask_documents" not in runner.tools
-    assert "search_web" in runner.tools
 
 
 def test_look_up_on_offer_brings_the_search_rule_without_the_session_s_search(
@@ -934,15 +885,14 @@ def test_the_device_flag_outranks_the_settings(configured: Path, wiring: Wiring)
 def test_the_speech_model_is_ready_before_the_assistant_is(
     configured: Path, wiring: Wiring
 ) -> None:
-    """Loading Whisper at the first question would swallow the first yes
-    or no. The database comes first of all: cheap, and a disk that refuses
-    is better found out about before two seconds of four cores are spent.
-    The probe of 2.6 comes next, for the same reason: one session on the
-    network, and worth knowing about before the load. The app catalogue
-    comes before the speech model, which is told its names."""
+    """The database comes first of all: cheap, and a disk that refuses is
+    better found out about before anything slow. The probe of 2.6 comes
+    next, for the same reason: one session on the network, and worth
+    knowing about before the load. Google's recogniser is built once the
+    apps are read, before the state machine that asks it."""
     main(["run", "--terminal"])
 
-    assert wiring.happened == ["database", "probe", "app catalogue", "speech model", "assistant"]
+    assert wiring.happened == ["database", "probe", "app catalogue", "recogniser", "assistant"]
 
 
 # --------------------------------------------------------------------------
@@ -1011,18 +961,16 @@ def test_a_tool_file_beside_the_settings_is_on_offer(configured: Path, wiring: W
     assert runner.tools[:-1] == list(BUILTIN_TOOLS)
 
 
-def test_the_speech_model_is_told_the_words_the_window_accepts(
+def test_google_hears_the_yes_or_no_on_the_gemini_key_and_is_told_nothing_else(
     configured: Path, wiring: Wiring
 ) -> None:
-    """D3, D10: the recogniser hears the yes or no of the gate's window and
-    nothing else, so that is what it is told to expect - the pack's own words
-    (`app.confirm_prompt`). Until 2026-09-22 it was given the names of the
-    installed applications and the address book, 120 tokens of them, which
-    cost the window most of a second of decode for words it never hears."""
+    """D36: no setting, no engine behind it, no word list - told the
+    pack's yes and no words, the local engine wrote a clear "Evet." as
+    "iptal." (2026-09-26)."""
     main(["run", "--terminal"])
 
-    assert wiring.prompts_for_speech == [confirm_prompt(locales.load("tr"))]
-    assert "evet" in wiring.prompts_for_speech[0].casefold()
+    assert wiring.recognisers == [{"api_key": "AIza-not-a-real-key"}]
+    assert type(wiring.built[-1]["stt"]).__name__ == "FakeGemini"
 
 
 def test_send_message_asks_its_question_in_the_language_of_the_pack(
@@ -1053,7 +1001,7 @@ def test_a_contacts_file_that_names_one_person_twice_is_a_sentence_before_anythi
 
     assert main(["run", "--terminal"]) == 1
 
-    assert "speech model" not in wiring.happened
+    assert "recogniser" not in wiring.happened
     out = capsys.readouterr().out
     assert said("cannot_start", "tr").split("{")[0] in out
     assert CONTACTS_FILE_NAME in out
@@ -1068,47 +1016,20 @@ def test_a_default_messaging_app_that_is_not_one_is_a_sentence(
     assert "Signal" in capsys.readouterr().out
 
 
-def test_by_default_the_recogniser_is_whisper_alone(configured: Path, wiring: Wiring) -> None:
-    """D10: local, no key, the two words stay; `[stt]` left out means that."""
-    main(["run", "--terminal"])
-
-    assert wiring.recognisers == []
-    assert "gemini" not in wiring.happened
-    assert type(wiring.built[-1]["stt"]).__name__ == "FakeWhisper"
-
-
-def test_with_the_setting_the_recogniser_is_gemini_with_whisper_behind_it(
-    configured: Path, wiring: Wiring
-) -> None:
-    """Google first, the local engine loaded behind it for the free tier's
-    three requests a minute; the same names, the same key entry the live
-    model uses."""
-    configured_with(stt=STTSettings(provider="gemini", model="gemini-3.5-transcribe-live"))
-
-    main(["run", "--terminal"])
-
-    (built,) = wiring.recognisers
-    assert built["api_key"] == "AIza-not-a-real-key"
-    assert built["model"] == "gemini-3.5-transcribe-live"
-    assert type(built["fallback"]).__name__ == "FakeWhisper"
-    assert wiring.happened[-4:] == ["app catalogue", "speech model", "gemini", "assistant"]
-    assert type(wiring.built[-1]["stt"]).__name__ == "FakeGemini"
-
-
-def test_gemini_as_recogniser_without_a_gemini_key_is_one_sentence(
+def test_without_a_gemini_key_the_yes_or_no_cannot_be_heard_and_that_is_one_sentence(
     configured: Path,
     vault: MemoryKeyring,
     wiring: Wiring,
     other_provider: None,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The live model is elsewhere and has its key; the recogniser's is
-    missing. Named, with the way out, and nothing is loaded first."""
+    """The live model is elsewhere and has its key; Google's, which hears
+    the yes or no (D36), is missing. Named, with the way out, before
+    anything slow - not even the database is opened."""
     save_settings(
         Settings(
             live=LiveSettings(primary="other:some-model"),
             locale=LocaleSettings(code="tr"),
-            stt=STTSettings(provider="gemini"),
         )
     )
     vault.vault.clear()
@@ -1118,7 +1039,7 @@ def test_gemini_as_recogniser_without_a_gemini_key_is_one_sentence(
 
     printed = capsys.readouterr().out
     assert "gemini" in printed and "allie setup" in printed
-    assert "speech model" not in wiring.happened
+    assert wiring.happened == []
     assert wiring.recognisers == []
 
 
@@ -1283,12 +1204,12 @@ def test_a_memory_file_that_does_not_parse_is_a_sentence_rather_than_a_traceback
     configured: Path, wiring: Wiring, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A hand edit gone wrong. The user can fix it; the program must not
-    write an empty file over it, and must not load a speech model first."""
+    write an empty file over it, and must not build anything first."""
     path = remembered_by_hand(configured, "[user]\nfacts = [oops\n")
 
     assert main(["run", "--terminal"]) == 1
 
-    assert "speech model" not in wiring.happened
+    assert "recogniser" not in wiring.happened
     assert path.read_text(encoding="utf-8") == "[user]\nfacts = [oops\n"
     assert said("cannot_start", "tr").split("{")[0] in capsys.readouterr().out
 
@@ -1336,14 +1257,14 @@ def test_the_probe_asks_in_the_language_of_the_pack(configured: Path, wiring: Wi
     assert question == locales.load("tr").probe_question
 
 
-def test_the_model_is_checked_before_the_speech_model_is_loaded(
+def test_the_model_is_checked_before_anything_slow_is_loaded(
     configured: Path, wiring: Wiring
 ) -> None:
-    """One session on the network, before two seconds of loading are spent
-    on a model that may turn out not to call tools."""
+    """One session on the network, before seconds of loading are spent on
+    a model that may turn out not to call tools."""
     main(["run", "--terminal"])
 
-    assert wiring.happened.index("probe") < wiring.happened.index("speech model")
+    assert wiring.happened.index("probe") < wiring.happened.index("app catalogue")
 
 
 def test_a_fresh_verdict_is_not_asked_again(configured: Path, wiring: Wiring) -> None:
@@ -1710,7 +1631,7 @@ class FakeWindow:
         self.up.append("stop")
 
     def starting(self) -> None:
-        self.told.append(("phase", "loading_speech"))
+        self.told.append(("phase", "starting_up"))
 
     def checking_model(self) -> None:
         self.told.append(("phase", "checking_model"))
@@ -2621,7 +2542,6 @@ def test_doctor_reports_the_installation_and_never_a_key(
         Settings(
             live=LiveSettings(primary=f"gemini:{MODEL}"),
             locale=LocaleSettings(code="tr"),
-            stt=STTSettings(provider="gemini"),
             limits=LimitSettings(hard_stop=True),
             mail=mail_settings("imap.example.test", "emre@example.test"),
         )
@@ -2644,7 +2564,7 @@ def test_doctor_reports_the_installation_and_never_a_key(
     assert line("doctor_model", model=f"gemini:{MODEL}", provider="Google Gemini Live") in out
     assert line("doctor_key_stored") in out
     assert line("doctor_verdict_ok", days=3) in out
-    assert line("doctor_stt_gemini", model="gemini-3.5-transcribe-live", size="small") in out
+    assert line("doctor_stt_gemini", model="gemini-3.5-transcribe-live") in out
     assert line("doctor_voice_goes") in out
     assert line("doctor_text_goes", provider="Google Gemini Live") in out
     assert line("doctor_memory", path=configured / MEMORY_FILE_NAME, count=3) in out
@@ -2678,7 +2598,7 @@ def test_doctor_on_a_bare_setup_says_what_is_not_there(
     out = unwrapped(capsys.readouterr().out)
     for key in (
         "doctor_verdict_none",
-        "doctor_voice_stays",
+        "doctor_voice_goes",
         "doctor_local_none",
         "doctor_mail_none",
         "doctor_telegram_none",

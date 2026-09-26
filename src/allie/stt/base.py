@@ -36,15 +36,17 @@ __all__ = [
     "to_pcm16",
 ]
 
-# What Whisper is trained on and what every other engine accepts. `audio/`
-# captures at this rate so that nothing in the pipeline has to resample.
+# What the live model and Google's recogniser take, and what every engine
+# accepts. `audio/` captures at this rate so that nothing in the pipeline has
+# to resample.
 SAMPLE_RATE = 16_000
 
 # At or above this, the engine itself says the audio held no speech. Measured
-# on the target machine (2026-09-05, `small` int8): real sentences 0.01-0.12,
-# the same sentence through a hard noise gate 0.63, silence and noise
-# 0.86-0.92. Both the provider and the state machine read it, which is why it
-# lives here rather than in either of them.
+# on the target machine with the local engine of the time (2026-09-05, Whisper
+# `small` int8, gone since D36): real sentences 0.01-0.12, the same sentence
+# through a hard noise gate 0.63, silence and noise 0.86-0.92. Google's
+# recogniser reports 1.0 when no final came (`gemini_stt.NOTHING_TO_DECODE`),
+# and `app.hear` reads it; here because it is the protocol's number.
 NO_SPEECH_CEILING = 0.8
 
 Audio = NDArray[np.float32]

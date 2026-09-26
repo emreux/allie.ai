@@ -1337,8 +1337,8 @@ async def test_the_stream_of_a_door_nobody_has_come_through_is_empty() -> None:
 
 async def test_paused_input_is_dropped_and_not_kept_for_later() -> None:
     """The confirmation window (section 4.4 rule 3) and the announcement
-    (D4): what the room says meanwhile is for the local recogniser or for
-    nobody, never for the model - not now and not after."""
+    (D4): what the room says meanwhile is for the window's recogniser or
+    for nobody, never for the model - not now and not after."""
     talk, _, microphone, _ = live()
 
     with talk:

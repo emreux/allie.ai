@@ -35,14 +35,14 @@ kept: it is one request, and the names in it do not change mid-session.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from loguru import logger
 
 from allie.messaging.contacts import AddressBook, Contact, phone_digits
 from allie.store.names import NameIndex
-from allie.tools.messaging import MATCHED, NoRecipientError
+from allie.tools.messaging import GuessedRecipientError, NoRecipientError
 
 __all__ = [
     "HASH_ENTRY",
@@ -159,8 +159,13 @@ class Telegram:
         client = await self._ready()
         contact = self._book.find(spoken)
         if contact is not None and not self._book.certain(spoken, contact):
-            raise NoRecipientError(MATCHED.format(contact=spoken, name=contact.name))
+            raise GuessedRecipientError(spoken, contact.name)
         found = await self._from_book(client, contact) if contact is not None else None
+        if found is not None and contact is not None:
+            # By the book's name, not Telegram's spelling of it (2026-09-26):
+            # the gate's question reads this name and the send looks the
+            # person up again by it, which only the book's name does exactly.
+            return replace(found, name=contact.name)
         if found is None:
             found = await self._from_list(client, contact.name if contact else spoken)
         return found
@@ -231,7 +236,7 @@ class Telegram:
             people = await self._index(client, again=True)
             found = people.find(name)
         if found is not None and not people.certain(name, found):
-            raise NoRecipientError(MATCHED.format(contact=name, name=found.name))
+            raise GuessedRecipientError(name, found.name)
         return found
 
     async def _list(self, client: Client, *, again: bool = False) -> list[Person]:

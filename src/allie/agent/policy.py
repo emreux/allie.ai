@@ -39,6 +39,7 @@ root hands `dispatch` the pack's wording.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 
 from loguru import logger
 
@@ -56,6 +57,7 @@ __all__ = [
     "MISSING_ARGUMENT",
     "NO_SUCH_TOOL",
     "TEXT",
+    "UNHEARD",
     "Confirm",
     "dispatch",
 ]
@@ -63,6 +65,12 @@ __all__ = [
 NO_SUCH_TOOL = "There is no tool named {name!r}."
 DISABLED = "This tool is disabled in the current configuration."
 DECLINED = "The user declined this action."
+# Not a no (2026-09-26): nothing the user said was heard, so nothing was
+# done - and the model should not tell them they refused.
+UNHEARD = (
+    "The user's answer to the confirmation was not heard, so nothing was done. "
+    "Tell them it was not heard, and offer to try again."
+)
 MISSING_ARGUMENT = "The call is missing the argument {name!r}."
 FAILED = "The tool failed: {kind}"
 
@@ -141,13 +149,35 @@ async def dispatch(
             # which; nobody is asked and nothing is written, since no
             # decision was reached.
             return MISSING_ARGUMENT.format(name=missing.args[0])
+        if tool.prepare is not None:
+            # What the action will really use, found before anyone is asked
+            # (2026-09-26): a person as the address book names them, so that
+            # the one question reads the name the message goes to - or a
+            # sentence when there is nothing to ask about, and then nobody
+            # is asked and nothing is written. The run, the audit row and
+            # the "a moment ago" check all see the prepared arguments.
+            try:
+                prepared = await tool.prepare(**call.arguments)
+            except Exception as error:
+                kind = type(error).__name__
+                logger.warning("tool {name} not prepared: {kind}", name=call.name, kind=kind)
+                return FAILED.format(kind=kind)
+            if isinstance(prepared, str):
+                return prepared
+            call = replace(call, arguments=dict(prepared))
+            question = tool.confirm_prompt.format(**call.arguments)
         if audit is not None:
             # What the user does not know and the table does: that the same
             # call ran, or may have, a moment ago (section 3.11).
             earlier = audit.recent(call, within=duplicate_window)
             if earlier is not None:
                 question = f"{question} {_a_moment_ago(earlier, wording)}"
-        if not await confirm(question):
+        answer = await confirm(question)
+        if answer is None:
+            # Refused all the same - nothing runs without a heard yes - but
+            # the model is told why, so it can offer to ask again.
+            return _refused(UNHEARD, call, tool.risk, turn_id=turn_id, audit=audit)
+        if not answer:
             return _refused(DECLINED, call, tool.risk, turn_id=turn_id, audit=audit)
 
     # Written down before it runs (section 3.9). From here on a crash leaves a

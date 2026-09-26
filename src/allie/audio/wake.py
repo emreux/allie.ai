@@ -140,7 +140,7 @@ def _on_one_thread(model: Any, name: str, path: Path) -> None:
     cores busy - about 30 % of the laptop, the fans at full, while the
     assistant slept (measured 2026-09-24). On one thread each it was 1.4 %
     and the call no slower (28 ms against 30-49). Silero is built the same
-    way by `faster-whisper`, which is why the waking hours never showed it.
+    way (`audio/vad.py`), which is why the waking hours never showed it.
 
     The toolkit takes no session options, so this reaches in where
     `BatchedModel` does, pinned to 0.2.1; a toolkit without those

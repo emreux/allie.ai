@@ -54,7 +54,6 @@ from allie.web.search import LOOK_UP_MODEL
 __all__ = [
     "CONFIG_DIR_ENV",
     "KEYRING_SERVICE",
-    "RECOGNISERS",
     "AudioSettings",
     "DocumentSettings",
     "LimitSettings",
@@ -63,7 +62,6 @@ __all__ = [
     "MailSettings",
     "MediaSettings",
     "RetentionSettings",
-    "STTSettings",
     "Settings",
     "ToolSettings",
     "WakeSettings",
@@ -310,35 +308,6 @@ class AudioSettings(BaseModel):
     input_device: str = ""
 
 
-# The recognisers `[stt] provider` may name. `local` is Whisper on this
-# machine and never leaves the list (ADR-001); `gemini` is on trial since
-# 2026-09-14 and sends the microphone audio to Google.
-RECOGNISERS = ("local", "gemini")
-
-
-class STTSettings(BaseModel):
-    """Which engine turns speech into text (section 3.4).
-
-    `local` by default: no key, no cost, and the audio never leaves the
-    machine - the sentence the README makes, and the one that stays true for
-    everyone who did not change this. `gemini` is a choice made in this
-    file, calmly, and it is the one setting here that changes where the
-    voice goes; `model` names Google's recogniser and is only read then.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    provider: str = "local"
-    model: str = "gemini-3.5-transcribe-live"
-
-    @field_validator("provider")
-    @classmethod
-    def _must_be_a_recogniser(cls, value: str) -> str:
-        if value not in RECOGNISERS:
-            raise ValueError(f"expected one of {', '.join(RECOGNISERS)}, got {value!r}")
-        return value
-
-
 class ToolSettings(BaseModel):
     """Which `blocked` tools the user switched on, by name (section 3.9).
 
@@ -551,10 +520,11 @@ class Settings(BaseSettings):
     wake: WakeSettings = WakeSettings()
     locale: LocaleSettings = LocaleSettings()
     audio: AudioSettings = AudioSettings()
-    stt: STTSettings = STTSettings()
     # No `[tts]` since 2026-09-24 (plan.md D32): the program's own sentences
-    # are read by the live model in `[live] voice`. A file that still has the
-    # table is read without it and written back without it.
+    # are read by the live model in `[live] voice`. No `[stt]` since
+    # 2026-09-26 (D36): Google hears the yes or no, and nothing on this
+    # machine does. A file that still has either table is read without it
+    # and written back without it.
     tools: ToolSettings = ToolSettings()
     limits: LimitSettings = LimitSettings()
     media: MediaSettings = MediaSettings()

@@ -37,7 +37,7 @@ __all__ = ["MAX_NOTE_CHARS", "TEXT", "add_note_for", "delete_note_for", "search_
 # The last link of the chain of section 3.12 for the one sentence a user
 # hears from these tools. `{text}` is the note as it was written.
 TEXT: dict[str, str] = {
-    "note_delete_confirm": "The note '{text}' will be deleted.",
+    "note_delete_confirm": "Shall I delete the note '{text}'?",
 }
 
 # A note is a sentence or two said out loud, not a document.

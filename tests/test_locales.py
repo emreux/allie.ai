@@ -215,8 +215,8 @@ def test_a_language_with_no_pack_at_all_is_still_a_working_locale(tmp_path: Path
 
 
 def test_english_does_not_lend_its_speech_language(tmp_path: Path) -> None:
-    """Whisper told to expect English would return English-shaped nonsense for
-    every German sentence, and the model would never see the German."""
+    """A recogniser told to expect English would return English-shaped
+    nonsense for every German answer to "shall I?"."""
     write(tmp_path, "en", '[stt]\nlanguage = "en"\n')
 
     assert load("de", directory=tmp_path).stt_language == "de"
@@ -318,9 +318,9 @@ def test_the_language_windows_is_in_can_be_asked_for() -> None:
 def test_no_shipped_pack_writes_a_recogniser_prompt_of_its_own() -> None:
     """There was a `[stt] prompt` here - a sentence with the installed apps'
     names in it - while every sentence the user spoke went through the local
-    decoder. The live model hears those, so the prompt is built from the words
-    of the confirmation window instead (`app.confirm_prompt`), and a key that
-    fed nothing would have translators filling it in for years."""
+    decoder. That decoder is gone (D36) and Google's recogniser is told the
+    language alone, so a key that fed nothing would have translators filling
+    it in for years."""
     for path in shipped():
         assert "prompt" not in read(path).get("stt", {}), path.name
 
@@ -511,3 +511,46 @@ def test_hints_of_the_wrong_shape_are_no_hints(tmp_path: Path) -> None:
     assert load("de", directory=tmp_path).language_code == ""
     assert load("de", directory=tmp_path).user_language_rule == ""
     assert load("fr", directory=tmp_path).language_code == ""
+
+
+# --------------------------------------------------------------------------
+# The questions a tool asks first (2026-09-26)
+# --------------------------------------------------------------------------
+
+# The five sentences read aloud before a `confirm` tool runs. `purge_confirm`
+# is not one of them: it is typed at a terminal, not said.
+SPOKEN_QUESTIONS = (
+    "forget_confirm",
+    "note_delete_confirm",
+    "reminder_cancel_confirm",
+    "store_install_confirm",
+    "send_message_confirm",
+)
+
+
+def spoken_questions() -> list[tuple[str, str, tuple[str, ...]]]:
+    """Every spoken question as each language says it - the pack's, else the
+    English constant beside the tool - with that language's no words."""
+    found = []
+    for code in ("en", "tr"):
+        pack = load(code)
+        _, no = app.confirm_words(pack)
+        for key in SPOKEN_QUESTIONS:
+            found.append((f"{code}:{key}", pack.say(key, SENTENCES[key]), no))
+    return found
+
+
+def test_every_spoken_question_is_a_question() -> None:
+    """The owner heard "... gönderilecek." and was expected to know it was a
+    question. Each one now asks: "... göndereyim mi?"."""
+    for name, sentence, _ in spoken_questions():
+        assert sentence.rstrip().endswith("?"), name
+
+
+def test_no_spoken_question_holds_a_word_that_answers_no() -> None:
+    """ "... hatırlatıcısı iptal edilecek." invited "evet, iptal et" - and
+    "iptal" is a no word, which wins over the yes beside it. A question may
+    not put a no in the user's mouth."""
+    for name, sentence, no in spoken_questions():
+        heard = app.read_answer(f"evet yes {sentence}", yes=("evet", "yes"), no=no)
+        assert heard is True, name

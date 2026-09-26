@@ -161,13 +161,13 @@ def test_a_sentence_the_pack_leaves_out_is_still_said(screen: Screen) -> None:
     assert TEXT["state_speaking"] in str(screen)
 
 
-def test_the_speech_model_is_loading_before_it_can_say_anything_else(screen: Screen) -> None:
-    """Whisper takes seconds to load. A blank terminal during them reads as a
-    program that failed to start."""
+def test_the_start_is_said_before_anything_else_can_be(screen: Screen) -> None:
+    """The apps, the detector and the wake word take seconds to load. A blank
+    terminal during them reads as a program that failed to start."""
     with line(screen) as status:
         status.starting()
 
-    assert TEXT["loading_speech"] in str(screen)
+    assert TEXT["starting_up"] in str(screen)
 
 
 def test_the_model_is_being_checked_before_anything_else_loads(screen: Screen) -> None:

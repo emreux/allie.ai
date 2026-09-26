@@ -147,18 +147,28 @@ class Desktop(Protocol):
 
 WM_CLOSE = 0x0010
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-KEYEVENTF_KEYUP = 0x0002
+SW_SHOWNOACTIVATE = 4
 GW_OWNER = 4
 GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
 
-# UI Automation, for `text_boxes`: the property and control-type ids from
-# `UIAutomationClient.h`, and the scope that means "everything below".
+# UI Automation, for `text_boxes` and `click_send`: the property, control
+# type and pattern ids from `UIAutomationClient.h`, and the scope that
+# means "everything below".
 UIA_CONTROL_TYPE = 30003
+UIA_NAME = 30005
 UIA_VALUE = 30045
 UIA_DOCUMENT = 50030
 UIA_EDIT = 50004
+UIA_BUTTON = 50000
+UIA_INVOKE_PATTERN = 10000
 UIA_DESCENDANTS = 4
+
+# What WhatsApp's page calls its Send button, by the language of the
+# Windows it runs on: "Send" measured on the owner's English Windows
+# (2026-09-26), "Gönder" for a Turkish one. A name not listed leaves the
+# message waiting in the chat, and the user is told so.
+SEND_NAMES = ("Send", "Gönder")
 _EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 
@@ -190,7 +200,8 @@ class Win32Desktop:
         self._user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
         self._user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
         self._user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
-        self._user32.GetForegroundWindow.restype = wintypes.HWND
+        self._user32.IsIconic.argtypes = [wintypes.HWND]
+        self._user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
         self._kernel32.OpenProcess.restype = wintypes.HANDLE
         self._kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         self._kernel32.QueryFullProcessImageNameW.argtypes = [
@@ -277,28 +288,6 @@ class Win32Desktop:
         finally:
             self._kernel32.CloseHandle(process)
 
-    def foreground_image(self) -> str | None:
-        """The file name of the program whose window is in front -
-        `WhatsApp.exe` - or `None` when there is none, or it cannot be asked.
-
-        Added for `messaging/whatsapp.py` (2026-09-15), which presses a key
-        only when this names the application it means to press it in.
-        """
-        handle = self._user32.GetForegroundWindow()
-        if not handle:
-            return None
-        pid = wintypes.DWORD()
-        self._user32.GetWindowThreadProcessId(handle, ctypes.byref(pid))
-        image = self._image_of(pid.value)
-        return None if image is None else Path(image).name
-
-    def press(self, code: int) -> None:
-        """One press and release of the key `code`, as the keyboard sends it -
-        the three lines `tools/media.py` presses the media keys with, kept
-        there as that module's own test seam."""
-        self._user32.keybd_event(code, 0, 0, 0)
-        self._user32.keybd_event(code, 0, KEYEVENTF_KEYUP, 0)
-
     def text_boxes(self, handle: int) -> list[str] | None:
         """What the text boxes of the web page inside the window `handle`
         hold, or `None` when there is no page to read.
@@ -344,6 +333,81 @@ class Win32Desktop:
         except (comtypes.COMError, ValueError) as failure:
             # The window went, or an element did between two calls.
             logger.debug("the page in window {} could not be read: {}", handle, failure)
+            return None
+        finally:
+            comtypes.CoUninitialize()
+
+    def show(self, handle: int) -> None:
+        """Brings the minimised window `handle` back, without taking the
+        focus from whatever has it; a window that is not minimised is left
+        as it is.
+
+        Added for `messaging/whatsapp.py` (2026-09-26): a minimised
+        WhatsApp's page applied neither the link nor the Send button until
+        it was shown again. Unlike focus, showing a window is not something
+        Windows refuses a background program.
+        """
+        if self._user32.IsIconic(handle):
+            self._user32.ShowWindow(handle, SW_SHOWNOACTIVATE)
+
+    def click_send(self, handle: int, text: str) -> bool | None:
+        """Presses the Send button of the page in window `handle`, when its
+        chat box holds exactly `text`: whether it was pressed, or `None`
+        when there is no page to read.
+
+        Added for `messaging/whatsapp.py` (2026-09-26), which used to press
+        Enter: WhatsApp 2.2637.100.0 keeps the keyboard in its WinUI shell,
+        and an Enter reached nothing even with the focus put in the box.
+        The button is found by its name (`SEND_NAMES`) and pressed through
+        its Invoke pattern - measured: the box empties 0.1 s later, from
+        the tray and under other windows alike. The box is read again here,
+        in the same page, right before the press: what goes is what the
+        user confirmed, or nothing does.
+        """
+        import comtypes
+        import comtypes.client
+
+        comtypes.CoInitialize()
+        try:
+            comtypes.client.GetModule("UIAutomationCore.dll")
+            from comtypes.gen import UIAutomationClient
+
+            automation = comtypes.client.CreateObject(
+                UIAutomationClient.CUIAutomation, interface=UIAutomationClient.IUIAutomation
+            )
+            page = automation.ElementFromHandle(handle).FindFirst(
+                UIA_DESCENDANTS, automation.CreatePropertyCondition(UIA_CONTROL_TYPE, UIA_DOCUMENT)
+            )
+            if not page:
+                return None
+            edits = page.FindAll(
+                UIA_DESCENDANTS, automation.CreatePropertyCondition(UIA_CONTROL_TYPE, UIA_EDIT)
+            )
+            wanted = text.strip()
+            held = (
+                str(edits.GetElement(index).GetCurrentPropertyValue(UIA_VALUE) or "").strip()
+                for index in range(edits.Length)
+            )
+            if wanted not in held:
+                return False
+            named = automation.CreateOrConditionFromArray(
+                [automation.CreatePropertyCondition(UIA_NAME, name) for name in SEND_NAMES]
+            )
+            button = page.FindFirst(
+                UIA_DESCENDANTS,
+                automation.CreateAndCondition(
+                    automation.CreatePropertyCondition(UIA_CONTROL_TYPE, UIA_BUTTON), named
+                ),
+            )
+            if not button:
+                return False
+            button.GetCurrentPattern(UIA_INVOKE_PATTERN).QueryInterface(
+                UIAutomationClient.IUIAutomationInvokePattern
+            ).Invoke()
+            return True
+        except (comtypes.COMError, ValueError) as failure:
+            # The window went, or an element did between two calls.
+            logger.debug("the Send button in window {} could not be pressed: {}", handle, failure)
             return None
         finally:
             comtypes.CoUninitialize()

@@ -5,6 +5,7 @@ built; `TelethonClient` is only imported.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import ClassVar
 
 import pytest
@@ -145,8 +146,22 @@ async def test_a_username_the_list_lacks_is_asked_of_telegram() -> None:
     zeynep = Person(id=9, name="Zeynep Z", username="zeynep_z", phone="")
     client = FakeClient(AHMET, resolvable={"zeynep_z": zeynep})
 
-    assert await Telegram(BOOK, client=client).resolve("Zeynep") == zeynep
+    assert await Telegram(BOOK, client=client).resolve("Zeynep") == replace(zeynep, name="Zeynep")
     assert client.resolved == ["zeynep_z"]
+
+
+async def test_a_person_found_through_the_book_is_named_as_the_book_names_them() -> None:
+    """2026-09-26: the gate's question reads this name, and the send looks
+    it up again by it - so it is the book's, the name the user calls them
+    and the one that finds the same person again, not Telegram's spelling."""
+    zeynep = Person(id=9, name="Zeynep Z", username="zeynep_z", phone="")
+    channel = Telegram(BOOK, client=FakeClient(AHMET, resolvable={"zeynep_z": zeynep}))
+
+    found = await channel.resolve("Zeynep")
+
+    assert found is not None
+    assert (found.id, found.name) == (9, "Zeynep")
+    assert await channel.resolve(found.name) == found
 
 
 async def test_a_username_nobody_has_is_a_sentence_naming_it() -> None:

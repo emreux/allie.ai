@@ -62,10 +62,8 @@ class Locale:
     # (design.md 3.1 rule 2). They fall back the way sentences do, not the
     # way identity does: a pack without them gets the English words beside
     # the code that listens (`app.py`), together with the English hint that
-    # tells the user which words to say - so the two always agree. They are
-    # also what the recogniser of that window is told to expect
-    # (`app.confirm_prompt`): since 2026-09-22 there is no separate
-    # `[stt] prompt`, because a live product's recogniser hears nothing else.
+    # tells the user which words to say - so the two always agree. The
+    # recogniser is told none of them (D36): only `stt_language`.
     yes_words: tuple[str, ...] = ()
     no_words: tuple[str, ...] = ()
 

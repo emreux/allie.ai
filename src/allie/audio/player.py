@@ -130,8 +130,8 @@ class SystemSpeaker:
         try:
             # Pulled one at a time, and only while nothing has said stop. An
             # `async for` would ask the engine for the next sentence before it
-            # got to look at the flag, and synthesising a sentence nobody will
-            # ever hear is a fifth of a second of the four cores Whisper wants.
+            # got to look at the flag, and reading a sentence nobody will ever
+            # hear is a round trip to the reader's session for nothing.
             while not self._stopped.is_set():
                 buffer = await anext(buffers, None)
                 if buffer is None:

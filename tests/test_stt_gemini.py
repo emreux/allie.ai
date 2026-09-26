@@ -1,4 +1,4 @@
-"""Google's recogniser behind the same protocol as the local one (on trial).
+"""Google's recogniser: the one that hears the yes or no of the gate's window (D36).
 
 Nothing here talks to Google: the client is a fake whose live session
 records what was sent and answers with the SDK's own message types, so what
@@ -11,6 +11,7 @@ what comes back, including nothing at all. The real thing is measured by
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -82,23 +83,6 @@ class FakeClient:
     @property
     def aio(self) -> FakeClient:
         return self
-
-
-class FakeFallback:
-    """The engine behind Google's: asked when Google could not be."""
-
-    id = "local"
-
-    def __init__(self) -> None:
-        self.asked: list[tuple[Audio, str | None]] = []
-        self.loaded = 0
-
-    async def load(self) -> None:
-        self.loaded += 1
-
-    async def transcribe(self, pcm: Audio, *, hint: str | None = None) -> Transcript:
-        self.asked.append((pcm, hint))
-        return Transcript(text="yedekten", language=hint or "")
 
 
 def final(text: str, *, language: str | None = None) -> types.LiveServerMessage:
@@ -347,24 +331,28 @@ def test_the_provider_satisfies_the_protocol() -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_a_refused_session_goes_to_the_fallback_with_the_same_audio() -> None:
-    """A bad key closes the socket with an `APIError` (measured); the quota
-    of the batch model would too. Neither is the user's problem (spec A3)."""
-    fallback = FakeFallback()
-    stt, client = gemini(fallback=fallback)
+def missed(transcript: Transcript) -> bool:
+    """Empty with no opinion: `hear()` asks for a repeat rather than staying
+    silent - the words were there, the engine was not."""
+    return transcript == Transcript(text="", language="tr") and hear(transcript) == Heard(
+        missed=True
+    )
+
+
+async def test_a_refused_session_is_one_line_in_the_log_and_a_missed_answer() -> None:
+    """A bad key closes the socket with an `APIError` (measured); a quota
+    would too. Nothing stands behind Google since D36: the window asks again."""
+    stt, client = gemini()
     client.live.refusal = QUOTA
-    pcm = tone()
     lines: list[str] = []
     handle = logger.add(lines.append, level="WARNING", format="{message}")
 
     try:
-        transcript = await stt.transcribe(pcm, hint="tr")
+        transcript = await stt.transcribe(tone(), hint="tr")
     finally:
         logger.remove(handle)
 
-    assert transcript.text == "yedekten"
-    asked, hint = fallback.asked[0]
-    assert asked is pcm and hint == "tr"
+    assert missed(transcript)
     assert [line.strip() for line in lines] == [
         "recogniser gemini-3.5-transcribe-live failed: 429 You exceeded your current quota. "
         "* Quota exceeded for metric: generate_content_free_tier_requests, limit: 25, "
@@ -372,77 +360,51 @@ async def test_a_refused_session_goes_to_the_fallback_with_the_same_audio() -> N
     ]
 
 
-async def test_a_dropped_socket_goes_to_the_fallback() -> None:
-    fallback = FakeFallback()
-    stt, client = gemini(fallback=fallback)
+async def test_a_dropped_socket_is_a_missed_answer() -> None:
+    stt, client = gemini()
     client.live.answers = [ConnectionClosedError(None, None)]
 
-    transcript = await stt.transcribe(tone(), hint="tr")
-
-    assert transcript.text == "yedekten"
-    assert len(fallback.asked) == 1
+    assert missed(await stt.transcribe(tone(), hint="tr"))
 
 
-async def test_a_host_that_does_not_resolve_goes_to_the_fallback() -> None:
-    fallback = FakeFallback()
-    stt, client = gemini(fallback=fallback)
+async def test_a_host_that_does_not_resolve_is_a_missed_answer() -> None:
+    stt, client = gemini()
     client.live.refusal = OSError("[Errno 11001] getaddrinfo failed")
 
-    transcript = await stt.transcribe(tone(), hint="tr")
-
-    assert transcript.text == "yedekten"
+    assert missed(await stt.transcribe(tone(), hint="tr"))
 
 
-async def test_an_answer_that_does_not_come_in_time_goes_to_the_fallback() -> None:
-    fallback = FakeFallback()
-    stt, client = gemini(fallback=fallback, timeout_seconds=0.05)
+async def test_an_answer_that_does_not_come_in_time_is_a_missed_answer() -> None:
+    stt, client = gemini(timeout_seconds=0.05)
     client.live.answers = [final("too late")]
     client.live.gaps = 0.5
 
     started = time.perf_counter()
     transcript = await stt.transcribe(tone(), hint="tr")
 
-    assert transcript.text == "yedekten"
+    assert missed(transcript)
     assert time.perf_counter() - started < 0.4
 
 
-async def test_without_a_fallback_a_failure_is_an_empty_transcript_not_an_error() -> None:
-    """Empty with no opinion: `hear()` asks for a repeat rather than staying
-    silent - the words were there, the engine was not."""
-    stt, client = gemini()
-    client.live.refusal = QUOTA
-
-    transcript = await stt.transcribe(tone(), hint="tr")
-
-    assert transcript == Transcript(text="", language="tr")
-    assert hear(transcript) == Heard(missed=True)
-
-
 async def test_a_bug_is_not_swallowed() -> None:
-    stt, client = gemini(fallback=FakeFallback())
+    stt, client = gemini()
     client.live.answers = [RuntimeError("bug")]
 
     with pytest.raises(RuntimeError, match="bug"):
         await stt.transcribe(tone())
 
 
+def test_nothing_stands_behind_google_any_more() -> None:
+    """D36 (2026-09-26): the local recogniser is gone, and with it the
+    engine this one used to fall back on."""
+    with pytest.raises(TypeError):
+        GeminiSTT("AIza-not-a-key", client=FakeClient(), fallback=object())  # type: ignore[call-arg]
+    assert importlib.util.find_spec("allie.stt.local_whisper") is None
+
+
 # --------------------------------------------------------------------------
-# Loading, and the stream
+# The stream
 # --------------------------------------------------------------------------
-
-
-async def test_loading_loads_the_fallback() -> None:
-    fallback = FakeFallback()
-    stt, _ = gemini(fallback=fallback)
-
-    await stt.load()
-
-    assert fallback.loaded == 1
-
-
-async def test_loading_without_a_fallback_is_quiet() -> None:
-    stt, _ = gemini()
-    await stt.load()
 
 
 async def test_the_whole_utterance_goes_over_as_one_transcript() -> None:

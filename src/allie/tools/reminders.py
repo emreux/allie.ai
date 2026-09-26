@@ -48,7 +48,7 @@ __all__ = [
 # The last link of the chain of section 3.12 for the one sentence a user
 # hears from these tools. `{text}` is the reminder as the user gave it.
 TEXT: dict[str, str] = {
-    "reminder_cancel_confirm": "The reminder '{text}' will be cancelled.",
+    "reminder_cancel_confirm": "Shall I remove the reminder '{text}'?",
 }
 
 # A reminder is said out loud, so it is a sentence.

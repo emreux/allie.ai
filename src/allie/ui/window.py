@@ -150,7 +150,7 @@ TEXT: dict[str, str] = {
 
 # What the status line and the tray already say, borrowed under their keys.
 STATUS_KEYS = (
-    "loading_speech",
+    "starting_up",
     "checking_model",
     "session_open",
     "session_closed",
@@ -443,7 +443,7 @@ class Window:
     # -- Screen (ui/status.py), called on the loop ----------------------------
 
     def starting(self) -> None:
-        self._post(("phase", "loading_speech"))
+        self._post(("phase", "starting_up"))
 
     def checking_model(self) -> None:
         self._post(("phase", "checking_model"))

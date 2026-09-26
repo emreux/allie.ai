@@ -880,8 +880,8 @@ _DEFAULT_ALIASES = frozenset({"Microsoft Sound Mapper - Input", "Primary Sound C
 
 def available_microphones() -> Microphones:
     """Every input device, once per host API - kept apart on purpose, since the
-    same microphone reaches Whisper differently through each (README: "which
-    microphone path, measured")."""
+    same microphone reaches the model differently through each (README:
+    "which microphone path, measured")."""
     # Imported here rather than at module scope: it loads PortAudio's native
     # library, which most of the program has no use for. It ships no type
     # information either - said once, on this first import of the module,

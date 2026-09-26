@@ -43,7 +43,7 @@ from loguru import logger
 from allie import app
 from allie.agent.core import Confirm, ToolRunner
 from allie.agent.limits import Limits
-from allie.agent.policy import DECLINED, dispatch
+from allie.agent.policy import DECLINED, UNHEARD, dispatch
 from allie.announce.queue import AnnounceQueue
 from allie.app import (
     CONFIRM_WINDOW_SECONDS,
@@ -1376,17 +1376,55 @@ async def test_the_model_is_told_the_user_declined() -> None:
     assert [content for _, content in room.results] == [DECLINED]
 
 
-async def test_silence_in_the_window_is_a_no() -> None:
+async def test_silence_in_the_window_runs_nothing_and_is_not_asked_again() -> None:
     """Six seconds of nothing is the safe side (section 3.1 rule 2), and
-    not worth asking again: nobody was there to hear the second question."""
+    not worth asking again: nobody was there to hear the second question.
+    But it is not a no (2026-09-26): the model is told nobody was heard,
+    so that it does not say "you declined" to a user who said "evet"."""
     capture = FakeCapture()
     tts = FakeTTS()
+    room = wants_spotify()
 
-    await one_turn(asking(capture=capture, stt=says(), tts=tts), capture)
+    await one_turn(asking(room, capture=capture, stt=says(), tts=tts), capture)
 
     assert ran == []
     assert capture.windows == [CONFIRM_WINDOW_SECONDS]
     assert TURKISH.ui["confirm_again"] not in tts.said
+    assert [content for _, content in room.results] == [UNHEARD]
+
+
+async def test_what_the_window_heard_is_one_line_in_the_log() -> None:
+    """Item 2 of 2026-09-26: three declines that evening left no trace of
+    what had been heard. Now each answer is one line - the words, and what
+    they were taken for."""
+    capture = FakeCapture(answers=[speech(), speech()])
+    lines: list[str] = []
+    handle = logger.add(lines.append, level="INFO", format="{message}")
+
+    try:
+        await one_turn(asking(capture=capture, stt=says("belki", "Evet.")), capture)
+    finally:
+        logger.remove(handle)
+
+    heard = [line.strip() for line in lines if line.startswith("confirm answer")]
+    assert heard == [
+        "confirm answer: 'belki' -> neither",
+        "confirm answer: 'Evet.' -> yes",
+    ]
+
+
+async def test_silence_is_one_line_in_the_log_as_well() -> None:
+    capture = FakeCapture()
+    lines: list[str] = []
+    handle = logger.add(lines.append, level="INFO", format="{message}")
+
+    try:
+        await one_turn(asking(capture=capture, stt=says()), capture)
+    finally:
+        logger.remove(handle)
+
+    heard = [line.strip() for line in lines if line.startswith("confirm answer")]
+    assert heard == [f"confirm answer: nothing within {CONFIRM_WINDOW_SECONDS:.0f} s"]
 
 
 async def test_an_answer_with_neither_word_is_asked_about_once_more() -> None:
@@ -1400,13 +1438,15 @@ async def test_an_answer_with_neither_word_is_asked_about_once_more() -> None:
     assert tts.said[2] == TURKISH.ui["confirm_again"]
 
 
-async def test_two_answers_with_neither_word_are_a_no() -> None:
+async def test_two_answers_with_neither_word_run_nothing_and_count_as_unheard() -> None:
     capture = FakeCapture(answers=[speech(), speech()])
+    room = wants_spotify()
 
-    await one_turn(asking(capture=capture, stt=says("belki", "olabilir")), capture)
+    await one_turn(asking(room, capture=capture, stt=says("belki", "olabilir")), capture)
 
     assert ran == []
     assert len(capture.windows) == 2
+    assert [content for _, content in room.results] == [UNHEARD]
 
 
 async def test_speech_that_could_not_be_read_is_asked_about_once_more() -> None:

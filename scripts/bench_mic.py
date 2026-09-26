@@ -15,7 +15,7 @@ into the microphone loudly enough to be taken for a question.
     uv run python scripts/bench_mic.py --takes          # record the fixtures, a sentence at a time
 
 `--all` is the one to run. It walks through the room, one distance, another
-distance and the echo, waits for you between them, loads Whisper once, and
+distance and the echo, waits for you between them, and
 prints the four side by side at the end - which is the only way any of these
 numbers mean anything.
 
@@ -24,12 +24,10 @@ from its name, or an index, defaulting to `[audio] input_device` in the
 settings - so what is measured here is the microphone the assistant will
 actually listen through. `--list-devices` prints the choices.
 
-**A level is not an answer.** The detector saying "speech" and Whisper reading
-the words are two different claims, and it is the second one that decides
-whether the assistant is usable from across the room. So a take is transcribed
-as well as measured, unless `--no-read` says otherwise, and the recording is
-judged the way `app.py` judges one: by whether anything was said in it, not by
-how sure the decoder was of the words.
+**Levels only.** Until 2026-09-26 a take was also read back by the local
+recogniser. That recogniser is gone (plan.md D36) - nothing on this machine
+turns speech into text any more - so this measures what the detector hears,
+and whether the words are understood is the live model's question.
 
 **Nothing heard is not the same as nothing to hear.** `--echo` asks the
 detector, not the average level: an answer is a few seconds of sound inside a
@@ -75,11 +73,9 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 
-from allie.app import Heard, hear
 from allie.audio.capture import (
     ECHO_TAIL_SECONDS,
     MicrophoneUnavailableError,
@@ -93,10 +89,7 @@ from allie.audio.vad import (
     Endpoint,
     SileroVAD,
 )
-from allie.stt.base import NO_SPEECH_CEILING, SAMPLE_RATE, Audio, Transcript
-
-if TYPE_CHECKING:
-    from allie.stt.local_whisper import LocalWhisper
+from allie.stt.base import SAMPLE_RATE, Audio
 
 SPOKEN = "Bir, iki, üç. Bu cümle mikrofonun ne duyduğunu ölçmek için okunuyor."
 
@@ -125,27 +118,7 @@ class Take:
     loudest: float = 0.0
     speaking: int = 0
     frames: int = 0
-    transcript: str = ""
-    confidence: float | None = None
-    no_speech: float | None = None
-    read: bool = False
     heard: list[float] = field(default_factory=list)
-
-    @property
-    def verdict(self) -> Heard:
-        """What `app.py` would have made of this take - the same function, not a copy."""
-        return hear(
-            Transcript(
-                text=self.transcript,
-                confidence=self.confidence,
-                no_speech_probability=self.no_speech,
-            )
-        )
-
-    @property
-    def answered(self) -> bool:
-        """Whether `app.py` would have answered this turn rather than dropping it."""
-        return bool(self.verdict.text)
 
 
 def record(seconds: float, *, device: int | str | None = None) -> Audio:
@@ -213,7 +186,7 @@ def measure(pcm: Audio, *, label: str) -> Take:
 
 
 def verdict(take: Take, *, quiet: bool) -> None:
-    """What the levels mean for the detector. Not what they mean for Whisper."""
+    """What the levels mean for the detector."""
     if quiet:
         if take.loudest >= SPEECH_THRESHOLD:
             print("\n  The empty room already reads as speech. Hands-free would open")
@@ -230,69 +203,6 @@ def verdict(take: Take, *, quiet: bool) -> None:
         print("\n  It triggers, but with no margin. Expect missed sentences from here.")
     else:
         print("\n  The detector is comfortable from this distance.")
-
-
-async def whisper() -> LocalWhisper:
-    """The recogniser, loaded once however many takes are read back."""
-    from allie.stt.local_whisper import LocalWhisper
-
-    speech = LocalWhisper()
-    await speech.load()
-    return speech
-
-
-async def read_back(take: Take, *, language: str, speech: LocalWhisper | None = None) -> None:
-    """What Whisper makes of the take - the claim the levels cannot make.
-
-    A signal the detector is sure about is not a signal the recogniser can
-    read. Section 11's risk is "the microphone does not reach", and reaching
-    means the words come back, not that something was loud enough to notice.
-    """
-    if speech is None:
-        print("\n  Reading it back (Whisper is loading, this takes a few seconds)...")
-        speech = await whisper()
-    else:
-        print("\n  Reading it back...")
-
-    heard = await speech.transcribe(take.pcm, hint=language)
-    take.transcript = heard.text.strip()
-    take.confidence = heard.confidence
-    take.no_speech = heard.no_speech_probability
-    take.read = True
-
-    confidence = "-" if heard.confidence is None else f"{heard.confidence:.2f}"
-    no_speech = "-" if take.no_speech is None else f"{take.no_speech:.2f}"
-    print(f'  transcript: "{take.transcript}"' if take.transcript else "  transcript: (nothing)")
-    language_heard = heard.language or "-"
-    print(f"  confidence: {confidence}   no-speech: {no_speech}   language: {language_heard}")
-
-    # What `app.py` would do, said out loud rather than left for the reader to
-    # work out. The decision is the engine's no-speech estimate against the
-    # ceiling, never the confidence - that number is shown for the microphone
-    # comparison, because a run of low ones is how a bad path is recognised.
-    verdict = take.verdict
-    if verdict.text:
-        print("  The assistant would answer this turn.")
-    elif verdict.missed:
-        print("  Speech was heard and no words came of it: the assistant would say it")
-        print("  did not understand. Not usable from here.")
-    else:
-        print(f"  The engine calls this silence (no-speech {no_speech} against the ceiling")
-        print(f"  of {NO_SPEECH_CEILING}): the assistant would say nothing at all.")
-
-
-def stt_language() -> str:
-    """The language to expect, from the settings if there are any.
-
-    The same chain `allie run` uses. A script that hardcoded one would be
-    the language constant section 3.12 exists to prevent.
-    """
-    from allie import locales
-    from allie.config import is_configured, load_settings
-
-    settings = load_settings()
-    code = settings.locale.code if is_configured() else locales.system_code()
-    return locales.load(code).stt_language
 
 
 def configured_device() -> str:
@@ -388,45 +298,24 @@ def summary(takes: list[Take]) -> None:
     print("\n" + "=" * 78)
     print("SUMMARY")
     print("=" * 78)
-    print(f"{'take':<28} {'peak':>7} {'rms':>9} {'loudest':>8} {'speech':>9} {'answered':>9}")
+    print(f"{'take':<28} {'peak':>7} {'rms':>9} {'loudest':>8} {'speech':>9}")
     for take in takes:
         share = f"{take.speaking}/{take.frames}"
-        answered = "-" if not take.read else ("yes" if take.answered else "NO")
         print(
-            f"{take.label:<28} {take.peak:>7.3f} {take.rms:>9.5f} "
-            f"{take.loudest:>8.3f} {share:>9} {answered:>9}"
+            f"{take.label:<28} {take.peak:>7.3f} {take.rms:>9.5f} {take.loudest:>8.3f} {share:>9}"
         )
 
-    read = [take for take in takes if take.read]
-    if read:
-        print(f"\nWhat was read out: {SPOKEN}")
-        print(f"  {'':<26} {'conf':>5} {'nsp':>5}")
-        for take in read:
-            confidence = "-" if take.confidence is None else f"{take.confidence:.2f}"
-            no_speech = "-" if take.no_speech is None else f"{take.no_speech:.2f}"
-            print(f'  {take.label:<26} {confidence:>5} {no_speech:>5}  "{take.transcript}"')
-
-    print(f"\nThresholds: detector {SPEECH_THRESHOLD}, no-speech ceiling {NO_SPEECH_CEILING}.")
-    print("A take answered NO is one app.py would not have sent to the model: silence")
-    print("gets nothing back, speech that made no words gets 'I did not catch that'.")
+    print(f"\nThreshold: detector {SPEECH_THRESHOLD}.")
 
 
-async def guided(*, seconds: float, device: int | str | None, no_read: bool) -> None:
+async def guided(*, seconds: float, device: int | str | None) -> None:
     """The room, two distances and the echo, in one sitting."""
-    language = stt_language()
     takes: list[Take] = []
 
     ready("First the room: say nothing, and do not type, for two seconds.")
     floor = measure(record(2.0, device=device), label="the room, nobody talking")
     verdict(floor, quiet=True)
     takes.append(floor)
-
-    # Loaded once, before the first distance, so that the pause between the two
-    # takes is the user walking rather than a gigabyte of weights.
-    speech = None
-    if not no_read:
-        print("\nLoading Whisper once, for both distances...")
-        speech = await whisper()
 
     for distance in ("1 m", "2 m"):
         ready(
@@ -435,8 +324,6 @@ async def guided(*, seconds: float, device: int | str | None, no_read: bool) -> 
         )
         take = measure(record(seconds, device=device), label=f"speaking, {distance}")
         verdict(take, quiet=False)
-        if speech is not None:
-            await read_back(take, language=language, speech=speech)
         takes.append(take)
 
     heard = await echo(device=device, floor=floor)
@@ -601,7 +488,7 @@ def fixtures_mode(directory: Path) -> int:
 
 
 def main() -> int:
-    # The transcript below is in whatever language was spoken, and Windows
+    # The sentence below is Turkish, and Windows
     # hands a redirected stream its legacy code page - which has no `ğ` in it.
     # The same fix `allie run` makes, through the same function.
     from allie.__main__ import use_utf8
@@ -627,9 +514,6 @@ def main() -> int:
         "--list-devices",
         action="store_true",
         help="Print the devices sounddevice can see, with their indices, and exit.",
-    )
-    parser.add_argument(
-        "--no-read", action="store_true", help="Skip the transcript, and measure levels only."
     )
     parser.add_argument(
         "--fixtures",
@@ -691,7 +575,7 @@ def main() -> int:
 
 def _measure(args: argparse.Namespace, device: int | str | None) -> int:
     if args.all:
-        asyncio.run(guided(seconds=args.seconds, device=device, no_read=args.no_read))
+        asyncio.run(guided(seconds=args.seconds, device=device))
         return 0
 
     if args.echo:
@@ -707,11 +591,6 @@ def _measure(args: argparse.Namespace, device: int | str | None) -> int:
 
     take = measure(record(args.seconds, device=device), label=label)
     verdict(take, quiet=args.quiet)
-
-    # The levels answered the detector's question. Whisper answers the one the
-    # risk table actually asks, and only a take with words in it has one.
-    if not args.quiet and not args.no_read:
-        asyncio.run(read_back(take, language=stt_language()))
     return 0
 
 

@@ -1,10 +1,10 @@
 """Command line entry point - and the composition root of the program.
 
 `setup` asks the questions of item 1.4 on a machine that has never been set
-up - the assistant, the key, the model, who hears the yes or no, the
-microphone - and after that opens the settings list, each row changed on
-its own (plan.md D32); `mic` asks the microphone again on its own. `run` is item 1.11: it
-puts the pieces together, hands them to the state machine, and shows the one
+up - the assistant, the key, the model, the microphone - and after that
+opens the settings list, each row changed on its own (plan.md D32); `mic`
+asks the microphone again on its own. `run` is item 1.11: it puts the
+pieces together, hands them to the state machine, and shows the one
 line of terminal that is the entire interface until the tray icon of phase
 4.2. `cost` is 2.4: what the turns cost, read back from `usage_log`. `purge --all`
 is 4.6: everything the machine recorded, listed and then deleted after the
@@ -20,27 +20,27 @@ either of them a fake.
 Three things about `run` are decisions rather than plumbing.
 
 **Everything heavy is imported inside the function that needs it.**
-`allie --help` should not load PortAudio, a speech model and a
-vendor SDK to print four lines of help - and `run` should not load the
-wizard's prompt library it will never show.
+`allie --help` should not load PortAudio and a vendor SDK to print four
+lines of help - and `run` should not load the wizard's prompt library it
+will never show.
 
 **`run` wires the live loop of plan.md section 4.1.** The model speaks for
 itself over one session at a time (`app.py`), so what `_talk` builds is the
 doorman and the microphone stream (`audio/capture.py`), the tool round
-(`agent/core.py`) behind the one gate, the local recogniser and the
+(`agent/core.py`) behind the one gate, Google's recogniser and the
 assistant's reading voice that serve the gate window and the reminders (D3,
-D4, D10, D32), and what a session is
+D4, D10, D32, D36), and what a session is
 opened with - the prompt with the pack's language rule, the user's facts and
 the time, the tools, the pack's language code, the `[live]` knobs - read
 afresh at every open, since the facts and the time move.
 
 **Starting up fails in sentences.** A machine nobody has run setup on, a key
 that has since been deleted from the Credential Manager, a voice that is not
-installed, a speech model that could not be fetched, a microphone that would
-not open: these are things the user can fix, and each gets a sentence and an
-exit code - the first two before anything slow is loaded. Anything else is a
-bug in this project and comes out as a traceback, for the same reason `app.py`
-refuses to say "I could not connect" about one.
+installed, a microphone that would not open: these are things the user can
+fix, and each gets a sentence and an exit code - the first two before
+anything slow is loaded. Anything else is a bug in this project and comes
+out as a traceback, for the same reason `app.py` refuses to say "I could
+not connect" about one.
 
 **The terminal is told to speak UTF-8 first.** A redirected stream gets the
 machine's legacy code page from Windows, which has no `ş` and no `ğ` in it -
@@ -201,10 +201,8 @@ DOCTOR_TEXT: dict[str, str] = {
         "  tool calling: FAILED, checked {days} days ago - most tools will not work"
     ),
     "doctor_verdict_none": "  tool calling: not checked yet (checked at the next start)",
-    "doctor_stt_local": "  recogniser: Whisper '{size}', on this machine",
-    "doctor_stt_gemini": "  recogniser: Google ({model}), Whisper '{size}' behind it",
+    "doctor_stt_gemini": "  recogniser: Google ({model})",
     "doctor_leaves": "What leaves this machine",
-    "doctor_voice_stays": "  your voice: stays here",
     "doctor_voice_goes": "  your voice: goes to Google (the recogniser)",
     "doctor_text_goes": "  what you said, as text: goes to {provider}",
     "doctor_content_goes": "  pages, clipboard text and mail you ask about: go to {provider}",
@@ -457,7 +455,7 @@ def _doctor() -> int:
     machine and for where - the sentence the README makes, checked against
     the settings actually in force; where every file is; how many tools
     there are; the limits. Everything is read, nothing is loaded and nothing
-    is connected to: no Whisper, no microphone, no request to any provider.
+    is connected to: no microphone, no request to any provider.
     A key is reported as stored or not, and never shown, the way
     `describe_myself` of section 10 has it: named fields, not a dump.
     """
@@ -472,7 +470,7 @@ def _doctor() -> int:
     from allie.store.db import database_path, open_database
     from allie.store.memory import MemoryFileError, UserMemory, memory_path
     from allie.store.repos import SettingsRepo
-    from allie.stt.local_whisper import DEFAULT_MODEL_SIZE
+    from allie.stt.gemini_stt import DEFAULT_MODEL as RECOGNISER
     from allie.tools.local import load_local_tools, local_tools_dir
     from allie.tools.mail import MAIL_ENTRY
 
@@ -524,15 +522,12 @@ def _doctor() -> int:
         say("doctor_verdict_ok", days=age)
     else:
         say("doctor_verdict_failed", days=age)
-    if settings.stt.provider == "gemini":
-        say("doctor_stt_gemini", model=settings.stt.model, size=DEFAULT_MODEL_SIZE)
-    else:
-        say("doctor_stt_local", size=DEFAULT_MODEL_SIZE)
+    say("doctor_stt_gemini", model=RECOGNISER)
 
     # What leaves this machine.
     lines.append("")
     say("doctor_leaves")
-    say("doctor_voice_goes" if settings.stt.provider == "gemini" else "doctor_voice_stays")
+    say("doctor_voice_goes")
     say("doctor_text_goes", provider=provider_name)
     say("doctor_content_goes", provider=provider_name)
     say("doctor_weather")
@@ -830,7 +825,6 @@ def _run(*, device: str | None = None, tray: bool = False, terminal: bool = Fals
     from allie.logs import setup_logging
     from allie.messaging.contacts import ContactsFileError
     from allie.store.memory import MemoryFileError
-    from allie.stt.local_whisper import ModelUnavailableError
     from allie.tools.messaging import BadDefaultAppError
 
     settings = load_settings()
@@ -852,8 +846,8 @@ def _run(*, device: str | None = None, tray: bool = False, terminal: bool = Fals
         return _GAVE_UP
 
     setup_logging()
-    # What the user can fix and the program cannot: a key that is gone,
-    # weights that could not be fetched, a microphone that would not open, a
+    # What the user can fix and the program cannot: a key that is gone, a
+    # microphone that would not open, a
     # memory file edited into something that does not parse, a wake-word
     # model that is not where the settings say. Each is one sentence and
     # exit code 1. Anything else is a bug in this project and keeps its
@@ -861,7 +855,6 @@ def _run(*, device: str | None = None, tray: bool = False, terminal: bool = Fals
     fixable = (
         RegistryError,
         WakeModelMissingError,
-        ModelUnavailableError,
         MicrophoneUnavailableError,
         MemoryFileError,
         ContactsFileError,
@@ -1076,7 +1069,7 @@ async def _talk(
     from allie.agent.core import ToolRunner
     from allie.agent.limits import Limits
     from allie.announce.queue import AnnounceQueue
-    from allie.app import LiveAssistant, confirm_prompt
+    from allie.app import LiveAssistant
     from allie.assistants import threshold_for
     from allie.audio.capture import LiveCapture, SystemMicrophone
     from allie.audio.player import SystemSpeaker
@@ -1103,7 +1096,6 @@ async def _talk(
     )
     from allie.store.retention import blank_old_audit_summaries
     from allie.stt.gemini_stt import GeminiSTT
-    from allie.stt.local_whisper import LocalWhisper
     from allie.tools import mail as mail_tools
     from allie.tools import memory as memory_tools
     from allie.tools import messaging as messaging_tools
@@ -1142,11 +1134,11 @@ async def _talk(
     # First, and before anything slow: a provider that cannot be built is the
     # likeliest thing to be wrong, and the cheapest to find out about. The
     # database is next for the same reason - cheap, and a disk that refuses
-    # is better found out about before Whisper has been loaded.
+    # is better found out about before anything slow is loaded.
     live = settings.live
     provider = create_provider(live.provider, base_url=live.base_url or None)
     # The wake word (D21), resolved before anything slow is loaded: a model
-    # that is not there is a sentence now, not after Whisper. The threshold
+    # that is not there is a sentence now, not after the apps. The threshold
     # is the user's when they wrote one, else the one the model shipped
     # with (D31).
     wake_word: LiveKitWakeWord | None = None
@@ -1164,6 +1156,18 @@ async def _talk(
     # for the same reason: a `contacts.toml` edited into nonsense - or into
     # two people who answer to one name - is a sentence before anything slow.
     book = AddressBook.load()
+    # Google's key, the Gemini entry of the Credential Manager: it hears the
+    # yes or no of every tool that asks first (D36), looks things up (D29)
+    # and reads the document folders (D35). Nothing on this machine turns
+    # speech into text, so without it no question could ever be answered -
+    # a sentence now, before anything slow and before anything holds a
+    # connection open. The live model's own key, when that is Gemini.
+    google_key = load_api_key("gemini")
+    if not google_key:
+        raise MissingAPIKeyError(
+            "no API key stored for 'gemini', which hears the yes or no of a "
+            "confirmation - run 'allie setup' to add one"
+        )
     database = open_database()
     # What the audit rows still say (section 3.7, 4.6): a summary older
     # than the user's `[retention] audit_days` is blanked here, once per
@@ -1186,40 +1190,27 @@ async def _talk(
     # the weather; how long one may take is the user's `[web]` setting.
     reader = PageReader(seconds=settings.web.timeout_seconds)
     # Looking things up (D29): Google's search through the model the free
-    # key may search with, on the key the Gemini entry is filed under. What
-    # it searched is kept for the screen until the turn ends. No key, no
-    # `look_up` - `search_web` still opens the browser.
-    search_key = load_api_key("gemini")
+    # key may search with. What it searched is kept for the screen until
+    # the turn ends.
     searched = search_module.Searched()
-    search = (
-        search_module.GroundedSearch(
-            search_key, model=settings.web.look_up_model, searched=searched
-        )
-        if search_key
-        else None
+    search = search_module.GroundedSearch(
+        google_key, model=settings.web.look_up_model, searched=searched
     )
-    looking_up = [] if search is None else [look_up_for(search)]
     # X's trends by country (D30): trends24's latest hour over a kept
     # connection, explained by the same search; given back in the same
     # `finally` as the weather and the pages.
     trends = TrendsPage(seconds=settings.web.timeout_seconds)
-    trending = [] if search is None else [x_trends_for(trends, search)]
     # The user's document folders (D35): the root is listed at every open
     # for the prompt and at every call by the two tools; a second model
-    # answers from a folder's files, on the key `look_up` uses. No key, no
-    # tools, no list in the prompt.
+    # answers from a folder's files, on the key `look_up` uses.
     shelf = _documents_shelf(settings.documents)
-    reading_documents = (
-        documents_tools_for(
-            shelf,
-            document_module.DocumentModel(
-                search_key,
-                model=settings.documents.model,
-                seconds=settings.documents.timeout_seconds,
-            ),
-        )
-        if search_key
-        else []
+    reading_documents = documents_tools_for(
+        shelf,
+        document_module.DocumentModel(
+            google_key,
+            model=settings.documents.model,
+            seconds=settings.documents.timeout_seconds,
+        ),
     )
     # The two ways of sending a message (spec of 2026-09-15). WhatsApp is
     # the installed application, asked for at every send; Telegram is the
@@ -1239,34 +1230,18 @@ async def _talk(
         detector = SileroVAD()
 
         # Setup's verdict on the model, refreshed when it is a week old
-        # (section 3.2, 2.6). Before the speech model: one session on
-        # the network, and worth knowing about before two seconds of
-        # loading are spent.
+        # (section 3.2, 2.6). Before the apps: one session on the
+        # network, and worth knowing about before seconds of loading
+        # are spent.
         await _model_checked(provider, settings, SettingsRepo(database), pack, screen)
         screen.starting()
         # The apps this machine can open, read once: a few seconds of
         # files and a PowerShell process, on a thread (2.2).
         catalog = await AppCatalog.load()
-        # The recogniser hears the yes or no of the gate's window and nothing
-        # else (D3, D10), so that is what it is told to expect - the pack's
-        # own words, the ones the window accepts. Until 2026-09-22 it was
-        # told the names of the installed applications instead, 120 tokens of
-        # them, which cost the window most of a second of decode for a bias
-        # towards words it never hears.
-        whisper = LocalWhisper(prompt=confirm_prompt(pack))
-        speech: LocalWhisper | GeminiSTT = whisper
-        if settings.stt.provider == "gemini":
-            # Google first, Whisper loaded behind it for the free tier's
-            # three requests a minute and for the network. The key is
-            # the entry the live model uses when it is Gemini; missing,
-            # it is a sentence before anything slow is loaded.
-            key = load_api_key("gemini")
-            if not key:
-                raise MissingAPIKeyError(
-                    "no API key stored for 'gemini', which [stt] provider names - "
-                    "run 'allie setup' to add one, or set provider = \"local\""
-                )
-            speech = GeminiSTT(key, model=settings.stt.model, fallback=whisper)
+        # Google hears the yes or no of the gate's window and nothing else
+        # (D3, D10, D36): nothing on this machine turns speech into text,
+        # and there is no setting for it.
+        speech = GeminiSTT(google_key)
         # The program's own voice (D3, D4, D10, D32): the live model itself,
         # in the conversation's voice, reading from a session of its own -
         # the gate's questions, the reminders, the filler and the three
@@ -1317,7 +1292,7 @@ async def _talk(
                 open_url,
                 # A question is looked up and answered (D29); the browser
                 # opens only when the user asks to see the search.
-                *looking_up,
+                look_up_for(search),
                 # The engine is the user's (`[web] search_url`).
                 search_web_for(settings.web.search_url),
                 # What was copied, and what a page says: both come back
@@ -1325,7 +1300,7 @@ async def _talk(
                 read_clipboard_for(),
                 fetch_page_for(reader),
                 # What is trending on X, and why (D30).
-                *trending,
+                x_trends_for(trends, search),
                 # The user's document folders, answered from by a second
                 # model (D35).
                 *reading_documents,
@@ -1392,13 +1367,9 @@ async def _talk(
                 *load_local_tools(),
             ]
         )
-        # Loading Whisper takes seconds of four cores. Doing it now rather
-        # than at the first question keeps the first yes or no from
-        # waiting for it (item 1.6). The detector is a tenth of a second
-        # beside it, and is loaded here for the same reason rather than
+        # The detector is a tenth of a second, loaded here rather than
         # inside the first block of audio it is asked about - it is the
         # doorman now (D5), asked about every block.
-        await speech.load()
         await detector.load()
         if wake_word is not None:
             await wake_word.load()
@@ -1458,8 +1429,10 @@ async def _talk(
                 system_prompt=_system_prompt(
                     memory,
                     pack,
-                    web_search=live.web_search or search is not None,
-                    folders=shelf.names() if reading_documents else (),
+                    # `look_up` is always on offer since D36 made the key
+                    # a condition of starting at all.
+                    web_search=True,
+                    folders=shelf.names(),
                 ),
                 tools=runner.specs(),
                 transcripts=live.transcripts,

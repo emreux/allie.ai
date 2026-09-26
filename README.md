@@ -44,10 +44,10 @@ reports what the turns used.
 ## What leaves this machine
 
 While a session is open the microphone streams to Google, and so does the
-model's answer. That is what a live model is. The local recogniser, Whisper on
-the CPU, is left with one job: hearing the yes or no when a tool asks for
-permission. Your API key lives in the Windows Credential Manager and is never
-written to a file or a log.
+model's answer. That is what a live model is. When a tool asks for
+permission, your yes or no goes to Google's recogniser on the same Gemini
+key; nothing on this machine turns speech into text. Your API key lives in
+the Windows Credential Manager and is never written to a file or a log.
 
 ## Not there yet
 

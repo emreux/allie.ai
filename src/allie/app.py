@@ -37,8 +37,8 @@ hands `confirm` the sentence with the real argument values in it; this file
 waits for the model to finish what it was saying, pauses the session's input
 (D3: nothing said in the window reaches the model), reads the question in
 the assistant's voice from a session of its own (D32), tells the user how
-to answer, and opens the local
-recogniser's microphone for six seconds. A "no" anywhere in the answer wins
+to answer, and opens the microphone for six seconds; Google's recogniser
+reads what was said (D36). A "no" anywhere in the answer wins
 over a "yes"; silence is a no, and so is a voice or the switch while the
 question is still being read; an answer with neither word in it is asked
 about once more, and a second such answer is a no as well. The exchange
@@ -83,14 +83,14 @@ is a bug in this project, and swallowing it into "I could not connect" is
 how it would never get fixed: it comes out of `run` as the exception it is.
 
 **A recording is judged by whether it held speech, never by how sure the
-decoder was of its words.** Whisper answers a recording of silence with
-confident looking words, and answers a correct single word with unsure ones:
-measured on the owner's machine (2026-09-05), a subtitle credit over silence
-scored 0.54 and "Merhaba." alone 0.48, so no confidence floor can separate
-them. The engine's own estimate of whether anything was said does separate
-them (0.86 against 0.06), and `hear` below rests on that and on nothing
-else. In the live product this judgement serves one place: the yes-and-no
-window, which is the one thing the local recogniser still hears.
+decoder was of its words.** The local engine this was measured on
+(2026-09-05; gone since D36) answered silence with confident looking words
+and a correct single word with unsure ones - a subtitle credit over silence
+scored 0.54 and "Merhaba." alone 0.48 - while its own estimate of whether
+anything was said separated them (0.86 against 0.06). Google's recogniser
+says the same thing its own way: no final transcript is "nothing to
+decode". `hear` below rests on that and on nothing else, and serves one
+place: the yes-and-no window.
 
 **No user-facing sentence is written here** (rule 8). The pack answers first
 and the English constants below are the end of the chain, exactly as in the
@@ -154,12 +154,12 @@ __all__ = [
     "RESUME_MINUTES",
     "TEXT",
     "YES_WORDS",
+    "Answer",
     "Capture",
     "Heard",
     "LiveAssistant",
     "State",
     "Turn",
-    "confirm_prompt",
     "confirm_words",
     "hear",
     "read_answer",
@@ -190,6 +190,11 @@ class State(StrEnum):
 # Section 3.1 rule 6. How long the microphone stays open for a yes or a no
 # after the question has been read; what comes after it is a no.
 CONFIRM_WINDOW_SECONDS = 6.0
+
+# How one confirmation window ended (`LiveAssistant._ask`): a word of the
+# pack's, neither word (worth one more question), nothing heard, or the
+# exchange stopped from outside.
+Answer = Literal["yes", "no", "neither", "unheard", "stopped"]
 
 # Shorter than this and it was a noise rather than a word. Below a syllable,
 # so nothing anybody meant to say is thrown away.
@@ -1087,7 +1092,7 @@ class LiveAssistant:
         self._fillers_said += 1
         return chosen
 
-    async def confirm(self, question: str) -> bool:
+    async def confirm(self, question: str) -> bool | None:
         """Asks `question` out loud and listens for a yes (section 3.1 rule 2).
 
         The gate's `Confirm`, run inside the tool's own round. `question`
@@ -1096,11 +1101,14 @@ class LiveAssistant:
         listened for. The model's voice is heard to its end first - it may
         have said "let me check" before it asked - and the session's input
         is paused for the whole exchange (D3), so that the yes never reaches
-        the model: only the tool's result does. Everything that is not a
-        clear yes is a no: silence, a no beside a yes, a voice or the switch
-        while the question is still being read, and two answers with neither
-        word in them. Stopped from outside - the model withdrew the call, or
-        the switch went off - it lets the microphone go on the way out.
+        the model: only the tool's result does. Nothing runs without a clear
+        yes. `False` is a no the user gave: a no word, a no beside a yes, a
+        voice or the switch while the question is still being read. `None`
+        is an answer nobody heard - silence, a noise, two answers with
+        neither word in them - which the gate tells the model apart from a
+        refusal (2026-09-26). Stopped from outside - the model withdrew the
+        call, or the switch went off - it lets the microphone go on the way
+        out.
         """
         await self._playback.drained()
         self._answered()
@@ -1114,26 +1122,33 @@ class LiveAssistant:
             # Two utterances: the question live, with the real values in it,
             # and the hint kept on disk (D32).
             answer = await self._ask(question, self._said["confirm_hint"])
-            if answer is None:
+            if answer == "neither":
                 answer = await self._ask(self._said["confirm_again"])
         finally:
             self._capture.resume()
             self._active()
             if self._state is State.CONFIRMING:
                 self._rest()
-        return answer is True
+        if answer == "yes":
+            return True
+        if answer in ("unheard", "neither"):
+            return None
+        return False
 
-    async def _ask(self, *prompt: str) -> bool | None:
+    async def _ask(self, *prompt: str) -> Answer:
         """Reads `prompt`, opens the window, and reads the answer.
 
-        `None` is "neither word was heard": something was said, or the
-        recogniser could not read it, and it is worth one more try. `False`
-        is every way of not saying yes that is not worth one: silence, a no,
-        the user speaking over the question or switching the assistant off.
+        `neither`: something was said with neither word in it, or the
+        recogniser could not read it - worth one more try. `unheard`:
+        silence, or a noise the recogniser calls nothing - not worth one,
+        nobody was there to hear it. `stopped`: the user spoke over the
+        question, switched the assistant off, or the call was withdrawn.
+        Every answer the window gets is one line in the log: three declines
+        on 2026-09-25 left no trace of what had been heard.
         """
         await self._play(prompt)
         if self._withdrawn():
-            return False
+            return "stopped"
 
         # The window hears: `_play` has already unmuted the microphone on its
         # way out, and the echo tail that left behind counts down before the
@@ -1142,20 +1157,28 @@ class LiveAssistant:
         # microphone around this line as well; on this path it was always
         # open already, and `test_app.py` pins that the window is never deaf.
         pcm = await self._capture.listen_for(CONFIRM_WINDOW_SECONDS)
-        if pcm is None or self._withdrawn():
-            return False
+        if self._withdrawn():
+            return "stopped"
+        if pcm is None:
+            logger.info("confirm answer: nothing within {:.0f} s", CONFIRM_WINDOW_SECONDS)
+            return "unheard"
 
         heard = await self._heard(pcm)
         if not heard.text:
-            return None if heard.missed else False
-        return read_answer(heard.text, yes=self._yes, no=self._no)
+            empty: Answer = "neither" if heard.missed else "unheard"
+            logger.info("confirm answer: no words -> {answer}", answer=empty)
+            return empty
+        verdict = read_answer(heard.text, yes=self._yes, no=self._no)
+        answer: Answer = "yes" if verdict is True else "no" if verdict is False else "neither"
+        logger.info("confirm answer: {text!r} -> {answer}", text=heard.text, answer=answer)
+        return answer
 
     async def _heard(self, pcm: Audio) -> Heard:
         """What the user answered, and what to make of it when they said nothing."""
         if len(pcm) < MIN_UTTERANCE_SECONDS * SAMPLE_RATE:
-            # A noise rather than a word. Transcribing it costs seconds of
-            # four cores, for nothing - and there is nothing here to have
-            # misheard.
+            # A noise rather than a word. Sending it to Google costs a
+            # second and a half, for nothing - and there is nothing here
+            # to have misheard.
             return Heard()
 
         return hear(await self._stt.transcribe(pcm, hint=self._locale.stt_language))
@@ -1369,8 +1392,9 @@ def hear(transcript: Transcript) -> Heard:
     """What to make of a transcript: nothing, unreadable speech, or words.
 
     The decision rests on whether there was speech, never on how sure the
-    decoder was of its words. Measured on the target machine (2026-09-05): a
-    correct single "Merhaba." scores 0.48 confidence and silence scores up to
+    decoder was of its words. Measured on the target machine with the local
+    engine (2026-09-05, before D36): a correct single "Merhaba." scores 0.48
+    confidence and silence scores up to
     0.54, so no confidence floor can tell them apart - but the engine's own
     no-speech estimate can (0.06 against 0.86). Confidence is still carried,
     for the log and the screen, because a run of low numbers is how a bad
@@ -1379,7 +1403,7 @@ def hear(transcript: Transcript) -> Heard:
     An engine with no opinion is believed about its words, and its silence is
     read as speech it could not make out: it cannot tell the two apart, and
     neither can this. Treating "no opinion" as "nothing was said" would make
-    the assistant mute the day it moves to a cloud recogniser.
+    the assistant deaf: Google's recogniser has no opinion about its words.
     """
     no_speech = transcript.no_speech_probability
     if no_speech is not None and no_speech >= NO_SPEECH_CEILING:
@@ -1403,30 +1427,12 @@ _WORD = re.compile(r"\w+")
 def confirm_words(locale: Locale) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The yes and the no words of `locale`, or the English ones written here.
 
-    Resolved in one place because two things read them: the window that judges
-    the answer (`read_answer`) and the recogniser that hears it
-    (`confirm_prompt`). Told different words, the recogniser would be shown
-    what the window does not accept.
+    Resolved in one place: the pack writes them, the window that judges the
+    answer (`read_answer`) reads them. Until D36 the local recogniser was
+    told them as well, and that is what turned a clear "Evet." into
+    "iptal." (measured 2026-09-26); Google is told nothing but the language.
     """
     return (tuple(locale.yes_words) or YES_WORDS, tuple(locale.no_words) or NO_WORDS)
-
-
-def confirm_prompt(locale: Locale) -> str:
-    """What the recogniser is told to expect before a window opens.
-
-    The live model hears the user itself (D1); all that is left for the local
-    recogniser is the yes or no of a confirmation window and the odd reminder
-    (D3, D10). So it is shown those words - the pack's own, exactly the ones
-    the window accepts - and not the vocabulary of installed applications the
-    old pipeline needed, which this product carried until 2026-09-22 at about
-    0.65 s of decode per hundred tokens of prompt (measured 2026-09-13,
-    `stt/local_whisper.py`) and a bias towards names nobody says here.
-    """
-    yes, no = confirm_words(locale)
-    words = [word.strip() for word in (*yes, *no) if word.strip()]
-    if not words:
-        return ""
-    return ". ".join(words) + "."
 
 
 def read_answer(text: str, *, yes: Iterable[str], no: Iterable[str]) -> bool | None:

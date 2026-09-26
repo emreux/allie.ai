@@ -67,10 +67,13 @@ __all__ = [
 ]
 
 
-# Asks the user a question out loud and answers yes or no. Who actually asks
-# is decided by whoever runs the tool: the state machine hands over the
-# microphone, a test hands over a fake, and the gate never learns which.
-Confirm = Callable[[str], Awaitable[bool]]
+# Asks the user a question out loud and answers yes (`True`), no (`False`),
+# or `None` when no answer was heard - silence, a noise, or twice neither
+# word (2026-09-26: the model said "you declined" to a user nobody heard).
+# Who actually asks is decided by whoever runs the tool: the state machine
+# hands over the microphone, a test hands over a fake, and the gate never
+# learns which.
+Confirm = Callable[[str], Awaitable[bool | None]]
 
 
 async def decline(question: str) -> bool:

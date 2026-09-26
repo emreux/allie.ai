@@ -1,15 +1,15 @@
 """Reports whether this machine can run the assistant (design.md section 8, phase 0).
 
-Checks the four things phase 0 has to prove, and prints what it found instead
-of asserting: on a fresh clone the point is to see which piece is missing.
+Checks what a machine has to have, and prints what it found instead of
+asserting: on a fresh clone the point is to see which piece is missing.
 
     uv run python scripts/check_environment.py
 
-Covered: the Python version, the audio devices, the credential store, and the
-local speech-to-text model. No speech voice is checked: the assistant speaks
-in the live model's own voice (plan.md D32). It never touches the network except through the
-model cache, and it never records or plays anything - `scripts/smoke_audio.py`
-does that, because it needs a person to listen.
+Covered: the Python version, the audio devices and the credential store. No
+speech model is checked: nothing on this machine turns speech into text since
+plan.md D36, and the assistant speaks in the live model's own voice (D32). It
+never touches the network, and it never records or plays anything -
+`scripts/smoke_audio.py` does that, because it needs a person to listen.
 """
 
 from __future__ import annotations
@@ -82,24 +82,6 @@ def check_credential_store() -> bool:
     return True
 
 
-def check_speech_to_text_model(size: str = "small") -> bool:
-    """Loads the local model from the cache; the first run downloads about 500 MB."""
-    try:
-        from faster_whisper import WhisperModel
-    except Exception as error:
-        _line(FAIL, f"faster-whisper could not be imported: {error}")
-        return False
-
-    try:
-        WhisperModel(size, device="cpu", compute_type="int8", cpu_threads=4)
-    except Exception as error:
-        _line(FAIL, f"the {size} model could not be loaded: {error}")
-        return False
-
-    _line(OK, f"speech-to-text model '{size}' (int8, cpu) loads")
-    return True
-
-
 def main() -> int:
     """Runs every check and returns 1 if a required one failed."""
     print("\nPhase 0 environment report\n" + "-" * 42)
@@ -107,7 +89,6 @@ def main() -> int:
         check_python(),
         check_audio_devices(),
         check_credential_store(),
-        check_speech_to_text_model(),
     ]
     print("-" * 42)
 

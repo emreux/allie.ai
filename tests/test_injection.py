@@ -16,8 +16,8 @@ here it is put behind a page that is trying).
 In the live product the third line runs inside a session. The page, the
 clipboard and the mail arrive as a tool's answer to the session's call,
 back through `send_tool_result`; were the model to obey, the gate asks out
-loud in the local voice with the session's input paused (D3), hears the no
-through the local recogniser, and what goes back into the tool channel is
+loud in the assistant's voice with the session's input paused (D3), hears
+the no through Google's recogniser (D36), and what goes back into the tool channel is
 the refusal in words. The old file drove `Agent` with a scripted provider;
 this one drives the state machine with the fakes of `test_app.py`.
 """

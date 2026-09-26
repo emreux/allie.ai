@@ -5,19 +5,21 @@ say where the sentence ends by letting go of a key; here nobody is holding
 anything, so the audio has to answer the question itself (design.md section
 3.4, item 2.9).
 
-**The model is the one `faster-whisper` already ships.** `faster_whisper.vad`
-carries Silero's ONNX weights and pulls in `onnxruntime` to run them, so live
-detection costs this project neither a new dependency nor a download that can
-fail on a machine with no network. Nothing else in the project imports it.
+**The model ships inside this package.** Silero VAD v6 (`MODEL_FILE`, MIT,
+its notice in `silero_vad.LICENSE` beside it) - the very file `faster-whisper`
+carried, copied over on 2026-09-26 when the local recogniser left and took
+that package with it (plan.md D36). It runs on `onnxruntime`, which the wake
+word needs anyway, so detection costs neither a dependency of its own nor a
+download that can fail on a machine with no network. One session for the
+whole program, on one thread: `audio/wake.py::_on_one_thread` measured what
+ONNX Runtime's default spinning pool costs.
 
 **It is driven frame by frame with the recurrent state kept, and that is the
-whole difference.** `SileroVADModel.__call__` builds fresh LSTM state on every
-call and consumes a whole array at once - exactly right for a finished
-recording, and wrong for a microphone that never stops. The session underneath
-takes `h` and `c` and hands back `hn` and `cn`; keeping them between frames is
-what makes the answer about *now* rather than about 32 milliseconds in
-isolation. That is why this module reaches for `.session` instead of the
-convenience wrapper above it.
+whole difference.** A batch call builds fresh LSTM state and consumes a whole
+array at once - exactly right for a finished recording, and wrong for a
+microphone that never stops. The session takes `h` and `c` and hands back
+`hn` and `cn`; keeping them between frames is what makes the answer about
+*now* rather than about 32 milliseconds in isolation.
 
 **Measured on this machine: 0.14 ms per 32 ms frame.** That is 0.4% of one core
 to listen continuously, so rule 4 of section 3.1 is in no danger and the energy
@@ -31,12 +33,14 @@ sentence. `PREROLL_SECONDS` is the ring buffer that gives them back.
 
 **An utterance has a ceiling.** A microphone left open in a room with a
 television would otherwise collect until the machine runs out of memory, and
-then hand Whisper an hour of it. At the ceiling what has been collected is
+then hand over an hour of it. At the ceiling what has been collected is
 handed over and the detector goes back to waiting for a new sentence.
 """
 
 from __future__ import annotations
 
+import functools
+from importlib import resources
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -50,6 +54,7 @@ __all__ = [
     "CONTEXT_SAMPLES",
     "FRAME_SAMPLES",
     "MAX_UTTERANCE_SECONDS",
+    "MODEL_FILE",
     "ONSET_FRAMES",
     "PREROLL_SECONDS",
     "SILENCE_SECONDS",
@@ -59,6 +64,9 @@ __all__ = [
     "SileroVAD",
     "VoiceDetector",
 ]
+
+# Silero VAD v6, beside this module (module docstring).
+MODEL_FILE = "silero_vad_v6.onnx"
 
 # What the model takes at 16 kHz: 512 new samples with the 64 before them for
 # context. Both are the network's own shape, not a choice this project makes.
@@ -86,7 +94,7 @@ SILENCE_SECONDS = 0.6
 PREROLL_SECONDS = 0.3
 
 # The ceiling. Long enough for any sentence anybody says to an assistant, short
-# enough that Whisper is not handed minutes of a television programme.
+# enough that nobody is handed minutes of a television programme.
 MAX_UTTERANCE_SECONDS = 30.0
 
 
@@ -151,7 +159,7 @@ class SileroVAD:
 
         Roughly a tenth of a second - under the eye but over the 50 ms of rule
         4, and paid at startup rather than inside the first sentence somebody
-        says. `run` calls it beside `LocalWhisper.load`.
+        says. `run` calls it at startup.
         """
         import asyncio
 
@@ -186,13 +194,31 @@ class SileroVAD:
         self._context = np.zeros(CONTEXT_SAMPLES, dtype=np.float32)
 
     def _load(self) -> None:
-        # Deferred: `allie setup` has no use for an inference session, and
-        # importing this pulls in onnxruntime.
-        from faster_whisper.vad import get_vad_model  # type: ignore[import-untyped]
+        self._session = _session()
 
-        # `get_vad_model` is cached by `faster-whisper` itself, so the session
-        # is built once however many detectors ask for it.
-        self._session = get_vad_model().session
+
+@functools.cache
+def _session() -> Any:
+    """The one inference session, built on first use and shared: the state
+    lives in each detector, the weights do not need to.
+
+    Deferred: `allie setup` has no use for an inference session, and
+    importing onnxruntime takes a moment. The options are the ones the
+    session was built with before D36 - one thread each way, no arena, no
+    chatter on stderr.
+    """
+    import onnxruntime  # type: ignore[import-untyped]
+
+    options = onnxruntime.SessionOptions()
+    options.inter_op_num_threads = 1
+    options.intra_op_num_threads = 1
+    options.enable_cpu_mem_arena = False
+    options.log_severity_level = 4
+    return onnxruntime.InferenceSession(
+        str(resources.files("allie.audio") / MODEL_FILE),
+        providers=["CPUExecutionProvider"],
+        sess_options=options,
+    )
 
 
 class Endpoint:

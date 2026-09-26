@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -36,6 +37,7 @@ from allie.agent.policy import (
     MISSING_ARGUMENT,
     NO_SUCH_TOOL,
     TEXT,
+    UNHEARD,
     dispatch,
 )
 from allie.live.base import ToolCall, ToolSpec
@@ -51,11 +53,11 @@ TURN = "turn-1"
 class FakeConfirm:
     """Answers every question the same way, and keeps the questions."""
 
-    def __init__(self, *, answer: bool) -> None:
+    def __init__(self, *, answer: bool | None) -> None:
         self.answer = answer
         self.asked: list[str] = []
 
-    async def __call__(self, prompt: str) -> bool:
+    async def __call__(self, prompt: str) -> bool | None:
         self.asked.append(prompt)
         return self.answer
 
@@ -139,6 +141,28 @@ async def test_a_confirm_tool_does_not_run_when_the_user_says_no() -> None:
     assert ran == []
 
 
+async def test_an_answer_nobody_heard_is_not_a_no_and_the_model_is_told_which() -> None:
+    """Item 7 of 2026-09-26: "onay alınmadı, iptal ettim" after silence
+    told the user they had said no. Nothing runs either way; the model
+    learns the difference, and can offer to ask again."""
+    confirm = FakeConfirm(answer=None)
+
+    answer = await gate(call("open_app", name="Spotify"), confirm=confirm)
+
+    assert answer == UNHEARD
+    assert answer != DECLINED
+    assert ran == []
+
+
+async def test_an_answer_nobody_heard_is_one_row_that_says_denied(
+    database: sqlite3.Connection, audit: AuditRepo
+) -> None:
+    await gate(call("open_app", name="Spotify"), confirm=FakeConfirm(answer=None), audit=audit)
+
+    [row] = rows(database)
+    assert (row["status"], row["approved"], row["risk"]) == ("denied", 0, "confirm")
+
+
 async def test_a_confirm_tool_runs_when_the_user_says_yes() -> None:
     confirm = FakeConfirm(answer=True)
 
@@ -160,8 +184,9 @@ async def test_the_user_hears_the_real_arguments_before_saying_yes() -> None:
 
 async def test_a_message_does_not_go_on_no_and_goes_on_yes_and_the_user_hears_all_of_it() -> None:
     """`send_message` (2026-09-15) bound to fakes, through the real gate:
-    the question carries the contact, the app and the text the model
-    chose, word for word - the injection defence for the one tool whose
+    the question carries the person the message will reach - as the channel
+    resolved them, since 2026-09-26 - and the app and the text the model
+    chose, word for word: the injection defence for the one tool whose
     wrong argument reaches another person."""
     from allie.tools.messaging import send_message_for
 
@@ -173,7 +198,9 @@ async def test_a_message_does_not_go_on_no_and_goes_on_yes_and_the_user_hears_al
             self.sent: list[tuple[str, str]] = []
 
         async def resolve(self, spoken: str) -> Ada | None:
-            return Ada() if spoken == "Ada" else None
+            # A channel finds the people it names by that name again: the
+            # send looks up the name the question read (2026-09-26).
+            return Ada() if spoken in ("Ada", "Ada Lovelace") else None
 
         async def closest(self, spoken: str) -> list[str]:
             return []
@@ -190,7 +217,7 @@ async def test_a_message_does_not_go_on_no_and_goes_on_yes_and_the_user_hears_al
     answer = await gate(order, confirm=refused, registry=registry)
     assert answer == DECLINED
     assert channel.sent == []
-    assert refused.asked == ["The message 'yarın geliyorum' will be sent to Ada on WhatsApp."]
+    assert refused.asked == ["Shall I send 'yarın geliyorum' to Ada Lovelace on WhatsApp?"]
 
     agreed = FakeConfirm(answer=True)
     answer = await gate(order, confirm=agreed, registry=registry)
@@ -445,7 +472,7 @@ async def test_a_confirm_tool_does_not_run_when_the_microphone_hears_nothing() -
 
     answer = await gate(call("open_app", name="Spotify"), confirm=assistant.confirm)
 
-    assert answer == DECLINED
+    assert answer == UNHEARD
     assert ran == []
 
 
@@ -617,3 +644,83 @@ async def test_without_a_repository_nothing_is_known_about_a_moment_ago() -> Non
 
 def test_the_window_is_the_ten_minutes_section_3_11_gives() -> None:
     assert DUPLICATE_WINDOW_SECONDS == 600
+
+
+# --------------------------------------------------------------------------
+# A tool that prepares its arguments before the question (2026-09-26)
+# --------------------------------------------------------------------------
+
+
+async def spelled_out(name: str) -> dict[str, str] | str:
+    """What `send_message` does with a person: the name as the user said it
+    becomes the name the action will use - or a sentence, and no question."""
+    if name == "nobody":
+        return "No application called 'nobody'."
+    if name == "boom":
+        raise RuntimeError("the lookup broke")
+    return {"name": {"spot": "Spotify"}.get(name, name)}
+
+
+PREPARED = ToolRegistry([replace(open_app, prepare=spelled_out)])
+
+
+async def test_the_question_and_the_run_use_the_prepared_arguments() -> None:
+    """One question, with what will really happen in it: the user hears
+    "Spotify", not "spot", and it is Spotify that opens."""
+    confirm = FakeConfirm(answer=True)
+
+    answer = await gate(call("open_app", name="spot"), confirm=confirm, registry=PREPARED)
+
+    assert confirm.asked == ["Spotify will be opened."]
+    assert ran == ["open_app:Spotify"]
+    assert answer == "Spotify opened"
+
+
+async def test_the_audit_row_holds_the_prepared_arguments(
+    database: sqlite3.Connection, audit: AuditRepo
+) -> None:
+    await gate(
+        call("open_app", name="spot"),
+        confirm=FakeConfirm(answer=True),
+        registry=PREPARED,
+        audit=audit,
+    )
+
+    [row] = rows(database)
+    assert row["args_json"] == '{"name":"Spotify"}'
+
+
+async def test_a_tool_that_prepares_a_sentence_asks_nobody_and_runs_nothing(
+    database: sqlite3.Connection, audit: AuditRepo
+) -> None:
+    """Asking "shall I?" about something that cannot happen was the other
+    half of the owner's evening: yes to a name, then "no such contact"."""
+    confirm = FakeConfirm(answer=True)
+
+    answer = await gate(
+        call("open_app", name="nobody"), confirm=confirm, registry=PREPARED, audit=audit
+    )
+
+    assert answer == "No application called 'nobody'."
+    assert confirm.asked == []
+    assert ran == []
+    assert rows(database) == []
+
+
+async def test_a_missing_argument_is_still_named_before_anything_is_prepared() -> None:
+    confirm = FakeConfirm(answer=True)
+
+    answer = await gate(call("open_app"), confirm=confirm, registry=PREPARED)
+
+    assert answer == MISSING_ARGUMENT.format(name="name")
+    assert confirm.asked == []
+
+
+async def test_a_preparation_that_breaks_asks_nobody_and_says_it_failed() -> None:
+    confirm = FakeConfirm(answer=True)
+
+    answer = await gate(call("open_app", name="boom"), confirm=confirm, registry=PREPARED)
+
+    assert answer == FAILED.format(kind="RuntimeError")
+    assert confirm.asked == []
+    assert ran == []

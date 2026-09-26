@@ -8,9 +8,7 @@
 # next to the code that says it, and a second copy here would be a second thing
 # to keep in step - the two would drift, and the drift would be invisible.
 # No [speech] table either, for the same reason: the English yes and no words
-# are the constants beside the code that listens for them - and since
-# 2026-09-22 they are also what the recogniser of that window is told to
-# expect, so there is no [stt] prompt here either. No [live] table:
+# are the constants beside the code that listens for them. No [live] table:
 # the live model's default language and the prompt's own mirroring rule are
 # what English means (plan.md D19, ADR-001).
 
@@ -18,6 +16,6 @@ code = "en"
 name = "English"
 
 [stt]
-# What the recogniser is told to expect. Usually `code`, but not always: this
+# What Google's recogniser is told to expect (D36). Usually `code`, but not always: this
 # is the language people *speak* to the assistant, not the one it shows them.
 language = "en"

@@ -1,10 +1,10 @@
 """`allie setup` - the few questions phase 1 asks (design.md section 3.3).
 
 Which assistant, provider, key, model, the language the assistant speaks,
-who hears the yes or no of a confirmation, and the microphone it listens
-through. The fourteen step wizard of section 3.3 - device tests, tool probe,
-latency measurement, a fallback model - is phase 4.5; what is here is the
-smallest thing that can produce a working `config.toml`.
+and the microphone it listens through. The fourteen step wizard of section
+3.3 - device tests, tool probe, latency measurement, a fallback model - is
+phase 4.5; what is here is the smallest thing that can produce a working
+`config.toml`.
 
 **In a row once, one at a time after that** (plan.md D32, 2026-09-24).
 `run_setup` walks the questions on a machine that has never been set up.
@@ -62,13 +62,13 @@ what it is called. It replaced the free-text voice question: a voice now
 comes with a name. A threshold tuned by hand stays only when the same
 assistant is chosen again - it was measured for that model.
 
-**The local recogniser serves the gate window** (plan.md D3, D10). The
-model speaks for itself; Whisper or Google's recogniser hears the yes or no
-after a tool asks first - Google's offered when its key is at hand, the one
-just checked or one stored earlier, since it uses the same entry. Who reads
-the question is no longer a question: the assistant does, in its own voice
-(D32). What setup does not ask about in `[live]` and `[stt]` it keeps from
-the file: the session numbers are the owner's to tune.
+**Nothing is asked about the gate window** (plan.md D3, D10). The model
+speaks for itself; Google's recogniser hears the yes or no after a tool asks
+first, on the Gemini entry - there is no local one to choose since D36
+(2026-09-26), and no setting. Who reads the question is no longer a
+question either: the assistant does, in its own voice (D32). What setup
+does not ask about in `[live]` it keeps from the file: the session numbers
+are the owner's to tune.
 """
 
 from __future__ import annotations
@@ -209,9 +209,6 @@ TEXT: dict[str, str] = {
     "probe_refused": (
         "The model could not be tested: {problem}. Choose another model, or try again."
     ),
-    "hears": "Who hears your yes or no when a tool asks first?",
-    "hears_local": "Whisper, on this machine - nothing leaves it",
-    "hears_gemini": "Google's recogniser, with the same key - those two words go to Google",
     "microphone": "Which microphone should the assistant listen through?",
     "windows_microphone": "Whatever Windows has chosen (right now: {name})",
     "no_microphones": "No microphone was found.",
@@ -232,9 +229,6 @@ TEXT: dict[str, str] = {
     "key_stored": "stored",
     "key_missing": "not set",
     "setting_model": "Model: {value}",
-    "setting_hears": "Who hears your yes or no: {value}",
-    "hears_short_local": "Whisper, on this machine",
-    "hears_short_gemini": "Google's recogniser",
     "setting_microphone": "Microphone: {value}",
     "setting_saved": "Saved: {setting}",
 }
@@ -350,7 +344,6 @@ async def _ask(
     if connected is None:
         return _GAVE_UP
     api_key, model, verdict = connected
-    hears = await _pick_engine(prompter, "hears", ("local", "gemini"), google=_google(provider_id))
     input_device = await _pick_microphone(prompter, _found(microphones))
 
     # Everything above could still be abandoned; from here it is written down.
@@ -381,7 +374,6 @@ async def _ask(
             ),
             locale=LocaleSettings(code=locale),
             audio=AudioSettings(input_device=input_device),
-            stt=kept.stt.model_copy(update={"provider": hears}),
         )
     )
     _name(assistant.name)
@@ -423,12 +415,6 @@ async def _connection(
         prompter, provider, models, question=_probe_question(locale)
     )
     return api_key, model, verdict
-
-
-def _google(provider_id: str) -> bool:
-    """Whether Google's recogniser can be offered: its key is the one just
-    checked, or one stored earlier under the same entry."""
-    return provider_id == "gemini" or load_api_key("gemini") is not None
 
 
 # --------------------------------------------------------------------------
@@ -519,7 +505,6 @@ class _Setting:
             stored = load_api_key(provider_id) is not None
             rows.append(row("api_key", said["key_stored" if stored else "key_missing"]))
         rows.append(row("model", settings.live.model))
-        rows.append(row("hears", said[f"hears_short_{settings.stt.provider}"]))
         rows.append(row("microphone", self._microphone(settings.audio.input_device)))
         return rows
 
@@ -562,14 +547,6 @@ class _Setting:
 
         if key == "model":
             return await self._model(settings)
-
-        if key == "hears":
-            options = [Option("local", wording()["hears_local"])]
-            if _google(provider_id):
-                options.append(Option("gemini", wording()["hears_gemini"]))
-            hears = _answered(await prompter.choose("hears", options))
-            _save(stt={"provider": hears})
-            return True
 
         if key == "microphone":
             _save(audio={"input_device": await _pick_microphone(prompter, self._found)})
@@ -824,20 +801,6 @@ async def _model_that_calls_tools(
             prompter.say("tools_ok", ms=_whole(verdict.first_token_ms))
             return model, verdict
         prompter.say("tools_failed")
-
-
-async def _pick_engine(
-    prompter: Prompter, key: str, engines: tuple[str, str], *, google: bool
-) -> str:
-    """Which recogniser hears the yes or no (`hears`): the one on this
-    machine, or Google's when its key is at hand. With one choice there is
-    no question."""
-    local, remote = engines
-    if not google:
-        return local
-    said = wording()
-    options = [Option(local, said[f"{key}_{local}"]), Option(remote, said[f"{key}_{remote}"])]
-    return _answered(await prompter.choose(key, options))
 
 
 async def _pick_microphone(prompter: Prompter, found: Microphones) -> str:

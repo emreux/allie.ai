@@ -29,7 +29,6 @@ from allie.config import (
     LocaleSettings,
     MessagingSettings,
     Settings,
-    STTSettings,
     TelegramSettings,
     ToolSettings,
     WakeSettings,
@@ -453,27 +452,27 @@ def test_the_settings_model_has_nowhere_to_put_a_key() -> None:
     assert not any("key" in name for name in Settings.model_fields)
 
 
-def test_the_stt_settings_round_trip_through_the_file(config_home: Path) -> None:
-    save_settings(Settings(stt=STTSettings(provider="gemini", model="x")))
+def test_there_is_no_setting_for_who_hears_the_yes_or_no() -> None:
+    """D36 (2026-09-26): Google hears it, always; there is nothing to choose."""
+    assert "stt" not in Settings.model_fields
 
-    assert load_settings().stt == STTSettings(provider="gemini", model="x")
 
-
-def test_the_recogniser_defaults_to_local(config_home: Path) -> None:
-    """ADR-001: local Whisper is the default and never leaves; a file written
-    before there was an `[stt]` table means exactly that."""
+def test_a_recogniser_table_from_before_is_read_past_and_not_written_back(
+    config_home: Path,
+) -> None:
+    """The owner's file still says `provider = "local"` - the engine that
+    is gone. It loads, and the next save drops the table, as `[tts]` went."""
     config_path().parent.mkdir(parents=True, exist_ok=True)
-    config_path().write_text('[live]\nprimary = "gemini:x"\n', encoding="utf-8")
+    config_path().write_text(
+        '[live]\nprimary = "gemini:x"\n\n[stt]\nprovider = "local"\n'
+        'model = "gemini-3.5-transcribe-live"\n',
+        encoding="utf-8",
+    )
 
-    stt = load_settings().stt
+    save_settings(load_settings())
 
-    assert stt == STTSettings()
-    assert (stt.provider, stt.model) == ("local", "gemini-3.5-transcribe-live")
-
-
-def test_an_unknown_recogniser_is_refused() -> None:
-    with pytest.raises(ValueError, match="local, gemini"):
-        STTSettings(provider="azure")
+    assert "[stt]" not in config_path().read_text(encoding="utf-8")
+    assert load_settings().live.primary == "gemini:x"
 
 
 def test_a_voice_table_from_before_is_read_past_and_not_written_back(config_home: Path) -> None:

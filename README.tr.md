@@ -44,9 +44,10 @@ kapanır: canlı model açık kaldığı sürece dakika başına ücretlendirir.
 ## Bu makineden ne çıkıyor
 
 Oturum açıkken mikrofon Google'a akar, modelin cevabı da öyle. Canlı model bu
-demektir. Yerel tanıyıcı - CPU üzerinde Whisper - tek bir iş için kaldı: bir
-araç izin istediğinde evet mi hayır mı dediğini duymak. API anahtarın Windows
-Kimlik Bilgisi Yöneticisi'nde durur; hiçbir dosyaya ve hiçbir günlüğe yazılmaz.
+demektir. Bir araç izin istediğinde evet ya da hayırın da aynı Gemini
+anahtarıyla Google'ın tanıyıcısına gider; bu makinede sesi yazıya çeviren
+hiçbir şey yok. API anahtarın Windows Kimlik Bilgisi Yöneticisi'nde durur;
+hiçbir dosyaya ve hiçbir günlüğe yazılmaz.
 
 ## Henüz yok
 

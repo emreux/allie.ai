@@ -62,9 +62,6 @@ probing_tools = "Modelin araç çağırıp çağıramadığı sınanıyor..."
 tools_ok = "Model araç çağırabiliyor — ilk yanıt {ms} ms'de geldi."
 tools_failed = "Bu model araç çağıramıyor; asistanın işlerinin çoğu buna bağlı. Başka bir model seç."
 probe_refused = "Model sınanamadı: {problem}. Başka bir model seç ya da tekrar dene."
-hears = "Bir araç önce sorduğunda evet ya da hayırını kim duysun?"
-hears_local = "Whisper, bu makinede — hiçbir şey dışarı çıkmaz"
-hears_gemini = "Google'ın tanıyıcısı, aynı anahtarla — o iki kelime Google'a gider"
 microphone = "Asistan hangi mikrofonu dinlesin?"
 windows_microphone = "Windows'un seçtiği mikrofon (şu an: {name})"
 no_microphones = "Hiç mikrofon bulunamadı."
@@ -81,9 +78,6 @@ setting_api_key = "API anahtarı: {value}"
 key_stored = "kayıtlı"
 key_missing = "yok"
 setting_model = "Model: {value}"
-setting_hears = "Evet ya da hayırını kim duysun: {value}"
-hears_short_local = "Whisper, bu makinede"
-hears_short_gemini = "Google'ın tanıyıcısı"
 setting_microphone = "Mikrofon: {value}"
 setting_saved = "Kaydedildi: {setting}"
 
@@ -100,12 +94,12 @@ spend_stopped = "Harcama sınırı aşıldı, bu yüzden modele sormuyorum."
 wake_greeting = "Sizi dinliyorum efendim."
 # Asked before a remembered fact is removed (2.10); {fact} is the fact as
 # the model named it. The hint on how to answer is added after it.
-forget_confirm = "'{fact}' kaydı unutulacak."
+forget_confirm = "'{fact}' kaydını unutayım mı?"
 # Asked before a note is deleted (4.1); {text} is the note as it was written.
-note_delete_confirm = "'{text}' notu silinecek."
+note_delete_confirm = "'{text}' notunu sileyim mi?"
 # Asked before a reminder is cancelled (4.2); {text} is the reminder as
 # the user gave it.
-reminder_cancel_confirm = "'{text}' hatırlatıcısı iptal edilecek."
+reminder_cancel_confirm = "'{text}' hatırlatıcısını kaldırayım mı?"
 # Said by the scheduler, without the model (4.2): a reminder said late,
 # and the one sentence for reminders that went by while the assistant was
 # off. {minutes} is how late, {count} how many, {text} the reminder.
@@ -116,12 +110,12 @@ reminder_missed_many = "Kapalıyken {count} hatırlatıcın geçti. Sonuncusu: {
 # {name} is the app as the Store lists it and {publisher} who made it - said
 # out loud because the Store is full of look-alikes. The word below stands
 # in for a publisher the Store did not name.
-store_install_confirm = "'{name}' ({publisher}) Microsoft Store'dan indirilecek."
+store_install_confirm = "'{name}' ({publisher}) uygulamasını Microsoft Store'dan indireyim mi?"
 unknown_publisher = "yayıncısı bilinmiyor"
 # Asked before a message goes (2026-09-15); {text} is the message word for
 # word, {contact} the person as the user said them, {app} WhatsApp or
 # Telegram. The hint on how to answer is added after it.
-send_message_confirm = "'{text}' mesajı {contact} kişisine {app} üzerinden gönderilecek."
+send_message_confirm = "{app} üzerinden {contact} kişisine '{text}' mesajını göndereyim mi?"
 # `allie telegram login`: the questions, in order, and the two answers.
 telegram_api_id = "Telegram api_id'n (bir sayı). https://my.telegram.org adresinde 'API development tools' altından alınır"
 telegram_api_hash = "Telegram api_hash'in (yazarken görünmez)"
@@ -139,7 +133,7 @@ minutes_ago = "{count} dakika"
 # (item 1.11). Short: they share one line with the hotkey.
 paused = "Dinlemiyorum. {toggle} dinlemeyi açar, Ctrl+C durdurur."
 hands_free = "Dinliyorum - konuşman yeterli. {toggle} dinlemeyi kapatır (konuşuyorsa susturur), Ctrl+C her şeyi."
-loading_speech = "Konuşma modeli yükleniyor..."
+starting_up = "Başlatılıyor..."
 checking_model = "Modelin araç çağırıp çağıramadığı sınanıyor..."
 state_off = "kapalı"
 state_idle = "hazır"
@@ -239,10 +233,8 @@ doctor_key_not_needed = "  API anahtarı: gerekmiyor"
 doctor_verdict_ok = "  araç çağırma: geçti, {days} gün önce denendi"
 doctor_verdict_failed = "  araç çağırma: KALDI, {days} gün önce denendi - araçların çoğu çalışmayacak"
 doctor_verdict_none = "  araç çağırma: henüz denenmedi (bir sonraki açılışta denenir)"
-doctor_stt_local = "  tanıyıcı: Whisper '{size}', bu makinede"
-doctor_stt_gemini = "  tanıyıcı: Google ({model}), arkasında Whisper '{size}'"
+doctor_stt_gemini = "  tanıyıcı: Google ({model})"
 doctor_leaves = "Bu makineden ne çıkıyor"
-doctor_voice_stays = "  sesin: burada kalıyor"
 doctor_voice_goes = "  sesin: Google'a gidiyor (tanıyıcı)"
 doctor_text_goes = "  söylediklerin, metin olarak: {provider} sağlayıcısına gidiyor"
 doctor_content_goes = "  sorduğun sayfalar, pano metni ve mailler: {provider} sağlayıcısına gidiyor"

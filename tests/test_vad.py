@@ -11,12 +11,15 @@ one short test rather than a recording somebody has to listen to.
 `SileroVAD` is the real network. Three claims about it are worth the tenth of a
 second it costs to load: that it can tell a voice from a silent room, that the
 recurrent state really is carried from frame to frame - which is the whole
-difference between this and the batch call `faster-whisper` offers - and that
+difference between this and a batch call over a finished recording - and that
 the frame size is the one the model was built for rather than a plausible
 looking number.
 """
 
 from __future__ import annotations
+
+import sys
+from importlib import resources
 
 import numpy as np
 import pytest
@@ -24,6 +27,7 @@ import pytest
 from allie.audio.vad import (
     CONTEXT_SAMPLES,
     FRAME_SAMPLES,
+    MODEL_FILE,
     Endpoint,
     SileroVAD,
     VoiceDetector,
@@ -132,8 +136,8 @@ def test_the_silence_has_to_be_the_length_it_was_asked_for() -> None:
 
 
 def test_a_single_loud_frame_does_not_open_a_turn() -> None:
-    """A door closing, a key pressed, a cough. Answering one costs four cores
-    of Whisper and an API call."""
+    """A door closing, a key pressed, a cough. Answering one costs an API
+    call."""
     ends, _ = endpoint(0.9, 0.0, 0.0, 0.0, onset=3)
 
     assert ends.feed(stream(4)) == []
@@ -170,7 +174,7 @@ def test_the_frames_before_the_detector_was_sure_are_kept() -> None:
 
 def test_the_run_up_that_is_kept_has_a_length() -> None:
     """The alternative is a ring buffer that is not a ring: a microphone open
-    all morning would hand Whisper the whole morning."""
+    all morning would hand over the whole morning."""
     ends, _ = endpoint(0.0, 0.0, 0.0, 0.9, 0.0, 0.0, onset=1, silence=2, preroll=2)
 
     finished = ends.feed(stream(6))
@@ -324,9 +328,9 @@ def test_a_voice_and_a_silent_room_are_not_the_same_answer() -> None:
 
 
 def test_what_came_before_a_frame_changes_the_answer_to_it() -> None:
-    """The reason this module runs the session itself rather than calling
-    `SileroVADModel`: that builds fresh state per call, which is right for a
-    finished recording and wrong for a microphone that never stops."""
+    """The reason this module runs the session itself, carrying `h` and `c`:
+    fresh state per call is right for a finished recording and wrong for a
+    microphone that never stops."""
     detector = SileroVAD()
     frame = voiced(1)
 
@@ -345,6 +349,26 @@ def test_resetting_the_detector_puts_the_stream_back_to_its_beginning() -> None:
     detector.reset()
 
     assert detector.probability(frame) == pytest.approx(first)
+
+
+def test_the_model_ships_inside_the_package_with_its_licence() -> None:
+    """Since D36 (2026-09-26) nothing on this machine turns speech into text,
+    and the package that used to carry Silero's weights left with the
+    recogniser. The file is ours now, and so is its MIT notice."""
+    folder = resources.files("allie.audio")
+
+    assert (folder / MODEL_FILE).is_file()
+    assert (folder / "silero_vad.LICENSE").is_file()
+
+
+def test_the_detector_loads_without_the_old_recogniser_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`faster_whisper` blocked outright: the detector must not need it."""
+    monkeypatch.setitem(sys.modules, "faster_whisper", None)
+    monkeypatch.setitem(sys.modules, "faster_whisper.vad", None)
+
+    assert SileroVAD().probability(np.zeros(FRAME_SAMPLES, dtype=np.float32)) < 0.5
 
 
 def test_a_frame_is_the_size_the_model_was_built_for() -> None:

@@ -20,7 +20,8 @@ code = "xx"
 name = "Your language"
 
 [stt]
-# What the speech recogniser is told to expect. Usually the same as `code`,
+# The language Google's recogniser is told to expect when it hears the yes
+# or no of a confirmation (plan.md D36). Usually the same as `code`,
 # and separate from it on purpose: this is the language people *speak* to the
 # assistant, not the one it shows them.
 language = "xx"
@@ -31,10 +32,9 @@ language = "xx"
 # `no_words` anywhere in the answer wins over one from `yes_words`, so keep
 # the two lists apart. Leave the table out and the English words are used.
 #
-# These are also what the recogniser of the confirmation window is told to
-# expect before it listens (`app.confirm_prompt`), which is why the list is
-# worth keeping short and worth keeping to words people really say: the live
-# model hears everything else itself.
+# Keep the list short and to words people really say. Until 2026-09-26 the
+# local recogniser was told them before it listened, and wrote a clear
+# "Evet." as "iptal." - Google's is told nothing but the language (D36).
 yes_words = ["yes", "ok", "okay", "confirm"]
 no_words = ["no", "cancel", "stop"]
 # What the assistant says while a tool is taking its time - "one moment,
@@ -104,9 +104,6 @@ probe_refused = "The model could not be tested: {problem}. Choose another model,
 # The last question of setup, and the whole of `allie mic`. {name} is the
 # device Windows has chosen at that moment, as PortAudio names it; {microphone}
 # is the label of the choice that was just stored.
-hears = "Who hears your yes or no when a tool asks first?"
-hears_local = "Whisper, on this machine - nothing leaves it"
-hears_gemini = "Google's recogniser, with the same key - those two words go to Google"
 microphone = "Which microphone should the assistant listen through?"
 windows_microphone = "Whatever Windows has chosen (right now: {name})"
 no_microphones = "No microphone was found."
@@ -117,7 +114,7 @@ cancelled = "Setup cancelled. Nothing was changed."
 # The settings list (plan.md D32): after the first setup, the settings button
 # and `allie setup` show one row per setting, each changed on its own. Every
 # row is "title: {value}", {value} being the setting as it stands; the
-# words for a key's state and the recogniser's short names fill {value} too.
+# words for a key's state fill {value} too.
 # {setting} is the row as it reads after a change.
 settings = "Settings - choose one to change it"
 settings_close = "Close"
@@ -128,9 +125,6 @@ setting_api_key = "API key: {value}"
 key_stored = "stored"
 key_missing = "not set"
 setting_model = "Model: {value}"
-setting_hears = "Who hears your yes or no: {value}"
-hears_short_local = "Whisper, on this machine"
-hears_short_gemini = "Google's recogniser"
 setting_microphone = "Microphone: {value}"
 setting_saved = "Saved: {setting}"
 
@@ -152,13 +146,13 @@ spend_stopped = "The spending limit has been passed, so I am not asking the mode
 wake_greeting = "I am listening."
 # Asked before something the user asked to be remembered is forgotten again;
 # {fact} is the fact itself. "Say yes or no." is added after it.
-forget_confirm = "'{fact}' will be forgotten."
+forget_confirm = "Shall I forget '{fact}'?"
 # Asked before one of the user's notes is deleted; {text} is the note as it
 # was written. "Say yes or no." is added after it.
-note_delete_confirm = "The note '{text}' will be deleted."
+note_delete_confirm = "Shall I delete the note '{text}'?"
 # Asked before a reminder is cancelled; {text} is the reminder as the user
 # gave it. "Say yes or no." is added after it.
-reminder_cancel_confirm = "The reminder '{text}' will be cancelled."
+reminder_cancel_confirm = "Shall I remove the reminder '{text}'?"
 # Said by the reminder scheduler on its own, with no model involved: a
 # reminder said late, and one sentence for the reminders that went by
 # while the assistant was not running. {minutes} is how late it is,
@@ -169,12 +163,12 @@ reminder_missed_many = "While I was off, {count} reminders went by. The last was
 # Asked before an app is downloaded from the Microsoft Store; {name} is the
 # app as the Store lists it and {publisher} who made it. The second sentence
 # is the word used for a publisher the Store did not name.
-store_install_confirm = "'{name}' ({publisher}) will be downloaded from the Microsoft Store."
+store_install_confirm = "Shall I download '{name}' ({publisher}) from the Microsoft Store?"
 unknown_publisher = "unknown publisher"
 # Asked before a message is sent; {text} is the message word for word,
 # {contact} the person as the user said them, {app} the app's name (WhatsApp
 # or Telegram). "Say yes or no." is added after it.
-send_message_confirm = "The message '{text}' will be sent to {contact} on {app}."
+send_message_confirm = "Shall I send '{text}' to {contact} on {app}?"
 # `allie telegram login`: the questions in the order they are asked, and
 # the two sentences at the end. {name} is the account's own name; {reason}
 # is Telegram's own explanation, in English.
@@ -196,7 +190,7 @@ minutes_ago = "{count} minutes"
 # the state and the hotkey together on one line, so keep these short.
 paused = "Not listening. Press {toggle} to listen again. Ctrl+C stops."
 hands_free = "Listening - just talk. {toggle} stops listening (and cuts an answer short). Ctrl+C stops everything."
-loading_speech = "Loading the speech model..."
+starting_up = "Starting..."
 # Shown while the tool-use test of 3.2 is repeated at startup, once a week.
 checking_model = "Checking whether the model calls tools..."
 state_off = "off"
@@ -307,10 +301,8 @@ doctor_key_not_needed = "  API key: not needed"
 doctor_verdict_ok = "  tool calling: passed, checked {days} days ago"
 doctor_verdict_failed = "  tool calling: FAILED, checked {days} days ago - most tools will not work"
 doctor_verdict_none = "  tool calling: not checked yet (checked at the next start)"
-doctor_stt_local = "  recogniser: Whisper '{size}', on this machine"
-doctor_stt_gemini = "  recogniser: Google ({model}), Whisper '{size}' behind it"
+doctor_stt_gemini = "  recogniser: Google ({model})"
 doctor_leaves = "What leaves this machine"
-doctor_voice_stays = "  your voice: stays here"
 doctor_voice_goes = "  your voice: goes to Google (the recogniser)"
 doctor_text_goes = "  what you said, as text: goes to {provider}"
 doctor_content_goes = "  pages, clipboard text and mail you ask about: go to {provider}"
