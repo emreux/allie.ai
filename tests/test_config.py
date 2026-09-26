@@ -18,10 +18,12 @@ from pathlib import Path
 
 import pytest
 
+from allie import config as config_module
 from allie.agent.limits import Limits
 from allie.config import (
     KEYRING_SERVICE,
     AudioSettings,
+    DocumentSettings,
     LimitSettings,
     LiveSettings,
     LocaleSettings,
@@ -533,3 +535,48 @@ def test_a_threshold_outside_the_unit_interval_is_refused() -> None:
 def test_a_greeting_the_program_does_not_have_is_refused() -> None:
     with pytest.raises(ValueError):
         WakeSettings(greeting="bell")  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------
+# [documents] (plan.md D35)
+# --------------------------------------------------------------------------
+
+
+def test_the_documents_live_under_local_app_data_unless_the_user_says(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Local, not Roaming and not Documents: OneDrive's folder backup never
+    covers AppData, and a roaming profile never copies AppData\\Local (the
+    owner, 2026-09-25: nothing may go to OneDrive)."""
+    monkeypatch.setattr(config_module, "data_dir", lambda: tmp_path / "local")
+
+    assert DocumentSettings().root() == tmp_path / "local" / "documents"
+
+
+def test_a_written_folder_is_taken_with_its_variables_expanded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ALLIE_TEST_DOCUMENTS", str(tmp_path))
+
+    written = DocumentSettings(folder="%ALLIE_TEST_DOCUMENTS%\\Belgeler")
+
+    assert written.root() == tmp_path / "Belgeler"
+
+
+def test_the_document_model_is_given_a_positive_time() -> None:
+    with pytest.raises(ValueError, match="more than 0"):
+        DocumentSettings(timeout_seconds=0)
+
+
+def test_the_documents_table_round_trips(config_home: Path) -> None:
+    save_settings(
+        Settings(documents=DocumentSettings(folder="D:\\Belgeler", model="gemini-3.5-flash-lite"))
+    )
+
+    loaded = load_settings().documents
+
+    assert (loaded.folder, loaded.model, loaded.timeout_seconds) == (
+        "D:\\Belgeler",
+        "gemini-3.5-flash-lite",
+        20.0,
+    )

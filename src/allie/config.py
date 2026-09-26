@@ -44,6 +44,7 @@ from pydantic_settings import (
 )
 
 from allie.agent.limits import Limits
+from allie.documents.model import DOCUMENT_MODEL, DOCUMENT_SECONDS
 from allie.media.youtube import SEARCH_SECONDS
 from allie.store.retention import AUDIT_DAYS
 from allie.tools.web import SEARCH_URL
@@ -55,6 +56,7 @@ __all__ = [
     "KEYRING_SERVICE",
     "RECOGNISERS",
     "AudioSettings",
+    "DocumentSettings",
     "LimitSettings",
     "LiveSettings",
     "LocaleSettings",
@@ -400,6 +402,45 @@ class WebSettings(BaseModel):
     look_up_model: str = LOOK_UP_MODEL
 
 
+# The folder under `data_dir()` the user's document folders live in when
+# `[documents] folder` names none (plan.md D35).
+DOCUMENTS_DIR_NAME = "documents"
+
+
+class DocumentSettings(BaseModel):
+    """The `[documents]` table (plan.md D35): where the user's document
+    folders are, and which model answers from them.
+
+    `folder` is the root, one folder per topic under it; empty means
+    `%LOCALAPPDATA%\\allie\\documents` - Local rather than Roaming or the
+    Documents folder, because OneDrive's folder backup never covers AppData
+    and a roaming profile never copies AppData\\Local (the owner,
+    2026-09-25: nothing may go to OneDrive). `%VARIABLES%` and `~` in a
+    written path are expanded. `model` is the Gemini model asked with the
+    files (a 3.x Flash-Lite, K0), `timeout_seconds` how long it may take.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    folder: str = ""
+    model: str = DOCUMENT_MODEL
+    timeout_seconds: float = DOCUMENT_SECONDS
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def _must_be_positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError(f"expected more than 0, got {value}")
+        return value
+
+    def root(self) -> Path:
+        """The root folder this table names."""
+        written = self.folder.strip()
+        if written:
+            return Path(os.path.expandvars(written)).expanduser()
+        return data_dir() / DOCUMENTS_DIR_NAME
+
+
 class MessagingSettings(BaseModel):
     """The `[messaging]` table: which app `send_message` uses when the user
     named none (spec of 2026-09-15, section 7.2).
@@ -518,6 +559,7 @@ class Settings(BaseSettings):
     limits: LimitSettings = LimitSettings()
     media: MediaSettings = MediaSettings()
     web: WebSettings = WebSettings()
+    documents: DocumentSettings = DocumentSettings()
     messaging: MessagingSettings = MessagingSettings()
     telegram: TelegramSettings = TelegramSettings()
     retention: RetentionSettings = RetentionSettings()

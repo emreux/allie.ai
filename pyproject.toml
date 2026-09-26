@@ -18,12 +18,14 @@ dependencies = [
     "livekit-wakeword>=0.2.1",
     "loguru>=0.7.3",
     "numpy>=2.5.2",
+    "openpyxl>=3.1.5",
     "pillow>=12.3.0",
     "platformdirs>=4.11.4",
     "pydantic-settings>=2.15.0",
     "pynput>=1.8.2",
     "pystray>=0.19.5",
     "python-dateutil>=2.9.0.post0",
+    "python-docx>=1.2.0",
     "pywin32>=312",
     "questionary>=2.1.1",
     "rich>=15.0.0",
@@ -58,6 +60,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.4",
+    "types-openpyxl>=3.1.5.20260827",
     "types-python-dateutil>=2.9.0.20260807",
 ]
 

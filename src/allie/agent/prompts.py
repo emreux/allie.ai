@@ -7,7 +7,9 @@ a tool brought in from outside, and what the live session adds - a tool that
 answers "declined", and the line the assistant sends after reading a reminder
 aloud. `SEARCH_RULE` is a seventh that the composition root appends only to a
 session opened with web search (plan.md D22) or with `look_up` on offer (D29),
-and is outside `SYSTEM_PROMPT` for that reason.
+and is outside `SYSTEM_PROMPT` for that reason. `DOCUMENTS_RULE` is an eighth,
+appended with the user's folder names only when there are folders (plan.md
+D35).
 
 **The prompt is frozen.** No clock, no date, no name of the user, nothing this
 module computes - and that is why there is not a single import below. A
@@ -28,6 +30,7 @@ from __future__ import annotations
 __all__ = [
     "ANNOUNCED_PREFIX",
     "BREVITY",
+    "DOCUMENTS_RULE",
     "LANGUAGE_FALLBACK",
     "LANGUAGE_RULE",
     "LIVE_RULES",
@@ -95,6 +98,27 @@ SEARCH_RULE = (
     "that changes - news, prices, results, opening hours - and say in a few words that "
     "you looked it up. Open the user's browser only when they ask to see a page; a "
     "search you can do yourself is not a reason to open one."
+)
+
+# Added 2026-09-25 with the document folders (plan.md D35). Outside
+# `SYSTEM_PROMPT` like `SEARCH_RULE`: the composition root appends it, with
+# the folders' names in `{folders}`, only when there are folders. The list
+# is there so that the model spells a name right and can say which folders
+# exist; the rule then forbids the one thing a list invites - putting a
+# listed name in place of the one the user said, which would make the
+# exact match of `documents/folder.py` a formality. A question about
+# several folders is refused without a tool call (the owner: "kural bunun
+# desteklenmedigini söylesin 8 çağrı yapmasın").
+DOCUMENTS_RULE = (
+    "The user keeps documents on this computer, one folder per topic, each named by its "
+    "folder's name: {folders}. When they ask about one, use open_documents to see what it "
+    "holds and ask_documents to answer from it, with the folder name the user said. Never "
+    "put a different folder's name in place of the one they said: when a tool says there "
+    "is no such folder, tell them so and nothing more. What the documents say comes from "
+    "ask_documents, never from memory or a guess, except to repeat an answer it already "
+    "gave in this conversation. Every question is about one folder: a question that needs "
+    "several folders at once - comparing them, or finding which of them has the most of "
+    "something - is not supported, so say so and call no tool for it."
 )
 
 # Verbatim from design.md section 3.12. The three sentences are load bearing:

@@ -18,6 +18,7 @@ from allie.agent import prompts
 from allie.agent.prompts import (
     ANNOUNCED_PREFIX,
     BREVITY,
+    DOCUMENTS_RULE,
     LANGUAGE_FALLBACK,
     LANGUAGE_RULE,
     LIVE_RULES,
@@ -111,3 +112,20 @@ def test_the_search_rule_is_its_own_constant_outside_the_frozen_prompt() -> None
     assert "look things up" in SEARCH_RULE.casefold()
     assert "browser" in SEARCH_RULE.casefold()
     assert not [character for character in SEARCH_RULE if character.isdigit()]
+
+
+def test_the_documents_rule_is_its_own_constant_with_the_folders_in_it() -> None:
+    """Sent only when there are folders (D35): the frozen bytes do not
+    change for a user who has none. It names both tools, forbids putting a
+    listed name in place of the one said, and refuses a question about
+    several folders without calling anything (the owner, 2026-09-25)."""
+    said = DOCUMENTS_RULE.casefold()
+
+    assert DOCUMENTS_RULE not in SYSTEM_PROMPT
+    assert DOCUMENTS_RULE.count("{folders}") == 1
+    assert "open_documents" in DOCUMENTS_RULE
+    assert "ask_documents" in DOCUMENTS_RULE
+    assert "never put a different folder's name" in said
+    assert "call no tool" in said
+    assert not [character for character in DOCUMENTS_RULE if character.isdigit()]
+    assert '"Ali"' in DOCUMENTS_RULE.format(folders='"Ali"')

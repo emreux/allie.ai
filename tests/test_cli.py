@@ -36,13 +36,14 @@ from allie.__main__ import BUILTIN_TOOLS, TEXT, build_parser, main, use_utf8
 from allie.agent import core
 from allie.agent.limits import Limits
 from allie.agent.policy import NO_SUCH_TOOL
-from allie.agent.prompts import SEARCH_RULE, SYSTEM_PROMPT
+from allie.agent.prompts import DOCUMENTS_RULE, SEARCH_RULE, SYSTEM_PROMPT
 from allie.app import State, Turn, confirm_prompt
 from allie.audio import capture
 from allie.audio import wake as wake_module
 from allie.config import (
     KEYRING_SERVICE,
     AudioSettings,
+    DocumentSettings,
     LimitSettings,
     LiveSettings,
     LocaleSettings,
@@ -57,6 +58,7 @@ from allie.config import (
     save_settings,
     store_api_key,
 )
+from allie.documents import model as document_module
 from allie.live import probe
 from allie.live.base import ProviderError, SessionConfig, ToolCall, Usage
 from allie.live.probe import ProbeResult, remember, remembered
@@ -436,6 +438,9 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
     monkeypatch.setattr(core, "ToolRunner", runner_here)
     monkeypatch.setattr(app, "LiveAssistant", FakeAssistant)
     monkeypatch.setattr(db, "database_path", lambda: tmp_path / "data" / "assistant.db")
+    # The document folders' default root is `data_dir() / "documents"`
+    # (D35): under this test's directory, never the machine's.
+    monkeypatch.setattr("allie.config.data_dir", lambda: tmp_path / "data")
     monkeypatch.setattr(db, "open_database", open_here)
     return seen
 
@@ -724,6 +729,8 @@ def test_without_google_s_key_there_is_no_look_up_and_the_prompt_is_as_it_was(
     [runner] = wiring.runners
     assert "look_up" not in runner.tools
     assert "x_trends" not in runner.tools
+    assert "open_documents" not in runner.tools
+    assert "ask_documents" not in runner.tools
     assert "search_web" in runner.tools
 
 
@@ -765,6 +772,81 @@ def test_the_state_machine_is_handed_what_look_up_keeps(configured: Path, wiring
 
     [parts] = wiring.built
     assert isinstance(parts["searched"], Searched)
+
+
+def test_the_default_documents_folder_is_made_for_the_user(
+    configured: Path, wiring: Wiring, tmp_path: Path
+) -> None:
+    """D35: the user needs somewhere to put their folders."""
+    main(["run", "--terminal"])
+
+    assert (tmp_path / "data" / "documents").is_dir()
+
+
+def test_a_written_documents_folder_that_is_not_there_is_not_made(
+    configured: Path, wiring: Wiring, tmp_path: Path
+) -> None:
+    """A mistyped path made into an empty folder would hide the typo; the
+    log says it instead, and the tools say it when asked."""
+    missing = tmp_path / "typo"
+    configured_with(documents=DocumentSettings(folder=str(missing)))
+
+    main(["run", "--terminal"])
+
+    assert not missing.exists()
+    [runner] = wiring.runners
+    assert "ask_documents" in runner.tools
+
+
+def test_the_folders_are_named_in_the_prompt_after_the_search_rule(
+    configured: Path, wiring: Wiring, tmp_path: Path
+) -> None:
+    for name in ("Bilgi Birikim", "Ali Yılmaz"):
+        (tmp_path / "data" / "documents" / name).mkdir(parents=True)
+
+    main(["run", "--terminal"])
+
+    rule = DOCUMENTS_RULE.format(folders='"Ali Yılmaz", "Bilgi Birikim"')
+    assert f"\n\n{SEARCH_RULE}\n\n{rule}\n\n" in session_of(wiring).system_prompt
+
+
+def test_without_folders_the_prompt_has_no_documents_rule(configured: Path, wiring: Wiring) -> None:
+    main(["run", "--terminal"])
+
+    assert DOCUMENTS_RULE.split("{folders}")[0] not in session_of(wiring).system_prompt
+
+
+def test_a_folder_made_during_a_run_is_named_at_the_next_open(
+    configured: Path, wiring: Wiring, tmp_path: Path
+) -> None:
+    """The list is read at every session open (plan.md 4.4), like the time."""
+    main(["run", "--terminal"])
+    before = session_of(wiring).system_prompt
+    (tmp_path / "data" / "documents" / "Yeni Müşteri").mkdir()
+
+    after = session_of(wiring).system_prompt
+
+    assert '"Yeni Müşteri"' not in before
+    assert '"Yeni Müşteri"' in after
+
+
+def test_the_document_model_is_the_settings_one_on_the_gemini_key(
+    configured: Path, wiring: Wiring, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built: list[dict[str, Any]] = []
+
+    class FakeModel:
+        def __init__(self, api_key: str, **rest: Any) -> None:
+            built.append({"api_key": api_key, **rest})
+
+    monkeypatch.setattr(document_module, "DocumentModel", FakeModel)
+    configured_with(documents=DocumentSettings(model="gemini-3.5-flash-lite", timeout_seconds=12))
+
+    main(["run", "--terminal"])
+
+    assert built == [
+        {"api_key": "AIza-not-a-real-key", "model": "gemini-3.5-flash-lite", "seconds": 12.0}
+    ]
 
 
 def test_the_tools_the_session_is_opened_with_are_the_runner_s(
@@ -883,6 +965,8 @@ def test_every_tool_of_phase_two_is_on_offer(configured: Path, wiring: Wiring) -
         "read_clipboard",
         "fetch_page",
         "x_trends",
+        "open_documents",
+        "ask_documents",
         "read_latest_emails",
         "search_emails",
         "open_settings",

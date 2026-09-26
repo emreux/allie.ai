@@ -55,6 +55,7 @@ __all__ = [
     "SearchError",
     "Searched",
     "Searcher",
+    "day_limit",
 ]
 
 # The one family the free tier may search with (D22, D29).
@@ -223,14 +224,15 @@ def _refused(failure: errors.APIError, model: str) -> SearchError:
         # the one that passes by itself.
         if "PerDay" not in str(failure.details):
             return SearchError(BUSY)
-        limit = _day_limit(failure.details)
+        limit = day_limit(failure.details)
         return SearchError(f"{QUOTA_USED} {DAY_LIMIT.format(limit=limit)}" if limit else QUOTA_USED)
     return SearchError(UNREACHABLE.format(reason=f"{failure.code} {failure.status or ''}".strip()))
 
 
-def _day_limit(details: Any) -> str:
+def day_limit(details: Any) -> str:
     """The day's number a refusal names - the `quotaValue` of its
-    `...PerDay...` violation - or "" when it names none."""
+    `...PerDay...` violation - or "" when it names none. Public since
+    2026-09-25: the document model reads Google's refusals the same way."""
     error = details.get("error") if isinstance(details, dict) else None
     items = error.get("details") if isinstance(error, dict) else None
     for item in items if isinstance(items, list) else []:

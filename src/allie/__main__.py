@@ -62,6 +62,7 @@ from typing import TYPE_CHECKING
 
 from allie import __version__, locales
 from allie.config import (
+    DocumentSettings,
     Settings,
     config_dir,
     config_path,
@@ -70,6 +71,7 @@ from allie.config import (
     load_api_key,
     load_settings,
 )
+from allie.documents.folder import Shelf
 
 if TYPE_CHECKING:
     from rich.table import Table
@@ -148,9 +150,9 @@ PURGE_WORD = "yes"
 
 # The tools `run` puts on offer, by name and in order, so that `doctor` can
 # count them without building them. `test_cli.py` checks that the registry
-# `run` builds is this list followed by the user's own. `look_up` and
-# `x_trends` need the stored `gemini` key (D29, D30); without it they are
-# not offered.
+# `run` builds is this list followed by the user's own. `look_up`,
+# `x_trends`, `open_documents` and `ask_documents` need the stored `gemini`
+# key (D29, D30, D35); without it they are not offered.
 BUILTIN_TOOLS: tuple[str, ...] = (
     "get_current_time",
     "system_status",
@@ -162,6 +164,8 @@ BUILTIN_TOOLS: tuple[str, ...] = (
     "read_clipboard",
     "fetch_page",
     "x_trends",
+    "open_documents",
+    "ask_documents",
     "read_latest_emails",
     "search_emails",
     "open_settings",
@@ -1079,6 +1083,7 @@ async def _talk(
     from allie.audio.vad import Endpoint, SileroVAD
     from allie.audio.volume import SystemVolume
     from allie.audio.wake import LiveKitWakeWord, wake_model_path
+    from allie.documents import model as document_module
     from allie.live.base import SessionConfig
     from allie.live.registry import MissingAPIKeyError, create_provider
     from allie.machine import Win32Machine
@@ -1107,6 +1112,7 @@ async def _talk(
     from allie.tools import store as store_tools
     from allie.tools import system as system_tools
     from allie.tools import weather as weather_tools
+    from allie.tools.documents import documents_tools_for
     from allie.tools.local import load_local_tools
     from allie.tools.media import (
         media_control,
@@ -1198,6 +1204,23 @@ async def _talk(
     # `finally` as the weather and the pages.
     trends = TrendsPage(seconds=settings.web.timeout_seconds)
     trending = [] if search is None else [x_trends_for(trends, search)]
+    # The user's document folders (D35): the root is listed at every open
+    # for the prompt and at every call by the two tools; a second model
+    # answers from a folder's files, on the key `look_up` uses. No key, no
+    # tools, no list in the prompt.
+    shelf = _documents_shelf(settings.documents)
+    reading_documents = (
+        documents_tools_for(
+            shelf,
+            document_module.DocumentModel(
+                search_key,
+                model=settings.documents.model,
+                seconds=settings.documents.timeout_seconds,
+            ),
+        )
+        if search_key
+        else []
+    )
     # The two ways of sending a message (spec of 2026-09-15). WhatsApp is
     # the installed application, asked for at every send; Telegram is the
     # user's own account, logged in once with `allie telegram login` -
@@ -1303,6 +1326,9 @@ async def _talk(
                 fetch_page_for(reader),
                 # What is trending on X, and why (D30).
                 *trending,
+                # The user's document folders, answered from by a second
+                # model (D35).
+                *reading_documents,
                 # The user's mail, read and never written, inside the
                 # same block.
                 mail_tools.read_latest_emails_for(mailbox),
@@ -1430,7 +1456,10 @@ async def _talk(
                 model=live.model,
                 voice=live.voice,
                 system_prompt=_system_prompt(
-                    memory, pack, web_search=live.web_search or search is not None
+                    memory,
+                    pack,
+                    web_search=live.web_search or search is not None,
+                    folders=shelf.names() if reading_documents else (),
                 ),
                 tools=runner.specs(),
                 transcripts=live.transcripts,
@@ -1500,20 +1529,27 @@ async def _talk(
         database.close()
 
 
-def _system_prompt(memory: UserMemory, pack: Locale, *, web_search: bool = False) -> str:
+def _system_prompt(
+    memory: UserMemory,
+    pack: Locale,
+    *,
+    web_search: bool = False,
+    folders: Sequence[str] = (),
+) -> str:
     """What the model is told at every session open (plan.md 4.5).
 
     The frozen rules first, byte for byte; then the pack's sentence naming
     the language the user speaks (D19 - measured 2026-09-18: without it a
     short "Saat kaç" is heard as Hindi), when the pack has one; then, when
     the session carries a search tool (D22) or `look_up` is on offer (D29),
-    the sentence that says when to use it - after the pack's rule, before
-    the user's facts, so that the frozen bytes stay frozen for a session
-    without one; then the user's facts (section 3.7); the time last of all,
-    so that "yarın" is a date (4.2). `prompts.py` stays without an import,
-    and no language is named in the code.
+    the sentence that says when to use it; then, when the user has document
+    folders (D35), the rule with their names - both after the pack's rule
+    and before the user's facts, so that the frozen bytes stay frozen for a
+    session without them; then the user's facts (section 3.7); the time
+    last of all, so that "yarın" is a date (4.2). `prompts.py` stays without
+    an import, and no language is named in the code.
     """
-    from allie.agent.prompts import SEARCH_RULE, SYSTEM_PROMPT
+    from allie.agent.prompts import DOCUMENTS_RULE, SEARCH_RULE, SYSTEM_PROMPT
     from allie.tools.reminders import current_time_line
 
     rules = SYSTEM_PROMPT
@@ -1521,7 +1557,26 @@ def _system_prompt(memory: UserMemory, pack: Locale, *, web_search: bool = False
         rules = f"{rules}\n\n{pack.user_language_rule}"
     if web_search:
         rules = f"{rules}\n\n{SEARCH_RULE}"
+    if folders:
+        listed = ", ".join(f'"{name}"' for name in folders)
+        rules = f"{rules}\n\n{DOCUMENTS_RULE.format(folders=listed)}"
     return f"{memory.prompt(rules)}\n\n{current_time_line()}"
+
+
+def _documents_shelf(documents: DocumentSettings) -> Shelf:
+    """The user's document folders (D35). The default root is made, so
+    that the user has somewhere to put them; a root the user wrote and that
+    is not there is said in the log, not made - an empty folder would hide
+    the typo."""
+    from loguru import logger
+
+    shelf = Shelf(documents.root())
+    if documents.folder.strip():
+        if not shelf.root.is_dir():
+            logger.warning("[documents] folder {} does not exist", shelf.root)
+    else:
+        shelf.root.mkdir(parents=True, exist_ok=True)
+    return shelf
 
 
 def _session_told(
