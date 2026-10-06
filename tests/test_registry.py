@@ -121,7 +121,7 @@ def test_an_entry_may_leave_the_optional_fields_out(tmp_path: Path) -> None:
 
     entry = load_catalog(catalogue)["x"]
 
-    assert (entry.base_url, entry.key_url, entry.key_prefix) == (None, None, None)
+    assert (entry.base_url, entry.key_url) == (None, None)
 
 
 def test_a_field_from_a_later_version_does_not_break_the_catalogue(tmp_path: Path) -> None:

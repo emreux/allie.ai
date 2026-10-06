@@ -218,20 +218,12 @@ class HandsFree:
         microphone: Microphone | None = None,
         toggle: Hotkey | None = None,
         endpoint: Segmenter | None = None,
-        on_listening: OnEvent | None = None,
         on_mode: OnMode | None = None,
         listening: bool = True,
     ) -> None:
         self._microphone = microphone if microphone is not None else SystemMicrophone()
         self._toggle = toggle if toggle is not None else SystemHotkey(DEFAULT_TOGGLE_HOTKEY)
         self._endpoint = endpoint if endpoint is not None else Endpoint()
-
-        # Called on the event loop the moment the detector hears a sentence
-        # begin, before there is anything to transcribe. The state machine
-        # stops the speaker from it: an assistant that waited for the finished
-        # sentence would talk over the user, into the microphone recording
-        # them. Public because whoever builds this is rarely whoever listens.
-        self.on_listening = on_listening
 
         # Called on the event loop when the mode is switched - and once at
         # `start`, so that the screen shows the mode the microphone is
@@ -240,10 +232,9 @@ class HandsFree:
         self.on_mode = on_mode
 
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._finished: asyncio.Queue[list[Audio]] = asyncio.Queue()
 
         # The window of `listen_for`, while one is open: the next sentence
-        # goes here instead of into `_finished`, and its start is not announced.
+        # goes here.
         self._window: asyncio.Future[list[Audio]] | None = None
 
         # Read by the audio callback on PortAudio's thread and written by the
@@ -309,10 +300,6 @@ class HandsFree:
         traceback: TracebackType | None,
     ) -> None:
         self.stop()
-
-    async def utterance(self) -> Audio:
-        """Waits for the next finished sentence and returns it as one buffer."""
-        return _as_audio(await self._finished.get())
 
     async def listen_for(self, seconds: float) -> Audio | None:
         """One sentence within `seconds`, by the detector; else `None`.
@@ -384,29 +371,23 @@ class HandsFree:
             self.on_mode(listening)
 
     def _examine(self, chunk: Audio) -> None:
-        """One block through the detector, and a sentence out when one ended."""
+        """One block through the detector; a sentence that ended inside a
+        confirmation window is the answer to it. Outside a window a sentence
+        goes nowhere here: the live stream is `LiveCapture`'s, which does its
+        own examining (the old pipeline's `utterance()` queue went on
+        2026-09-27, D37)."""
         if self._deaf_samples > 0:
             self._deaf_samples -= len(chunk)
             return
 
-        started = self._endpoint.speaking
         finished = self._endpoint.feed(chunk)
 
         if self._window is not None:
             # The sentence answers the question just asked: it goes to whoever
-            # asked, and the state machine is not told a new question began.
+            # asked.
             for utterance in finished:
                 if not self._window.done():
                     self._window.set_result([utterance])
-            return
-
-        # Announced before the sentence is handed over: this is the moment the
-        # state machine learns that whatever it was doing has been overtaken.
-        if not started and self._endpoint.speaking and self.on_listening is not None:
-            self.on_listening()
-
-        for utterance in finished:
-            self._finished.put_nowait([utterance])
 
 
 def duplex_for(host_api: str, *, barge_in: bool) -> Duplex:

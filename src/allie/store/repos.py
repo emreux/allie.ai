@@ -45,11 +45,14 @@ from allie.store.normalize import normalize_search
 
 __all__ = [
     "HASH_CHARS",
+    "HISTORY_LIMIT",
     "MIN_QUERY_CHARS",
     "SEARCH_LIMIT",
     "SUMMARY_CHARS",
     "AuditRepo",
     "EarlierCall",
+    "Exchange",
+    "HistoryRepo",
     "ModelUsage",
     "Note",
     "NotesRepo",
@@ -524,3 +527,58 @@ def _arguments(arguments: Mapping[str, Any]) -> str:
     """The arguments as one line of JSON, keys sorted, nothing escaped that
     the reader would rather see as it is."""
     return json.dumps(dict(arguments), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+# How many earlier turns a search answers with: five can be read out loud.
+HISTORY_LIMIT = 5
+
+
+@dataclass(frozen=True, slots=True)
+class Exchange:
+    """One earlier turn: when (UTC epoch), what the user said, what was answered."""
+
+    ts: int
+    heard: str
+    said: str
+
+
+class HistoryRepo:
+    """The `history` table and its FTS5 index (plan.md D45): each finished
+    turn as text, found again by its words the way notes are."""
+
+    def __init__(
+        self, connection: sqlite3.Connection, *, clock: Callable[[], float] = time.time
+    ) -> None:
+        self._connection = connection
+        self._clock = clock
+
+    def add(self, turn_id: str, heard: str, said: str) -> None:
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO history (ts, turn_id, heard, said, text_norm) VALUES (?, ?, ?, ?, ?)",
+                (int(self._clock()), turn_id, heard, said, normalize_search(f"{heard} {said}")),
+            )
+
+    def search(self, query: str, *, since: int, limit: int = HISTORY_LIMIT) -> list[Exchange]:
+        """The turns since `since` holding every usable word of `query`,
+        best match first; `ValueError` for a query with no usable word."""
+        match = query_terms(query)
+        if not match:
+            raise ValueError(f"a query needs a word of at least {MIN_QUERY_CHARS} characters")
+        rows = self._connection.execute(
+            "SELECT h.ts, h.heard, h.said FROM history_fts"
+            " JOIN history AS h ON h.id = history_fts.rowid"
+            " WHERE history_fts MATCH ? AND h.ts >= ?"
+            " ORDER BY bm25(history_fts), h.ts DESC LIMIT ?",
+            (match, since, limit),
+        ).fetchall()
+        return [Exchange(ts=int(row[0]), heard=str(row[1]), said=str(row[2])) for row in rows]
+
+    def delete_before(self, cutoff: int) -> int:
+        with self._connection:
+            cursor = self._connection.execute("DELETE FROM history WHERE ts < ?", (cutoff,))
+        return int(cursor.rowcount)
+
+    def count(self) -> int:
+        row = self._connection.execute("SELECT COUNT(*) FROM history").fetchone()
+        return int(row[0])

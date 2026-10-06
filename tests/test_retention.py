@@ -25,8 +25,13 @@ from allie.config import (
 )
 from allie.live.base import ToolCall
 from allie.store.db import open_database
-from allie.store.repos import AuditRepo, NotesRepo
-from allie.store.retention import AUDIT_DAYS, SECONDS_PER_DAY, blank_old_audit_summaries
+from allie.store.repos import AuditRepo, HistoryRepo, NotesRepo
+from allie.store.retention import (
+    AUDIT_DAYS,
+    SECONDS_PER_DAY,
+    blank_old_audit_summaries,
+    delete_old_history,
+)
 
 NOW = 1_800_000_000.0
 A_PAGE = "Title: Weather - Rain until Thursday, then sun."
@@ -168,3 +173,12 @@ def test_a_file_written_before_there_was_a_retention_table_keeps_a_month(
     config_path().write_text('[live]\nprimary = "gemini:x"\n', encoding="utf-8")
 
     assert load_settings().retention.audit_days == AUDIT_DAYS
+
+
+def test_turns_older_than_the_days_are_deleted_and_counted() -> None:
+    connection = open_database(":memory:")
+    HistoryRepo(connection, clock=lambda: NOW - 31 * SECONDS_PER_DAY).add("t1", "eski", "x")
+    HistoryRepo(connection, clock=lambda: NOW - 1 * SECONDS_PER_DAY).add("t2", "yeni", "x")
+
+    assert delete_old_history(connection, days=30, now=lambda: NOW) == 1
+    assert delete_old_history(connection, days=30, now=lambda: NOW) == 0

@@ -46,6 +46,7 @@ __all__ = [
     "OpenMeteo",
     "Place",
     "WeatherError",
+    "describe_today",
     "get_weather_for",
 ]
 
@@ -125,6 +126,9 @@ class Place:
     country: str
     latitude: float
     longitude: float
+    # The place's IANA zone, as the geocoder gives it: what prayer times are
+    # asked in (plan.md D39). Empty when it gave none.
+    timezone: str = ""
 
     @property
     def label(self) -> str:
@@ -256,7 +260,7 @@ def get_weather_for(service: OpenMeteo) -> Tool:
             return f"{failure} Tell the user the weather could not be fetched."
 
         if days_ahead == 0:
-            return _today(forecast)
+            return describe_today(forecast)
         if days_ahead >= len(forecast.days):
             return TOO_FAR.format(limit=len(forecast.days) - 1, days=days_ahead)
         return _ahead(forecast.place, forecast.days[days_ahead])
@@ -277,6 +281,7 @@ def _place(row: dict[str, Any]) -> Place | None:
             country=str(row.get("country") or ""),
             latitude=float(row["latitude"]),
             longitude=float(row["longitude"]),
+            timezone=str(row.get("timezone") or ""),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -340,7 +345,9 @@ def _condition(code: object) -> str:
         return f"weather code {code}"
 
 
-def _today(forecast: Forecast) -> str:
+def describe_today(forecast: Forecast) -> str:
+    """What the weather is now and today at the forecast's place -
+    `get_weather`'s answer, and the briefing's weather line (D44)."""
     now, today = forecast.now, forecast.days[0]
     return (
         f"{forecast.place.label} now: {_degrees(now.temperature)}, {now.condition}, feels like "

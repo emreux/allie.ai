@@ -7,7 +7,7 @@ eleven plausible characters and YouTube answers *"This video isn't available
 anymore"*. That sentence is the reason this module exists. Nothing here asks
 the model for an identifier; the identifier is looked up first and only then
 is an address built, which is also why the model is never left to reach for
-`open_url` when the user asks for music (`tools/media.py`).
+`open_web` when the user asks for music (`tools/media.py`).
 
 **Two services, two lookups, for the same reason each.**
 

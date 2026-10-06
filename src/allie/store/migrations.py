@@ -126,6 +126,32 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX reminders_due ON reminders(status, fire_at);
     """,
+    # 6 - history (plan.md D45; 27 Sep 2026). What was said in each finished
+    # turn, both sides, as text - never audio - so that "what did we say
+    # about X last week" has an answer. Indexed like notes (trigram FTS5
+    # over the folded text, external content, two triggers); `ts` indexed
+    # for the retention that deletes rows older than `[history] days`.
+    """
+    CREATE TABLE history (
+        id        INTEGER PRIMARY KEY,
+        ts        INTEGER NOT NULL,
+        turn_id   TEXT    NOT NULL,
+        heard     TEXT    NOT NULL,
+        said      TEXT    NOT NULL,
+        text_norm TEXT    NOT NULL
+    );
+    CREATE INDEX history_ts ON history(ts);
+    CREATE VIRTUAL TABLE history_fts USING fts5(
+        text_norm, content='history', content_rowid='id', tokenize='trigram'
+    );
+    CREATE TRIGGER history_after_insert AFTER INSERT ON history BEGIN
+        INSERT INTO history_fts(rowid, text_norm) VALUES (new.id, new.text_norm);
+    END;
+    CREATE TRIGGER history_after_delete AFTER DELETE ON history BEGIN
+        INSERT INTO history_fts(history_fts, rowid, text_norm)
+        VALUES ('delete', old.id, old.text_norm);
+    END;
+    """,
 )
 
 

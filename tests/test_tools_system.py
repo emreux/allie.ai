@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 from allie import shell
+from allie.computer.windows import AppWindow, RunningApps
 from allie.tools import system
 from allie.tools.registry import Tool
 from allie.tools.store import Install, Listing
@@ -25,7 +26,6 @@ from allie.tools.system import (
     get_current_time,
     open_app_for,
     open_settings,
-    open_url,
 )
 
 TURKEY = timezone(timedelta(hours=3), "Turkey Standard Time")
@@ -303,44 +303,6 @@ async def test_the_catalogue_answers_before_the_store_is_ever_asked(opened: Open
 
 
 # --------------------------------------------------------------------------
-# open_url (2.2)
-# --------------------------------------------------------------------------
-
-
-def test_open_url_is_a_safe_tool_that_asks_for_an_address() -> None:
-    assert open_url.risk == "safe"
-    assert open_url.spec.parameters["required"] == ["url"]
-
-
-async def test_a_bare_domain_is_opened_as_https(opened: Opened) -> None:
-    said = await open_url.run(url=" example.com ")
-
-    assert opened.targets == ["https://example.com"]
-    assert said == "Opened https://example.com."
-
-
-async def test_an_address_with_a_scheme_is_opened_as_it_is(opened: Opened) -> None:
-    await open_url.run(url="http://example.com/a?b=1")
-
-    assert opened.targets == ["http://example.com/a?b=1"]
-
-
-async def test_the_browser_is_opened_off_the_event_loop(opened: Opened) -> None:
-    await open_url.run(url="example.com")
-
-    assert threading.main_thread() not in opened.threads
-
-
-async def test_no_browser_is_an_error_the_gate_reports(opened: Opened) -> None:
-    """Raised rather than returned: the gate writes `error` in the audit and
-    tells the model the tool failed, which is what happened."""
-    opened.browser_works = False
-
-    with pytest.raises(RuntimeError, match=r"example\.com"):
-        await open_url.run(url="example.com")
-
-
-# --------------------------------------------------------------------------
 # open_settings (2.2)
 # --------------------------------------------------------------------------
 
@@ -386,3 +348,37 @@ async def test_settings_are_opened_off_the_event_loop(opened: Opened) -> None:
     await open_settings.run(page="sound")
 
     assert threading.main_thread() not in opened.threads
+
+
+async def test_an_app_already_open_is_brought_forward_not_started_again(opened: Opened) -> None:
+    """D41: "WhatsApp'ı aç" with WhatsApp open brings its window up rather
+    than start a second copy. `WhatsApp.Root.exe` folds to `whatsapp.root`,
+    so the window is found by its title."""
+
+    class Desktop:
+        def __init__(self) -> None:
+            self.fronted: list[int] = []
+
+        def windows(self) -> list[AppWindow]:
+            return [AppWindow(7, "WhatsApp", "WhatsApp.Root.exe", 50)]
+
+        def bring_to_front(self, handle: int) -> bool:
+            self.fronted.append(handle)
+            return True
+
+        def close(self, handle: int) -> None: ...
+
+        def alive(self, handle: int) -> bool:
+            return True
+
+        def minimize_all(self) -> None: ...
+
+    catalog = AppCatalog([AppEntry(name="WhatsApp", launch="shell:AppsFolder\\WhatsApp")])
+    desktop = Desktop()
+    tool = open_app_for(catalog, running=RunningApps(desktop, own_pid=1))
+
+    said = await tool.run(name="whatsapp")
+
+    assert said == "WhatsApp was already open; brought it to the front."
+    assert desktop.fronted == [7]
+    assert opened.targets == []

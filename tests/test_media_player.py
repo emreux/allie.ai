@@ -33,7 +33,7 @@ from allie.media.player import NOT_PLAYING, Player
 from allie.media.spotify import Spotify
 from allie.media.track import Recording, SearchError, Track
 from allie.media.window import Browser, MediaWindow
-from allie.tools.media import open_media_for, play_music_for, play_video_for
+from allie.tools.media import play_music_for, play_video_for
 from allie.tools.registry import Tool
 from allie.tools.system import AppCatalog, AppEntry, open_app_for
 
@@ -197,11 +197,11 @@ def build(
 @pytest.fixture
 def tools() -> list[Tool]:
     player = build()
-    return [play_music_for(player), play_video_for(player), open_media_for(player)]
+    return [play_music_for(player), play_video_for(player)]
 
 
 def test_every_media_tool_is_offered_to_the_model_as_safe(tools: list[Tool]) -> None:
-    assert [entry.spec.name for entry in tools] == ["play_music", "play_video", "open_media"]
+    assert [entry.spec.name for entry in tools] == ["play_music", "play_video"]
     assert all(entry.risk == "safe" for entry in tools)
     assert all(entry.confirm_prompt is None for entry in tools)
 
@@ -220,7 +220,7 @@ def test_play_video_has_to_be_told_what_to_open(tools: list[Tool]) -> None:
 
 def test_the_tools_tell_the_model_not_to_write_an_address_itself(tools: list[Tool]) -> None:
     """The hallucinated `watch?v=` is a prompt problem as much as a code one."""
-    assert "open_url" in tools[0].spec.description
+    assert "open_web" in tools[0].spec.description
     assert "watch?v=" in tools[1].spec.description
 
 
@@ -269,7 +269,7 @@ async def test_the_spotify_application_is_not_a_window(opened: Opened) -> None:
     desk = Desk()
     player = build(installed=True, window=MediaWindow(CHROME, desk, appear_seconds=0.01))
 
-    await player.open_service("spotify")
+    await player.open_named("spotify")
 
     assert desk.started == []
     assert opened.targets == ["spotify:"]
@@ -404,11 +404,11 @@ async def test_pausing_first_can_be_switched_off(opened: Opened) -> None:
 async def test_opening_a_service_pauses_nothing_and_plays_nothing(opened: Opened) -> None:
     pause = Paused(playing=True)
 
-    said = await build(pause=pause).open_service("youtube_music")
+    said = await build(pause=pause).open_named("youtube music")
 
     assert opened.targets == ["https://music.youtube.com"]
     assert pause.calls == 0
-    assert NOT_PLAYING in said
+    assert said is not None and NOT_PLAYING in said
 
 
 async def test_two_songs_asked_for_at_once_are_served_one_after_the_other(
@@ -566,7 +566,7 @@ async def test_the_word_search_wakes_the_application_too(opened: Opened) -> None
 async def test_opening_spotify_itself_never_waits_for_a_window(opened: Opened) -> None:
     windows = Windows(set())
 
-    await build(installed=True, windows=windows).open_service("spotify")
+    await build(installed=True, windows=windows).open_named("spotify")
 
     assert opened.targets == ["spotify:"]
     assert windows.asked == []
@@ -661,22 +661,25 @@ async def test_a_video_search_that_fails_says_nothing_was_opened(opened: Opened)
 
 
 async def test_opening_spotify_prefers_the_installed_application(opened: Opened) -> None:
-    await build(installed=True).open_service("spotify")
+    await build(installed=True).open_named("spotify")
 
     assert opened.targets == ["spotify:"]
 
 
 async def test_opening_spotify_without_the_app_uses_its_website(opened: Opened) -> None:
-    await build(installed=False).open_service("spotify")
+    await build(installed=False).open_named("spotify")
 
     assert opened.targets == ["https://open.spotify.com"]
 
 
-async def test_a_service_nobody_offers_is_refused_with_the_list(opened: Opened) -> None:
-    said = await build().open_service("deezer")
+async def test_a_name_that_is_no_service_is_left_to_open_app(opened: Opened) -> None:
+    """`None`, not a refusal: `open_app` asked, and a name that is neither an
+    app nor a service is its to answer (D38: `open_media` is gone, and this is
+    the one way a service is opened by name)."""
+    said = await build().open_named("deezer")
 
     assert opened.targets == []
-    assert "youtube_music" in said
+    assert said is None
 
 
 # --------------------------------------------------------------------------

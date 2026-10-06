@@ -36,6 +36,7 @@ from allie.store.repos import (
     SUMMARY_CHARS,
     AuditRepo,
     EarlierCall,
+    HistoryRepo,
     SettingsRepo,
     UsageRepo,
     args_hash,
@@ -448,7 +449,7 @@ def test_the_latest_of_several_is_the_one_found(ticking: AuditRepo, clock: Clock
 def test_another_tool_or_other_arguments_are_another_call(ticking: AuditRepo) -> None:
     row = ticking.start(CALL, turn_id="t1", risk="confirm")
     ticking.finish(row, status="ok")
-    other_tool = ToolCall(id="c2", name="open_url", arguments=CALL.arguments)
+    other_tool = ToolCall(id="c2", name="open_web", arguments=CALL.arguments)
     other_arguments = ToolCall(id="c3", name="open_app", arguments={"name": "Chrome"})
 
     assert ticking.recent(other_tool, within=600) is None
@@ -528,3 +529,56 @@ def test_a_model_none_of_whose_turns_has_a_price_reports_no_cost(usage: UsageRep
 
 def test_the_report_of_an_empty_table_is_empty(usage: UsageRepo) -> None:
     assert usage.by_model_since(0) == []
+
+
+# --------------------------------------------------------------------------
+# history (D45)
+# --------------------------------------------------------------------------
+
+
+def test_the_archive_is_migration_six() -> None:
+    connection = open_database(":memory:")
+
+    assert schema_version(connection) == 6
+    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
+    assert {"history", "history_fts"} <= tables
+
+
+def test_turns_are_found_by_their_words_in_any_spelling() -> None:
+    connection = open_database(":memory:")
+    history = HistoryRepo(connection, clock=lambda: 1_790_000_000)
+    history.add("t1", "Tatil için Kaş'a gitmeyi düşünüyorum", "Kaş güzel bir seçim.")
+    history.add("t2", "Saat kaç?", "Dokuz.")
+
+    found = history.search("kas tatil", since=0)
+
+    assert [exchange.heard for exchange in found] == ["Tatil için Kaş'a gitmeyi düşünüyorum"]
+    assert found[0].said == "Kaş güzel bir seçim." and found[0].ts == 1_790_000_000
+
+
+def test_only_turns_since_the_given_time_are_found() -> None:
+    connection = open_database(":memory:")
+    old = HistoryRepo(connection, clock=lambda: 1_000)
+    old.add("t1", "Kaş tatili", "Tamam.")
+    new = HistoryRepo(connection, clock=lambda: 5_000)
+    new.add("t2", "Kaş tatili yine", "Tamam.")
+
+    assert [e.heard for e in new.search("kaş", since=2_000)] == ["Kaş tatili yine"]
+
+
+def test_a_query_too_short_to_search_is_refused() -> None:
+    history = HistoryRepo(open_database(":memory:"))
+
+    with pytest.raises(ValueError):
+        history.search("ve", since=0)
+
+
+def test_old_turns_are_deleted_with_their_index() -> None:
+    connection = open_database(":memory:")
+    HistoryRepo(connection, clock=lambda: 1_000).add("t1", "Kaş", "Tamam.")
+    history = HistoryRepo(connection, clock=lambda: 9_000)
+    history.add("t2", "Kaş yine", "Tamam.")
+
+    assert history.delete_before(5_000) == 1
+    assert history.count() == 1
+    assert [e.heard for e in history.search("kaş", since=0)] == ["Kaş yine"]

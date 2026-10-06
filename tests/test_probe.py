@@ -119,7 +119,7 @@ async def test_a_model_that_answers_in_words_fails_with_the_reason_written_down(
 async def test_a_call_to_some_other_tool_is_not_a_pass() -> None:
     """A model that invents a tool it was not offered has not shown it can
     call the one it was."""
-    other = ToolCallEvent(ToolCall(id="c1", name="search_web", arguments={"q": "t"}))
+    other = ToolCallEvent(ToolCall(id="c1", name="open_web", arguments={"search": "t"}))
 
     result = await probe_tool_support(probed(other, TurnComplete()), "m", question=QUESTION)
 

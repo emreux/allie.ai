@@ -3,9 +3,9 @@
 Every model can be asked a question; not every model can be asked to *do*
 something. A tool is offered to it as a schema, and a model that was never
 trained on that shape answers in words instead of calling the tool - and
-nothing complains. `ModelInfo.supports_tools` has said `None`, "nobody has
-tested this", since phase 1. The whole of the secretary depends on the
-answer being yes, so the setup wizard does not take the user's choice of
+nothing complains. Nothing in a provider's model list says whether a model
+calls tools; this probe is how it is found out. The whole of the secretary
+depends on the answer being yes, so the setup wizard does not take the user's choice of
 model until this file has asked it once, and `allie run` asks
 again when the answer is a week old (the provider may have changed the
 model since).

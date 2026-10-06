@@ -1,5 +1,6 @@
-"""`search_web` (15 Sep 2026): the user's words, URL-encoded, into the engine
-they chose, opened the way `open_url` opens an address.
+"""`open_web` (27 Sep 2026, D38 - it was `open_url` and `search_web`): an
+address, or the user's words URL-encoded into the engine they chose, opened
+in their browser; and `look_up`.
 
 `shell.browse` is replaced, as in `test_tools_system.py`: nothing here opens
 a browser, and the thread it would have been opened from is recorded.
@@ -15,13 +16,14 @@ from loguru import logger
 from allie import shell
 from allie.tools.registry import Tool
 from allie.tools.web import (
+    BOTH,
     LOOK_UP_PROMPT,
     NO_QUESTION,
-    NO_WORDS,
+    NOTHING_TO_OPEN,
     OFFER_BROWSER,
     SEARCH_URL,
     look_up_for,
-    search_web_for,
+    open_web_for,
 )
 from allie.web.search import QUOTA_USED, Found, SearchError
 
@@ -46,20 +48,34 @@ def opened(monkeypatch: pytest.MonkeyPatch) -> Opened:
 
 
 @pytest.fixture
-def search_web() -> Tool:
-    return search_web_for()
+def open_web() -> Tool:
+    return open_web_for()
 
 
-def test_it_is_a_safe_tool_that_needs_the_words(search_web: Tool) -> None:
-    assert search_web.risk == "safe"
-    assert search_web.spec.name == "search_web"
-    assert search_web.spec.parameters["required"] == ["query"]
+def test_it_is_a_safe_tool_that_needs_nothing_but_one_of_two(open_web: Tool) -> None:
+    assert open_web.risk == "safe"
+    assert open_web.spec.name == "open_web"
+    assert open_web.spec.parameters["required"] == []
+    assert set(open_web.spec.parameters["properties"]) == {"url", "search"}
+
+
+async def test_an_address_opens_with_https_added(open_web: Tool, opened: Opened) -> None:
+    said = await open_web.run(url="  sahibinden.com ")
+
+    assert opened.addresses == ["https://sahibinden.com"]
+    assert said == "Opened https://sahibinden.com."
+
+
+async def test_an_address_with_a_scheme_is_left_alone(open_web: Tool, opened: Opened) -> None:
+    await open_web.run(url="http://192.168.1.1/admin")
+
+    assert opened.addresses == ["http://192.168.1.1/admin"]
 
 
 async def test_the_words_go_into_the_address_encoded_and_otherwise_untouched(
-    search_web: Tool, opened: Opened
+    open_web: Tool, opened: Opened
 ) -> None:
-    said = await search_web.run(query="Python öğren & C#")
+    said = await open_web.run(search="Python öğren & C#")
 
     assert opened.addresses == ["https://www.google.com/search?q=Python+%C3%B6%C4%9Fren+%26+C%23"]
     assert said == "Opened a web search for 'Python öğren & C#'."
@@ -67,57 +83,60 @@ async def test_the_words_go_into_the_address_encoded_and_otherwise_untouched(
 
 async def test_the_engine_is_whatever_the_settings_say(opened: Opened) -> None:
     """Section 10: the engine is configuration. DuckDuckGo here, no code changed."""
-    tool = search_web_for("https://duckduckgo.com/?q={query}")
+    tool = open_web_for("https://duckduckgo.com/?q={query}")
 
-    await tool.run(query="hava durumu")
+    await tool.run(search="hava durumu")
 
     assert opened.addresses == ["https://duckduckgo.com/?q=hava+durumu"]
 
 
-def test_an_address_with_nowhere_to_put_the_words_falls_back_to_the_default() -> None:
+def test_an_engine_with_nowhere_to_put_the_words_falls_back_to_the_default() -> None:
     """A typo in `config.toml` is logged and searching keeps working, the
     way a mistyped `[media] default_service` is handled."""
     warned: list[str] = []
     sink = logger.add(lambda message: warned.append(str(message)), level="WARNING")
     try:
-        tool = search_web_for("https://example.com/search")
+        tool = open_web_for("https://example.com/search")
     finally:
         logger.remove(sink)
 
-    assert tool.spec.name == "search_web"
+    assert tool.spec.name == "open_web"
     assert len(warned) == 1 and "{query}" in warned[0] and SEARCH_URL in warned[0]
 
 
-async def test_a_typo_in_the_address_still_opens_the_default_engine(opened: Opened) -> None:
-    tool = search_web_for("https://example.com/search")
-
-    await tool.run(query="x")
+async def test_a_typo_in_the_engine_still_opens_the_default(opened: Opened) -> None:
+    await open_web_for("https://example.com/search").run(search="x")
 
     assert opened.addresses == ["https://www.google.com/search?q=x"]
 
 
-async def test_empty_words_open_nothing(search_web: Tool, opened: Opened) -> None:
-    assert await search_web.run(query="   ") == NO_WORDS
+async def test_neither_opens_nothing(open_web: Tool, opened: Opened) -> None:
+    assert await open_web.run(url="  ", search=" ") == NOTHING_TO_OPEN
     assert opened.addresses == []
 
 
-async def test_the_words_are_tidied_of_whitespace_only(search_web: Tool, opened: Opened) -> None:
-    await search_web.run(query="  iki   kelime \n")
+async def test_both_open_nothing(open_web: Tool, opened: Opened) -> None:
+    assert await open_web.run(url="a.com", search="b") == BOTH
+    assert opened.addresses == []
+
+
+async def test_the_words_are_tidied_of_whitespace_only(open_web: Tool, opened: Opened) -> None:
+    await open_web.run(search="  iki   kelime \n")
 
     assert opened.addresses == ["https://www.google.com/search?q=iki+kelime"]
 
 
 async def test_a_browser_that_will_not_open_is_an_error_the_gate_reports(
-    search_web: Tool, opened: Opened
+    open_web: Tool, opened: Opened
 ) -> None:
     opened.browser_works = False
 
     with pytest.raises(RuntimeError, match="no browser would open"):
-        await search_web.run(query="x")
+        await open_web.run(search="x")
 
 
-async def test_the_browser_is_opened_off_the_event_loop(search_web: Tool, opened: Opened) -> None:
-    await search_web.run(query="x")
+async def test_the_browser_is_opened_off_the_event_loop(open_web: Tool, opened: Opened) -> None:
+    await open_web.run(url="a.com")
 
     assert opened.threads[0] is not threading.main_thread()
 
@@ -192,9 +211,16 @@ async def test_an_answer_without_searches_or_sources_is_still_marked() -> None:
     assert said == '<untrusted source="search">\nBilmiyorum.\n</untrusted>'
 
 
-def test_search_web_is_the_browser_only_when_the_user_asks_for_it() -> None:
-    """D29: a question is answered by `look_up`; `search_web` shows a search."""
-    description = search_web_for().spec.description
+def test_open_web_is_the_browser_only_when_the_user_asks_for_it() -> None:
+    """D29: a question is answered by `look_up`; `open_web` shows a page or a search."""
+    description = open_web_for().spec.description
 
     assert "only when" in description
     assert "look_up" in description
+    assert "play_music" in description
+
+
+def test_look_up_leaves_the_quick_facts_to_their_tool() -> None:
+    description = look_up_for(FakeSearch()).spec.description
+
+    assert "facts" in description and "exchange rates" not in description

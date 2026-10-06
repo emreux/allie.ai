@@ -17,6 +17,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from allie import config as config_module
 from allie.agent.limits import Limits
@@ -24,9 +25,11 @@ from allie.config import (
     KEYRING_SERVICE,
     AudioSettings,
     DocumentSettings,
+    HistorySettings,
     LimitSettings,
     LiveSettings,
     LocaleSettings,
+    MailSettings,
     MessagingSettings,
     Settings,
     TelegramSettings,
@@ -232,18 +235,26 @@ def test_the_two_turn_detection_knobs_round_trip_through_the_file(config_home: P
     assert (live.end_sensitivity, live.silence_ms) == ("HIGH", 300)
 
 
-def test_compression_is_on_and_affective_dialog_off_unless_the_owner_says_otherwise(
-    config_home: Path,
-) -> None:
-    """D25: the model refuses `enable_affective_dialog` (2026-09-21), so that
-    one ships off; the sliding window is accepted and ships on."""
-    live = load_settings().live
-    assert (live.affective_dialog, live.compress_context) == (False, True)
+def test_compression_is_on_unless_the_owner_says_otherwise(config_home: Path) -> None:
+    """D25: the sliding window is accepted and ships on."""
+    assert load_settings().live.compress_context is True
 
-    save_settings(Settings(live=LiveSettings(affective_dialog=True, compress_context=False)))
+    save_settings(Settings(live=LiveSettings(compress_context=False)))
+
+    assert load_settings().live.compress_context is False
+
+
+def test_a_file_that_still_names_affective_dialog_loads(config_home: Path) -> None:
+    """D37: the switch is gone (Google removed the feature); a `config.toml`
+    written before still loads, and the line means nothing."""
+    (config_home / "config.toml").write_text(
+        "[live]\naffective_dialog = true\ncompress_context = false\n", encoding="utf-8"
+    )
 
     live = load_settings().live
-    assert (live.affective_dialog, live.compress_context) == (True, False)
+
+    assert live.compress_context is False
+    assert not hasattr(live, "affective_dialog")
 
 
 def test_web_search_is_off_until_the_owner_switches_it_on(config_home: Path) -> None:
@@ -297,7 +308,7 @@ def test_a_negative_session_number_is_refused() -> None:
 
 
 def test_the_search_engine_round_trips_through_the_file(config_home: Path) -> None:
-    """`[web] search_url` (15 Sep 2026): which engine `search_web` opens is
+    """`[web] search_url` (15 Sep 2026): which engine `open_web` opens is
     the user's, not the code's."""
     save_settings(Settings(web=WebSettings(search_url="https://duckduckgo.com/?q={query}")))
 
@@ -579,3 +590,22 @@ def test_the_documents_table_round_trips(config_home: Path) -> None:
         "gemini-3.5-flash-lite",
         20.0,
     )
+
+
+def test_the_outgoing_server_follows_the_incoming_one_unless_written() -> None:
+    """D43: Gmail's pair is imap. / smtp.; a server that is both keeps its
+    name; one written in `[mail] smtp_host` wins."""
+    assert MailSettings(host="imap.gmail.com").smtp() == "smtp.gmail.com"
+    assert MailSettings(host="outlook.office365.com").smtp() == "outlook.office365.com"
+    assert MailSettings(host="imap.x.test", smtp_host=" mail.x.test ").smtp() == "mail.x.test"
+    assert MailSettings().smtp_port == 465
+
+
+def test_the_archive_is_on_and_keeps_thirty_days_by_default() -> None:
+    assert (HistorySettings().enabled, HistorySettings().days) == (True, 30)
+
+
+@pytest.mark.parametrize("days", [0, -1, 366])
+def test_the_archive_keeps_one_day_to_a_year(days: int) -> None:
+    with pytest.raises(ValidationError):
+        HistorySettings(days=days)

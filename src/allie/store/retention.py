@@ -17,6 +17,10 @@ loses its summary. The arguments stay: the repeat check reads them, and they
 are what the user asked for rather than what the world answered back. Notes and
 reminders are never touched here - the user wrote those down to keep them, and
 `allie purge --all` is the door for them.
+
+The conversation archive (D45) is the other kind: nothing in it was written
+down to be kept, so a turn older than `[history] days` is deleted, row and
+index, at every start.
 """
 
 from __future__ import annotations
@@ -25,7 +29,13 @@ import sqlite3
 import time
 from collections.abc import Callable
 
-__all__ = ["AUDIT_DAYS", "SECONDS_PER_DAY", "blank_old_audit_summaries"]
+__all__ = [
+    "AUDIT_DAYS",
+    "HISTORY_DAYS",
+    "SECONDS_PER_DAY",
+    "blank_old_audit_summaries",
+    "delete_old_history",
+]
 
 # The default of `[retention] audit_days`: long enough to answer "what did
 # it say last week", short enough that a page read in spring is not on the
@@ -56,4 +66,21 @@ def blank_old_audit_summaries(
             " WHERE ts < ? AND result_summary IS NOT NULL",
             (cutoff,),
         )
+    return int(cursor.rowcount)
+
+
+# The default of `[history] days` (D45): the owner's "son 30 olsun".
+HISTORY_DAYS = 30
+
+
+def delete_old_history(
+    connection: sqlite3.Connection,
+    *,
+    days: int = HISTORY_DAYS,
+    now: Callable[[], float] = time.time,
+) -> int:
+    """Deletes every archived turn older than `days`, and says how many."""
+    cutoff = int(now()) - days * SECONDS_PER_DAY
+    with connection:
+        cursor = connection.execute("DELETE FROM history WHERE ts < ?", (cutoff,))
     return int(cursor.rowcount)

@@ -31,7 +31,7 @@ two more tracks back.
 closure over a `Volume` (`audio/volume.py`): the keys step, this one lands
 on the number the user said.
 
-**Starting something** is the other three, and they are closures over a
+**Starting something** is the other two, and they are closures over a
 `Player` (`media/player.py`) for the same reason `open_app` is a closure over
 the app catalogue: what the model sees is read off the function's signature,
 and the player is not something the model chooses.
@@ -40,7 +40,7 @@ The descriptions below do more work than most. A model that is not told
 otherwise will answer "play X" by writing a `youtube.com/watch?v=` address of
 its own invention - eleven characters it cannot possibly know - and YouTube
 answers "This video isn't available anymore". Saying so in the description,
-in the tool that offers the alternative, is what stops it; `open_url` says the
+in the tool that offers the alternative, is what stops it; `open_web` says the
 same thing from the other side.
 """
 
@@ -63,7 +63,6 @@ __all__ = [
     "SETTLE_SECONDS",
     "Action",
     "media_control",
-    "open_media_for",
     "play_music_for",
     "play_video_for",
     "set_volume_for",
@@ -229,7 +228,7 @@ def play_music_for(player: Player) -> Tool:
         ] = "",
     ) -> str:
         """Plays music. Use this for every request to hear music - "play some
-        music", "put on X", "play X by Y" - and never open_url for one. This
+        music", "put on X", "play X by Y" - and never open_web for one. This
         looks the song up and opens an address that starts playing it; a web
         address you write yourself opens a search the user still has to click,
         or a video identifier you cannot know and therefore invented. Pass the
@@ -253,7 +252,7 @@ def play_video_for(player: Player) -> Tool:
     ) -> str:
         """Opens a video on YouTube and starts it. Use this whenever the user
         wants to watch something - "open the video called X", "put X on
-        YouTube" - and never open_url with a watch?v= address: a YouTube
+        YouTube" - and never open_web with a watch?v= address: a YouTube
         identifier is eleven characters you cannot know, and one you invent
         opens "This video isn't available anymore". This searches YouTube and
         opens the first result, which is the video the user meant. The answer
@@ -262,21 +261,3 @@ def play_video_for(player: Player) -> Tool:
         return await player.play_video(query)
 
     return play_video
-
-
-def open_media_for(player: Player) -> Tool:
-    """`open_media`, bound to the player."""
-
-    @tool(risk="safe")
-    async def open_media(
-        service: Annotated[str, "One of: " + service_keys() + "."],
-    ) -> str:
-        """Opens a music or video service without playing anything. Use it when
-        the user asks for the service itself - "open YouTube", "open Spotify" -
-        rather than to hear something; if they named something to play, use
-        play_music or play_video instead. YouTube Music has no application on
-        Windows and opens in the browser; Spotify opens its installed
-        application where there is one and its website otherwise."""
-        return await player.open_service(service)
-
-    return open_media

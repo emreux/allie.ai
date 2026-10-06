@@ -233,7 +233,7 @@ def test_a_session_opens_with_the_plan_s_defaults() -> None:
     assert (config.end_sensitivity, config.silence_ms) == ("", 0)
     assert list(config.tools) == []
     assert config.web_search is False
-    assert (config.affective_dialog, config.compress_context) == (False, False)
+    assert config.compress_context is False
 
 
 def test_an_event_cannot_be_edited_after_it_is_built() -> None:
@@ -305,7 +305,7 @@ async def test_a_session_asked_for_the_optional_features_still_opens_on_every_ad
     opens all the same."""
     provider = adapter.build()
 
-    asked = replace(CONFIG, web_search=True, affective_dialog=True, compress_context=True)
+    asked = replace(CONFIG, web_search=True, compress_context=True)
     async with provider.connect(asked) as session:
         assert isinstance(session, LiveSession)
 

@@ -4,12 +4,13 @@
 "Yarın dokuzda Ahmet'i aramayı hatırlat" is a time and a sentence. The
 model turns the words into the time - it is told what time it is now at
 the end of every request (`current_time_line`), so that "yarın" has a
-date - and `create_reminder` writes the row the scheduler will fire
+date - and `reminders` with action 'set' writes the row the scheduler will fire
 (`scheduler/runner.py`). Nothing here says anything out loud: when the
 time comes, the scheduler puts the sentence on the announce queue, and
 the state machine says it between turns (invariant 5).
 
-`create_reminder` and `list_reminders` are `safe`; `cancel_reminder` is
+`reminders` (set and list; one tool since D38, 27 Sep 2026, where there
+were `create_reminder` and `list_reminders`) is `safe`; `cancel_reminder` is
 `confirm` and takes the reminder's own text beside its number, for the
 reason `delete_note` does (`tools/notes.py`): the user hears the real
 words before saying yes, and a paraphrase is refused.
@@ -37,12 +38,13 @@ from allie.tools.registry import Tool, tool
 
 __all__ = [
     "MAX_REMINDER_CHARS",
+    "NO_TIME",
     "REPEATS",
     "TEXT",
+    "UNKNOWN_ACTION",
     "cancel_reminder_for",
-    "create_reminder_for",
     "current_time_line",
-    "list_reminders_for",
+    "reminders_for",
 ]
 
 # The last link of the chain of section 3.12 for the one sentence a user
@@ -80,7 +82,17 @@ PAST = "The time {when} is already past (it is {now}). Ask the user for a time s
 NONE_PENDING = "No reminders are pending."
 PENDING = "Pending reminders, soonest first:\n{reminders}"
 CANCELLED = "Cancelled reminder #{id}: {text!r}."
-NO_SUCH = "There is no pending reminder #{id}. Call list_reminders to find the one the user means."
+NO_SUCH = (
+    "There is no pending reminder #{id}. Call reminders with action 'list' to find the one "
+    "the user means."
+)
+NO_TIME = (
+    "A reminder needs a time: pass at as ISO 8601 in the user's local time, for example "
+    "2026-09-18T09:00, worked out from the current date and time you were given."
+)
+UNKNOWN_ACTION = "No action {action!r}; the actions are 'set' and 'list'."
+
+ReminderAction = Literal["set", "list"]
 MISMATCH = (
     "Reminder #{id} reads {stored!r}, not {given!r}. Nothing was cancelled; call again with "
     "the reminder's own text so that the user hears what will be cancelled."
@@ -110,31 +122,49 @@ def current_time_line(now: datetime | None = None) -> str:
     )
 
 
-def create_reminder_for(reminders: ReminderRepo, *, clock: Callable[[], float] = time.time) -> Tool:
-    """`create_reminder`, bound to the table and to the clock that says
-    whether a time is still to come."""
+def reminders_for(repo: ReminderRepo, *, clock: Callable[[], float] = time.time) -> Tool:
+    """`reminders`, bound to the table and to the clock that says whether a
+    time is still to come (D38: it was `create_reminder` and `list_reminders`)."""
 
     @tool(risk="safe")
-    async def create_reminder(
-        text: Annotated[str, "What to say when the time comes, in the user's own words."],
+    async def reminders(
+        action: Annotated[ReminderAction, "'set' sets a reminder; 'list' lists those to come."],
+        text: Annotated[
+            str, "For set: what to say when the time comes, in the user's own words."
+        ] = "",
         at: Annotated[
             str,
-            "When, as ISO 8601 in the user's local time: 2026-09-18T09:00. Work it out from "
-            "the current date and time you were given.",
-        ],
+            "For set: when, as ISO 8601 in the user's local time - 2026-09-18T09:00. Work it "
+            "out from the current date and time you were given.",
+        ] = "",
         repeat: Annotated[
-            Repeat, "'none' for once; 'daily', 'weekly', 'weekdays' or 'monthly' from that time on."
+            Repeat,
+            "For set: 'none' for once; 'daily', 'weekly', 'weekdays' or 'monthly' from then on.",
         ] = "none",
     ) -> str:
-        """Sets a reminder to be said aloud at a time: "remind me tomorrow
-        at nine to call Ahmet", "every weekday at eight". Use it whenever
-        the user wants to be told something at a time; for a note with no
-        time, add_note keeps it instead. Say back the time you set."""
+        """Sets reminders to be said aloud at a time, and lists the ones to
+        come. set: "remind me tomorrow at nine to call Ahmet", "every weekday
+        at eight" - say back the time you set; for a note with no time, notes
+        keeps it instead. list: the reminders still to come, soonest first,
+        with their numbers - when the user asks what reminders they have, or
+        before cancelling one."""
+        # A plain string: the schema offers two actions, and a model can
+        # still send a third.
+        chosen: str = action
+        if chosen == "list":
+            pending = repo.pending(limit=LIST_LIMIT)
+            if not pending:
+                return NONE_PENDING
+            return PENDING.format(reminders="\n".join(_line(reminder) for reminder in pending))
+        if chosen != "set":
+            return UNKNOWN_ACTION.format(action=chosen)
         cleaned = " ".join(text.split())
         if not cleaned:
             return EMPTY
         if len(cleaned) > MAX_REMINDER_CHARS:
             return TOO_LONG.format(limit=MAX_REMINDER_CHARS)
+        if not at.strip():
+            return NO_TIME
         try:
             moment = datetime.fromisoformat(at.strip())
         except ValueError:
@@ -146,7 +176,7 @@ def create_reminder_for(reminders: ReminderRepo, *, clock: Callable[[], float] =
         if moment.timestamp() <= now:
             return PAST.format(when=_local(int(moment.timestamp())), now=_local(int(now)))
 
-        made = reminders.add(cleaned, fire_at=int(moment.timestamp()), rrule=REPEATS[repeat])
+        made = repo.add(cleaned, fire_at=int(moment.timestamp()), rrule=REPEATS[repeat])
         return SET.format(
             id=made.id,
             when=_local(made.fire_at),
@@ -154,23 +184,7 @@ def create_reminder_for(reminders: ReminderRepo, *, clock: Callable[[], float] =
             text=made.text,
         )
 
-    return create_reminder
-
-
-def list_reminders_for(reminders: ReminderRepo) -> Tool:
-    """`list_reminders`, bound to the table it reads."""
-
-    @tool(risk="safe")
-    async def list_reminders() -> str:
-        """Lists the reminders still to come, soonest first, with their
-        numbers. Use it when the user asks what reminders they have, or
-        before cancelling one."""
-        pending = reminders.pending(limit=LIST_LIMIT)
-        if not pending:
-            return NONE_PENDING
-        return PENDING.format(reminders="\n".join(_line(reminder) for reminder in pending))
-
-    return list_reminders
+    return reminders
 
 
 def cancel_reminder_for(
@@ -180,12 +194,12 @@ def cancel_reminder_for(
 
     @tool(risk="confirm", confirm_prompt=confirm_prompt)
     async def cancel_reminder(
-        reminder_id: Annotated[int, "The reminder's number, as list_reminders showed it."],
-        text: Annotated[str, "The reminder's text exactly as list_reminders showed it."],
+        reminder_id: Annotated[int, "The reminder's number, as reminders (list) showed it."],
+        text: Annotated[str, "The reminder's text exactly as reminders (list) showed it."],
     ) -> str:
         """Cancels a pending reminder, once the user has confirmed out
-        loud. Call list_reminders first and pass the number and the text
-        as listed: the user hears the text before deciding, and a text
+        loud. Call reminders with action 'list' first and pass the number
+        and the text as listed: the user hears the text before deciding, and a text
         that does not match the reminder is not cancelled. A repeating
         reminder is cancelled for good."""
         stored = reminders.get(reminder_id)

@@ -4,8 +4,8 @@ Phase 2.1c opened this file with the smallest tool there is: `get_current_time`
 answers the one question the frozen system prompt of `agent/prompts.py`
 cannot, because the prompt carries no clock so that its bytes never change
 and the provider's cache keeps hitting (architecture guide section 2). Phase
-2.2 adds what the owner asked for first (section 2): open an app, open a
-site, open a page of Settings.
+2.2 adds what the owner asked for first (section 2): open an app and a page
+of Settings (a site is `tools/web.py::open_web`'s since D38).
 
 **Opening an app by name is a catalogue problem.** Windows has no "start
 Spotify" call. It has the shortcut files in the two Start Menu folders and,
@@ -44,7 +44,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Protocol
+from typing import TYPE_CHECKING, Annotated, Protocol
 
 from loguru import logger
 
@@ -52,6 +52,10 @@ from allie import shell
 from allie.store.names import NameIndex
 from allie.store.normalize import normalize_search
 from allie.tools.registry import Tool, tool
+
+if TYPE_CHECKING:
+    # A type only: `computer/windows.py` imports `AppEntry` from here.
+    from allie.computer.windows import RunningApps
 
 __all__ = [
     "SETTINGS_PAGES",
@@ -62,7 +66,6 @@ __all__ = [
     "get_current_time",
     "open_app_for",
     "open_settings",
-    "open_url",
     "scan_start_apps",
     "scan_start_menu",
     "spoken_form",
@@ -387,6 +390,7 @@ def open_app_for(
     media: MediaNames | None = None,
     store: StoreLookup | None = None,
     unknown_publisher: str = TEXT["unknown_publisher"],
+    running: RunningApps | None = None,
 ) -> Tool:
     """`open_app`, bound to the catalogue it looks names up in.
 
@@ -407,6 +411,9 @@ def open_app_for(
     and the model is told how to have it downloaded - through `install_app`,
     which asks the user (2026-09-13). The name the user said goes to the
     Store for that lookup and nowhere else.
+
+    `running`, when there is one, is asked before anything is started: an
+    app that is open already comes to the front (D41).
     """
 
     @tool(risk="safe")
@@ -422,7 +429,8 @@ def open_app_for(
         the user. Windows may list the app under its English name (Calculator,
         Settings, Notepad); ask the user only when all of that fails. To play
         something rather than to open the app it plays in, use play_music or
-        play_video."""
+        play_video. An app that is already open is brought to the front
+        instead of opened again."""
         found = catalog.find(name)
         if found is None and store is not None and store.settled():
             # A download that outlived its turn has ended: the Start menu has
@@ -430,6 +438,17 @@ def open_app_for(
             await catalog.refresh()
             found = catalog.find(name)
         if found is not None:
+            if running is not None:
+                # Open already (D41): the window comes to the front instead
+                # of a second copy starting.
+                windows = await asyncio.to_thread(running.find, name, found)
+                if windows:
+                    if await asyncio.to_thread(running.front, windows[0]):
+                        return f"{found.name} was already open; brought it to the front."
+                    return (
+                        f"{found.name} is already open, but Windows kept it behind the window "
+                        "in front; it is flashing on the taskbar."
+                    )
             # `os.startfile` returns as soon as the shell has taken the
             # request, but taking it can be a store app's activation - long
             # enough to be kept off the loop.
@@ -463,22 +482,6 @@ def open_app_for(
         return f"No app called {name!r}{hint}."
 
     return open_app
-
-
-@tool(risk="safe")
-async def open_url(url: Annotated[str, "A web address; 'https://' is added when missing."]) -> str:
-    """Opens a web address in the user's default browser. Use it for a site the
-    user named or an address that came up in the conversation. Not for music or
-    video: an address you write for those either opens a search the user then
-    has to click, or names an identifier you cannot know. play_music and
-    play_video look the real one up first."""
-    address = url.strip()
-    if "://" not in address:
-        address = f"https://{address}"
-
-    if not await shell.open_address(address):
-        raise RuntimeError(f"no browser would open {address}")
-    return f"Opened {address}."
 
 
 @tool(risk="safe")

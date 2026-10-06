@@ -232,13 +232,6 @@ class Player:
         await self.videos.aclose()
         await self.recordings.aclose()
 
-    async def open_service(self, service: str) -> str:
-        """Opens a service the model named by key, playing nothing."""
-        chosen = _matching(normalize_search(service).strip())
-        if chosen is None:
-            return f"No media service called {service!r}; the services are: {service_keys()}."
-        return await self._open_home(chosen)
-
     async def open_named(self, spoken: str) -> str | None:
         """Opens the service the user named, or `None` if they named no service.
 

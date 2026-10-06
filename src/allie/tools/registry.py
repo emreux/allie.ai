@@ -51,6 +51,11 @@ class Tool:
     `prepare`, when there is one, runs before that question: the question
     is filled from what it answers, and the tool runs with the same - so
     the user hears what will really happen, once (`agent/policy.py`).
+
+    `said_as` is how the question reads a value - `power`'s question is
+    `{action}`, and `lock` is read as the pack's whole sentence; the tool
+    still gets `lock`. `shown` puts the question on the screen too, for an
+    address that is easier to check by eye (D40, D43).
     """
 
     spec: ToolSpec
@@ -58,6 +63,8 @@ class Tool:
     run: ToolFunction
     confirm_prompt: str | None = None
     prepare: Prepare | None = None
+    said_as: Mapping[str, Mapping[str, str]] | None = None
+    shown: bool = False
 
 
 def build_spec(fn: ToolFunction) -> ToolSpec:

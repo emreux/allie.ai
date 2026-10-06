@@ -49,7 +49,7 @@ UNKNOWN_COUNTRY = (
 )
 LIST_FAILED = (
     "{reason} Tell the user the trends could not be read, and offer to open {url} in their "
-    "browser with open_url."
+    "browser with open_web."
 )
 NOT_EXPLAINED = "Why they are trending could not be looked up: {reason}"
 

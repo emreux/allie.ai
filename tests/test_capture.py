@@ -338,51 +338,6 @@ async def test_it_can_be_started_deaf_for_whoever_wants_that() -> None:
         assert endpoint.heard == []
 
 
-async def test_a_sentence_comes_back_as_one_buffer() -> None:
-    talk, _, microphone, _ = wired()
-
-    with talk:
-        microphone.hear(tone(0.9))
-        microphone.hear(tone(0.8))
-        microphone.hear(tone(0.1))  # the sentence ended
-
-        pcm = await talk.utterance()
-
-    assert np.array_equal(pcm, np.concatenate([tone(0.9), tone(0.8)]))
-    assert pcm.dtype == np.float32
-
-
-async def test_two_sentences_are_two_utterances() -> None:
-    talk, _, microphone, _ = wired()
-
-    with talk:
-        microphone.hear(tone(0.9))
-        microphone.hear(tone(0.1))
-        microphone.hear(tone(0.7))
-        microphone.hear(tone(0.1))
-
-        first = await talk.utterance()
-        second = await talk.utterance()
-
-    assert np.array_equal(first, tone(0.9))
-    assert np.array_equal(second, tone(0.7))
-
-
-async def test_an_utterance_survives_until_somebody_asks_for_it() -> None:
-    """The state machine is busy with the last turn when the next sentence
-    ends. It is kept, not dropped."""
-    talk, _, microphone, _ = wired()
-
-    with talk:
-        microphone.hear(tone(0.9))
-        microphone.hear(tone(0.1))
-        await asyncio.sleep(0)
-
-        pcm = await asyncio.wait_for(talk.utterance(), timeout=0.5)
-
-    assert np.array_equal(pcm, tone(0.9))
-
-
 async def test_the_toggle_turns_it_off() -> None:
     talk, toggle, microphone, endpoint = wired()
 
@@ -485,58 +440,6 @@ async def test_switching_the_mode_starts_a_new_stream() -> None:
         await asyncio.sleep(0)
 
     assert endpoint.resets == before + 1
-
-
-async def test_the_moment_the_detector_hears_a_voice_is_announced() -> None:
-    """`app.py` learns from it that whatever it was doing has been overtaken,
-    and stops talking before the sentence is even over."""
-    started: list[str] = []
-    talk, _, microphone, _ = wired(on_listening=lambda: started.append("now"))
-
-    with talk:
-        microphone.hear(tone(0.1))
-        await asyncio.sleep(0)
-        assert started == []
-
-        microphone.hear(tone(0.9))
-        await asyncio.sleep(0)
-
-    assert started == ["now"]
-
-
-async def test_the_announcement_arrives_where_asyncio_can_be_touched() -> None:
-    loops: list[object] = []
-    talk, _, microphone, _ = wired(on_listening=lambda: loops.append(asyncio.get_running_loop()))
-
-    with talk:
-        microphone.hear(tone(0.9))
-        await asyncio.sleep(0)
-
-    assert loops == [asyncio.get_running_loop()]
-
-
-async def test_a_sentence_is_announced_once_and_not_once_a_block() -> None:
-    started: list[str] = []
-    talk, _, microphone, _ = wired(on_listening=lambda: started.append("now"))
-
-    with talk:
-        for _ in range(3):
-            microphone.hear(tone(0.9))
-        await asyncio.sleep(0)
-
-    assert started == ["now"]
-
-
-async def test_listening_works_whether_or_not_anybody_listens_for_the_announcement() -> None:
-    talk, _, microphone, _ = wired()
-
-    with talk:
-        microphone.hear(tone(0.9))
-        microphone.hear(tone(0.1))
-
-        pcm = await talk.utterance()
-
-    assert np.array_equal(pcm, tone(0.9))
 
 
 # --------------------------------------------------------------------------
@@ -903,10 +806,7 @@ async def test_a_window_nobody_answers_in_closes_with_nothing() -> None:
 async def test_with_listening_off_the_window_still_hears_a_sentence() -> None:
     """The assistant asked, so the answer is heard even with the mode off -
     and the mode is as it was afterwards."""
-    started: list[str] = []
-    talk, _, microphone, endpoint = wired(
-        listening=False, on_listening=lambda: started.append("now")
-    )
+    talk, _, microphone, endpoint = wired(listening=False)
 
     with talk:
         window = await opened(talk)
@@ -922,41 +822,7 @@ async def test_with_listening_off_the_window_still_hears_a_sentence() -> None:
 
     assert answer is not None
     assert np.array_equal(answer, np.concatenate([tone(0.9), tone(0.8)]))
-    assert started == []
     assert len(endpoint.heard) == 3
-
-
-async def test_the_answer_does_not_become_a_question_as_well() -> None:
-    started: list[str] = []
-    talk, _, microphone, _ = wired(on_listening=lambda: started.append("now"))
-
-    with talk:
-        window = await opened(talk)
-        microphone.hear(tone(0.9))
-        microphone.hear(tone(0.1))
-
-        answer = await window
-
-        with pytest.raises(TimeoutError):
-            await asyncio.wait_for(talk.utterance(), timeout=0.05)
-
-    assert answer is not None
-    assert started == []
-
-
-async def test_after_the_window_it_listens_for_questions_again() -> None:
-    started: list[str] = []
-    talk, _, microphone, _ = wired(on_listening=lambda: started.append("now"))
-
-    with talk:
-        assert await talk.listen_for(0.02) is None
-
-        microphone.hear(tone(0.9))
-        microphone.hear(tone(0.1))
-        pcm = await talk.utterance()
-
-    assert started == ["now"]
-    assert np.array_equal(pcm, tone(0.9))
 
 
 async def test_the_room_repeating_the_question_is_not_an_answer() -> None:
@@ -996,7 +862,7 @@ async def test_the_window_starts_a_fresh_sentence_and_leaves_none_behind() -> No
 async def test_switching_off_closes_an_open_window_with_nothing() -> None:
     """The user turned the assistant off while it was asking. The question is
     a no at once - not six seconds later, and not whatever the room says next."""
-    talk, toggle, microphone, _ = wired()
+    talk, toggle, _, _ = wired()
 
     with talk:
         window = await opened(talk, seconds=5.0)
@@ -1004,12 +870,6 @@ async def test_switching_off_closes_an_open_window_with_nothing() -> None:
         await asyncio.sleep(0)
 
         answer = await asyncio.wait_for(window, timeout=0.5)
-
-        microphone.hear(tone(0.9))
-        microphone.hear(tone(0.1))
-        await asyncio.sleep(0)
-        with pytest.raises(TimeoutError):
-            await asyncio.wait_for(talk.utterance(), timeout=0.05)
 
     assert answer is not None
     assert len(answer) == 0

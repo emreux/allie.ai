@@ -129,3 +129,10 @@ def test_the_documents_rule_is_its_own_constant_with_the_folders_in_it() -> None
     assert "call no tool" in said
     assert not [character for character in DOCUMENTS_RULE if character.isdigit()]
     assert '"Ali"' in DOCUMENTS_RULE.format(folders='"Ali"')
+
+
+def test_the_search_rule_sends_quick_facts_to_their_tools_first() -> None:
+    """D39: exchange rates, earthquakes, prayer times, sport and air quality
+    are `facts`', headlines are `news`'; the rest is `look_up`'s."""
+    assert "facts" in SEARCH_RULE and "news" in SEARCH_RULE
+    assert "look_up" in SEARCH_RULE

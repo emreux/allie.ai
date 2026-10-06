@@ -66,7 +66,6 @@ class ProviderEntry:
     adapter: str
     display_name: str
     key_url: str | None = None
-    key_prefix: str | None = None
     base_url: str | None = None
     requires_key: bool = True
 

@@ -1,6 +1,7 @@
-"""`add_note`, `search_notes`, `delete_note` (design.md phase 4.1; 17 Sep 2026).
+"""`notes` and `delete_note` (design.md phase 4.1; 17 Sep 2026; one `notes`
+tool since D38, 27 Sep 2026, where there were `add_note` and `search_notes`).
 
-The first two over the real table in memory; the third through the real
+The first over the real table in memory; the third through the real
 gate of `agent/policy.py`, because the claim about it is the gate's: a
 note is not deleted without a yes, and the yes is to the note's own
 words - a text the model paraphrased is refused before anything is
@@ -24,9 +25,9 @@ from allie.tools.notes import (
     MAX_NOTE_CHARS,
     NONE_STORED,
     TEXT,
-    add_note_for,
+    UNKNOWN_ACTION,
     delete_note_for,
-    search_notes_for,
+    notes_for,
 )
 from allie.tools.registry import Tool, ToolRegistry
 
@@ -54,13 +55,8 @@ def notes(database: sqlite3.Connection) -> NotesRepo:
 
 
 @pytest.fixture
-def add_note(notes: NotesRepo) -> Tool:
-    return add_note_for(notes)
-
-
-@pytest.fixture
-def search_notes(notes: NotesRepo) -> Tool:
-    return search_notes_for(notes)
+def note_tool(notes: NotesRepo) -> Tool:
+    return notes_for(notes)
 
 
 @pytest.fixture
@@ -74,81 +70,79 @@ async def through_the_gate(tool: Tool, confirm: Confirm, **arguments: object) ->
 
 
 # --------------------------------------------------------------------------
-# add_note
+# notes
 # --------------------------------------------------------------------------
 
 
-def test_add_and_search_are_safe_and_delete_asks(
-    add_note: Tool, search_notes: Tool, delete_note: Tool
-) -> None:
-    assert (add_note.risk, search_notes.risk, delete_note.risk) == ("safe", "safe", "confirm")
-    assert add_note.spec.parameters["required"] == ["text"]
-    assert search_notes.spec.parameters["required"] == []
+def test_notes_is_safe_and_delete_asks(note_tool: Tool, delete_note: Tool) -> None:
+    assert (note_tool.risk, delete_note.risk) == ("safe", "confirm")
+    assert note_tool.spec.name == "notes"
+    assert note_tool.spec.parameters["required"] == ["action"]
+    assert note_tool.spec.parameters["properties"]["action"]["enum"] == ["add", "find"]
     assert delete_note.spec.parameters["required"] == ["note_id", "text"]
     assert delete_note.confirm_prompt == "'{text}' notu silinecek."
     assert TEXT["note_delete_confirm"] == "Shall I delete the note '{text}'?"
 
 
-async def test_a_note_is_kept_as_said_and_numbered(add_note: Tool, notes: NotesRepo) -> None:
-    said = await add_note.run(text="  Süt  al,\nekmek al. ")
+async def test_a_note_is_kept_as_said_and_numbered(note_tool: Tool, notes: NotesRepo) -> None:
+    said = await note_tool.run(action="add", text="  Süt  al,\nekmek al. ")
 
     assert said == "Kept note #1: 'Süt al, ekmek al.'. 1 notes are stored."
     assert notes.get(1) is not None and notes.get(1).text == "Süt al, ekmek al."
 
 
-async def test_an_empty_note_is_not_kept(add_note: Tool, notes: NotesRepo) -> None:
-    assert await add_note.run(text="   ") == EMPTY
+async def test_an_empty_note_is_not_kept(note_tool: Tool, notes: NotesRepo) -> None:
+    assert await note_tool.run(action="add", text="   ") == EMPTY
     assert notes.count() == 0
 
 
-async def test_a_note_too_long_to_be_a_note_is_refused(add_note: Tool, notes: NotesRepo) -> None:
-    said = await add_note.run(text="x" * (MAX_NOTE_CHARS + 1))
+async def test_a_note_too_long_to_be_a_note_is_refused(note_tool: Tool, notes: NotesRepo) -> None:
+    said = await note_tool.run(action="add", text="x" * (MAX_NOTE_CHARS + 1))
 
     assert said.startswith("Too long")
     assert str(MAX_NOTE_CHARS) in said
     assert notes.count() == 0
 
 
-# --------------------------------------------------------------------------
-# search_notes
-# --------------------------------------------------------------------------
+async def test_matching_notes_are_listed_with_their_numbers(note_tool: Tool) -> None:
+    await note_tool.run(action="add", text="Işık faturası ödendi.")
+    await note_tool.run(action="add", text="Kira yarın.")
 
-
-async def test_matching_notes_are_listed_with_their_numbers(
-    add_note: Tool, search_notes: Tool
-) -> None:
-    await add_note.run(text="Işık faturası ödendi.")
-    await add_note.run(text="Kira yarın.")
-
-    said = await search_notes.run(query="isik")
+    said = await note_tool.run(action="find", text="isik")
 
     assert said.startswith("Notes matching 'isik', best first:\n#1 (")
     assert said.endswith("): Işık faturası ödendi.")
     assert "Kira" not in said
 
 
-async def test_no_query_lists_the_latest_notes(add_note: Tool, search_notes: Tool) -> None:
-    assert await search_notes.run() == NONE_STORED
+async def test_no_words_lists_the_latest_notes(note_tool: Tool) -> None:
+    assert await note_tool.run(action="find") == NONE_STORED
 
-    await add_note.run(text="bir")
-    await add_note.run(text="iki")
+    await note_tool.run(action="add", text="bir")
+    await note_tool.run(action="add", text="iki")
 
-    said = await search_notes.run(query="")
+    said = await note_tool.run(action="find", text="")
 
     assert said.startswith("The latest notes, newest first:\n#2 (")
     assert said.endswith("): bir")
 
 
-async def test_a_query_nothing_mentions_is_said(add_note: Tool, search_notes: Tool) -> None:
-    await add_note.run(text="bir")
+async def test_words_nothing_mentions_are_said(note_tool: Tool) -> None:
+    await note_tool.run(action="add", text="bir")
 
-    assert await search_notes.run(query="uzay mekiği") == "No note mentions 'uzay mekiği'."
+    assert await note_tool.run(action="find", text="uzay mekiği") == (
+        "No note mentions 'uzay mekiği'."
+    )
 
 
-async def test_a_query_too_short_to_search_is_explained(search_notes: Tool) -> None:
-    said = await search_notes.run(query="ve")
+async def test_words_too_short_to_search_are_explained(note_tool: Tool) -> None:
+    said = await note_tool.run(action="find", text="ve")
 
     assert said.startswith("The search needs a word of at least 3 letters; 've' has none.")
+
+
+async def test_an_action_that_is_not_offered_is_said(note_tool: Tool) -> None:
+    assert await note_tool.run(action="erase") == UNKNOWN_ACTION.format(action="erase")
 
 
 # --------------------------------------------------------------------------
@@ -200,4 +194,6 @@ async def test_a_number_that_is_no_note_is_said(delete_note: Tool, notes: NotesR
 
     said = await through_the_gate(delete_note, user, note_id=7, text="x")
 
-    assert said == "There is no note #7. Call search_notes to find the one the user means."
+    assert said == (
+        "There is no note #7. Call notes with action 'find' to find the one the user means."
+    )

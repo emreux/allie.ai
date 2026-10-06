@@ -16,7 +16,6 @@
 #   adapter          which adapter class builds it            (required)
 #   display_name     what the setup command shows             (required)
 #   key_url          where the user gets a key
-#   key_prefix       expected start of the key, for a typo check
 #   base_url         the endpoint, for adapters that speak to an address
 #   requires_key     false for a local endpoint (default true)
 
