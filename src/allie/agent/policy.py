@@ -38,12 +38,13 @@ root hands `dispatch` the pack's wording.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
+from typing import Any
 
 from loguru import logger
 
-from allie.agent.core import Confirm
+from allie.agent.core import Confirm, Question
 from allie.agent.limits import Limits
 from allie.live.base import ToolCall
 from allie.store.repos import AuditRepo, EarlierCall
@@ -65,11 +66,12 @@ __all__ = [
 NO_SUCH_TOOL = "There is no tool named {name!r}."
 DISABLED = "This tool is disabled in the current configuration."
 DECLINED = "The user declined this action."
-# Not a no (2026-09-26): nothing the user said was heard, so nothing was
-# done - and the model should not tell them they refused.
+# Not a no (2026-09-26): nothing the user said was heard - or, since D49,
+# what was heard could not be taken for a yes or a no - so nothing was done,
+# and the model should not tell them they refused.
 UNHEARD = (
-    "The user's answer to the confirmation was not heard, so nothing was done. "
-    "Tell them it was not heard, and offer to try again."
+    "The user's answer to the confirmation was not heard or not understood, so nothing "
+    "was done. Tell them so, and offer to try again."
 )
 MISSING_ARGUMENT = "The call is missing the argument {name!r}."
 FAILED = "The tool failed: {kind}"
@@ -104,6 +106,7 @@ async def dispatch(
     audit: AuditRepo | None = None,
     wording: Mapping[str, str] = TEXT,
     duplicate_window: float = DUPLICATE_WINDOW_SECONDS,
+    show: Callable[[str], None] | None = None,
 ) -> str:
     """Runs one tool call the way its risk allows, and reports back in words.
 
@@ -123,6 +126,9 @@ async def dispatch(
 
     `wording` is the pack's version of `TEXT`, and `duplicate_window` how
     many seconds back the audit table is read for the same call.
+
+    `show` puts a question on the screen when the tool asks for that
+    (`Tool.shown`); nothing else is shown.
     """
     tool = registry.get(call.name)
     if tool is None:
@@ -142,8 +148,9 @@ async def dispatch(
         try:
             # The real argument values go into the sentence: the user hears
             # exactly what the model asked for, which is what catches an
-            # injected request (architecture guide section 6).
-            question = tool.confirm_prompt.format(**call.arguments)
+            # injected request (architecture guide section 6) - each value
+            # read the way the tool says it, where it says one (D40).
+            question = _question(tool.confirm_prompt, tool.said_as, call.arguments)
         except KeyError as missing:
             # The model left out an argument the question needs. It is told
             # which; nobody is asked and nothing is written, since no
@@ -165,14 +172,20 @@ async def dispatch(
             if isinstance(prepared, str):
                 return prepared
             call = replace(call, arguments=dict(prepared))
-            question = tool.confirm_prompt.format(**call.arguments)
+            question = _question(tool.confirm_prompt, tool.said_as, call.arguments)
         if audit is not None:
             # What the user does not know and the table does: that the same
             # call ran, or may have, a moment ago (section 3.11).
             earlier = audit.recent(call, within=duplicate_window)
             if earlier is not None:
                 question = f"{question} {_a_moment_ago(earlier, wording)}"
-        answer = await confirm(question)
+        if tool.shown and show is not None:
+            # On the screen too (D43): an address is checked more easily by
+            # eye than by ear. Before the question, so it is there to read.
+            show(question)
+        # With its outline (D49): what the judge of the answer is shown.
+        outline = _outline(tool.confirm_prompt, tool.said_as, call.arguments)
+        answer = await confirm(Question(question, outline))
         if answer is None:
             # Refused all the same - nothing runs without a heard yes - but
             # the model is told why, so it can offer to ask again.
@@ -198,6 +211,36 @@ async def dispatch(
     if audit is not None and row is not None:
         audit.finish(row, status="ok", summary=result)
     return result
+
+
+def _question(
+    prompt: str, said_as: Mapping[str, Mapping[str, str]] | None, arguments: Mapping[str, Any]
+) -> str:
+    """`prompt` with the call's values in it, each read the way the tool
+    says it where it says one (`Tool.said_as`); `KeyError` for a value the
+    sentence needs and the call left out."""
+    spoken = said_as or {}
+    values = {
+        name: spoken.get(name, {}).get(str(value), value) for name, value in arguments.items()
+    }
+    return prompt.format(**values)
+
+
+# What stands in the outline for every value of the call (D49).
+MASK = "…"
+
+
+def _outline(
+    prompt: str, said_as: Mapping[str, Mapping[str, str]] | None, arguments: Mapping[str, Any]
+) -> str:
+    """`prompt` with every value of the call masked: the question's own
+    words and none of the call's. A value the tool reads its own way
+    (`Tool.said_as`, `power`'s whole question) is the pack's sentence, not
+    the call's, and stays. Built after `_question`, which has already
+    refused a prompt that needs a value the call left out."""
+    spoken = said_as or {}
+    values = {name: spoken.get(name, {}).get(str(value), MASK) for name, value in arguments.items()}
+    return prompt.format(**values)
 
 
 def _a_moment_ago(earlier: EarlierCall, wording: Mapping[str, str]) -> str:

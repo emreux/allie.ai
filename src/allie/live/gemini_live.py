@@ -10,20 +10,27 @@ to carry the function's name, and the SDK's `receive()` generator ends at
 every `turn_complete` while the session does not.
 
 That last one cost the spike an afternoon and is the reason `events()` is
-a loop around `receive()`. Two more were measured the same day (ADR-001):
-the server ends the model's turn *at* a tool call, before the result is
-even sent, and speaks the answer as a new turn - so `TurnComplete` may
-arrive twice for what the user experiences as one exchange, and the state
-machine stitches them; and the socket closing is not the transport's own
-exception up here but an `APIError` the SDK builds from the WebSocket
-close code, so the code is what says whether the server hung up politely
-(1000, 1001), the network went (1006) or the server refused something we
-sent (1007, 1008).
+a loop around `receive()`. The socket closing is not the transport's own
+exception up here but an `APIError` the SDK builds from the WebSocket close
+code, so the code is what says whether the server hung up politely (1000,
+1001), the network went (1006) or the server refused something we sent
+(1007, 1008).
+
+**Every function is declared `BLOCKING`, and the results of one message go
+back together** (plan.md D46, 2026-09-30). `gemini-3.8-live` went GA on
+2026-09-15 with asynchronous calls as its default, and what ADR-001 measured
+on 2026-09-18 - the server ending its turn *at* the call, the answer coming
+as a new turn, `NON_BLOCKING` "changing nothing" (D19) - was that default
+all along. Declared blocking, the model waits for the results and answers
+once, in the same turn. And it answers every tool response it is sent: two
+calls of one message answered in two responses were answered out loud
+twice (the owner's song and volume). So a result waits here until every
+call of its message has one, or was withdrawn, and they go in one response,
+in the order they were asked.
 
 The thinking is the model's own (no `thinking_config`): with a budget of
 zero it skipped the tool call and invented the time (ADR-001), and the
-`thinking_level` field is refused by this model. No `NON_BLOCKING` tools
-either (plan.md D19: measured, no difference).
+`thinking_level` field is refused by this model.
 
 Since 2026-09-21 the session may carry Google's own search beside the
 function declarations (D22): a tool of the server's, logged when it was
@@ -32,8 +39,9 @@ used and never answered from here.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -108,10 +116,10 @@ class GeminiLive:
     # What the state machine may count on beyond the protocol: a handle
     # that continues the conversation in a later session (plan.md D5),
     # transcripts of both sides, the provider's own web search as a tool
-    # of the session (D22), the tone of the voice answered in kind, and a
-    # context the server keeps under its ceiling (D25).
+    # of the session (D22), and a context the server keeps under its
+    # ceiling (D25).
     capabilities: frozenset[str] = frozenset(
-        {"resumption", "transcripts", "web_search", "affective_dialog", "context_compression"}
+        {"resumption", "transcripts", "web_search", "context_compression"}
     )
 
     def __init__(self, api_key: str, *, client: Any | None = None) -> None:
@@ -149,8 +157,6 @@ class GeminiLive:
                 ModelInfo(
                     id=name,
                     display_name=model.display_name or name,
-                    context_window=model.input_token_limit,
-                    supports_tools=None,
                 )
             )
         return models
@@ -187,6 +193,9 @@ class GeminiSession:
         # remainders; rounded when read.
         self._in_ms = 0.0
         self._out_ms = 0.0
+        # The calls of every message that asked for more than one, by id,
+        # until all of them are answered or withdrawn (D46).
+        self._batches: dict[str, _Batch] = {}
 
     @property
     def audio_in_ms(self) -> int:
@@ -206,6 +215,8 @@ class GeminiSession:
         await self._send(self._raw.send_client_content(turns=turn, turn_complete=turn_complete))
 
     async def send_tool_result(self, call: ToolCall, content: str) -> None:
+        """Sends the result at once - or, for a call asked beside others,
+        once every one of them has a result or was withdrawn (D46)."""
         response = types.FunctionResponse(
             # Matched to its call by name: a response without one is refused
             # outright ("Name cannot be empty"). The id is optional to
@@ -217,7 +228,12 @@ class GeminiSession:
             # as text, so it travels under a single key.
             response={"result": content},
         )
-        await self._send(self._raw.send_tool_response(function_responses=[response]))
+        batch = self._batches.get(call.id) if call.id else None
+        if batch is None:
+            await self._respond([response])
+            return
+        batch.results[call.id] = response
+        await self._send_if_settled(batch)
 
     async def interrupt(self) -> None:
         """Nothing to send: the server's own detector stopped the model, and
@@ -232,6 +248,8 @@ class GeminiSession:
                 async for message in self._raw.receive():
                     for event in self._translate(message):
                         yield event
+                    if message.tool_call_cancellation is not None:
+                        await self._send_withdrawn()
         except errors.APIError as failure:
             yield _closed(failure)
         except (WebSocketException, OSError) as failure:
@@ -244,6 +262,38 @@ class GeminiSession:
             raise _refused(refusal) from refusal
         except (WebSocketException, OSError) as failure:
             raise _unreachable(failure) from failure
+
+    async def _respond(self, responses: list[types.FunctionResponse]) -> None:
+        await self._send(self._raw.send_tool_response(function_responses=responses))
+
+    def _hold_together(self, calls: Iterable[ToolCall]) -> None:
+        """The calls of one message, answered in one response (D46). A call
+        the model gave no id cannot be matched back here, and goes alone."""
+        ids = tuple(call.id for call in calls if call.id)
+        if len(ids) < 2:
+            return
+        batch = _Batch(ids)
+        for call_id in ids:
+            self._batches[call_id] = batch
+
+    async def _send_if_settled(self, batch: _Batch) -> None:
+        if not batch.settled:
+            return
+        for call_id in batch.ids:
+            self._batches.pop(call_id, None)
+        responses = batch.responses()
+        if responses:
+            await self._respond(responses)
+
+    async def _send_withdrawn(self) -> None:
+        """Whatever was held only for a call the model has since withdrawn:
+        no result will come for it, so the others go now."""
+        for batch in set(self._batches.values()):
+            try:
+                await self._send_if_settled(batch)
+            except ProviderError as failure:
+                # The socket went under the held results; `Closed` says so.
+                logger.warning("held tool results could not be sent: {kind}", kind=failure.kind)
 
     def _translate(self, message: types.LiveServerMessage) -> list[LiveEvent]:
         """Turns one server message into the events it carries, in the order
@@ -260,14 +310,19 @@ class GeminiSession:
             events.append(UsageReport(_usage(message.usage_metadata)))
         cancellation = message.tool_call_cancellation
         if cancellation is not None:
-            events.append(ToolCallCancelled(tuple(cancellation.ids or ())))
+            withdrawn = tuple(cancellation.ids or ())
+            for call_id in withdrawn:
+                held = self._batches.get(call_id)
+                if held is not None:
+                    held.withdrawn.add(call_id)
+            events.append(ToolCallCancelled(withdrawn))
         if message.tool_call is not None:
-            for call in message.tool_call.function_calls or ():
-                events.append(
-                    ToolCallEvent(
-                        ToolCall(id=call.id or "", name=call.name or "", arguments=call.args or {})
-                    )
-                )
+            asked = [
+                ToolCall(id=call.id or "", name=call.name or "", arguments=call.args or {})
+                for call in message.tool_call.function_calls or ()
+            ]
+            self._hold_together(asked)
+            events.extend(ToolCallEvent(call) for call in asked)
 
         content = message.server_content
         if content is None:
@@ -343,10 +398,9 @@ def _connect_config(config: SessionConfig) -> types.LiveConnectConfig:
         # Asked for on every open so that the handles come (`Resumable`);
         # with a handle, the conversation continues where it left off.
         session_resumption=types.SessionResumptionConfig(handle=config.resume_handle),
-        # The two switches of D25, sent only when asked for; `None` is the
-        # server's own default, as with everything above. Proactive audio is
-        # not sent at all: on this model it is on by the server's own rule.
-        enable_affective_dialog=True if config.affective_dialog else None,
+        # D25's switch, sent only when asked for; `None` is the server's own
+        # default, as with everything above. Proactive audio is not sent at
+        # all: on this model it is on by the server's own rule.
         context_window_compression=(
             types.ContextWindowCompressionConfig(sliding_window=types.SlidingWindow())
             if config.compress_context
@@ -375,7 +429,28 @@ def _declare(tool: ToolSpec) -> types.FunctionDeclaration:
         # A schema with no properties is refused by the Live API (measured
         # in the spike): a tool without parameters is declared bare.
         parameters_json_schema=schema if schema.get("properties") else None,
+        # The model waits for the result and answers once (D46): the
+        # asynchronous default answered every result on its own.
+        behavior=types.Behavior.BLOCKING,
     )
+
+
+@dataclass(eq=False)
+class _Batch:
+    """The calls of one message, and their results as they come back."""
+
+    ids: tuple[str, ...]
+    results: dict[str, types.FunctionResponse] = field(default_factory=dict)
+    withdrawn: set[str] = field(default_factory=set)
+
+    @property
+    def settled(self) -> bool:
+        """Every call answered or withdrawn."""
+        return all(call_id in self.results or call_id in self.withdrawn for call_id in self.ids)
+
+    def responses(self) -> list[types.FunctionResponse]:
+        """The results, in the order the calls were asked."""
+        return [self.results[call_id] for call_id in self.ids if call_id in self.results]
 
 
 def _usage(metadata: types.UsageMetadata) -> Usage:

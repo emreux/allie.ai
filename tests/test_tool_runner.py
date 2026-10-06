@@ -536,6 +536,80 @@ async def test_hanging_up_drops_what_is_pending() -> None:
     assert gate.calls == [asks("clock", "c1")]
 
 
+class Answering(FakeLiveSession):
+    """A session that says what the runner owed the moment a result is
+    handed to it - where the server's next event can already be read."""
+
+    def __init__(self, tools: ToolRunner) -> None:
+        super().__init__()
+        self.tools = tools
+        self.owed_at_send: list[int] = []
+
+    async def send_tool_result(self, call: ToolCall, content: str) -> None:
+        self.owed_at_send.append(self.tools.owed)
+        await super().send_tool_result(call, content)
+
+
+async def test_a_call_is_owed_until_its_result_is_handed_over() -> None:
+    """D46: the turn ends at a `TurnComplete` only when nothing is owed. A
+    result is no longer owed the moment it goes to the session - not when
+    its task's callback runs, by which time the session may already have
+    sent the answer's `TurnComplete`."""
+    gate = Held()
+    tools = runner(gate)
+    session = Answering(tools)
+    tools.run(asks("clock", "c1"), session)
+    tools.run(asks("calendar", "c2"), session)
+
+    assert tools.owed == 2
+    await tick()
+    assert tools.owed == 2
+    gate.release.set()
+    await tools.settled()
+
+    assert session.owed_at_send == [1, 0]
+    assert tools.owed == 0
+
+
+async def test_a_refused_repeat_is_owed_like_any_result() -> None:
+    tools = runner(limits=Limits(duplicate_calls=1))
+    session = Answering(tools)
+    tools.run(asks("clock", "c1"), session)
+    tools.run(asks("clock", "c2"), session)
+
+    await tools.settled()
+
+    assert session.owed_at_send == [1, 0]
+    assert tools.owed == 0
+
+
+async def test_a_withdrawn_call_is_owed_no_longer_at_once() -> None:
+    """Nothing will be sent for it, so the `TurnComplete` that may follow
+    the withdrawal in the same breath must not wait for it."""
+    gate = Held()
+    tools = runner(gate)
+    tools.run(asks("clock", "c1"), FakeLiveSession())
+    tools.run(asks("calendar", "c2"), FakeLiveSession())
+
+    tools.cancel(["c2"])
+    assert tools.owed == 1
+    tools.cancel(["c1"])
+    assert tools.owed == 0
+    await tools.settled()
+    assert tools.owed == 0
+
+
+async def test_hanging_up_owes_nothing() -> None:
+    gate = Held()
+    tools = runner(gate)
+    tools.run(asks("clock", "c1"), FakeLiveSession())
+    tools.run(asks("calendar", "c2"), FakeLiveSession())
+
+    await tools.close()
+
+    assert tools.owed == 0
+
+
 async def test_hanging_up_with_nothing_pending_is_harmless() -> None:
     tools = runner()
 

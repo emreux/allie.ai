@@ -83,8 +83,9 @@ if TYPE_CHECKING:
     from allie.live.base import LiveProvider, ToolCall
     from allie.locales import Locale
     from allie.store.memory import UserMemory
-    from allie.store.repos import AuditRepo, ModelUsage, SettingsRepo
+    from allie.store.repos import AuditRepo, HistoryRepo, ModelUsage, SettingsRepo
     from allie.tools.mail import Mailbox
+    from allie.tools.outbox import Outbox
     from allie.tools.registry import ToolRegistry
     from allie.ui.status import Screen
     from allie.ui.tray import Tray
@@ -152,34 +153,39 @@ PURGE_WORD = "yes"
 # count them without building them. `test_cli.py` checks that the registry
 # `run` builds is this list followed by the user's own. `look_up`,
 # `x_trends`, `open_documents` and `ask_documents` need the stored `gemini`
-# key (D29, D30, D35); without it they are not offered.
+# key (D29, D30, D35); without it they are not offered. `recall` is left out
+# while `[history] enabled = false` (D45).
 BUILTIN_TOOLS: tuple[str, ...] = (
     "get_current_time",
     "system_status",
     "get_weather",
+    "briefing",
+    "facts",
+    "news",
     "open_app",
-    "open_url",
+    "close_app",
+    "computer",
+    "power",
+    "files",
+    "open_web",
     "look_up",
-    "search_web",
     "read_clipboard",
     "fetch_page",
     "x_trends",
     "open_documents",
     "ask_documents",
-    "read_latest_emails",
-    "search_emails",
+    "read_emails",
+    "send_email",
     "open_settings",
     "media_control",
     "set_volume",
     "play_music",
     "play_video",
-    "open_media",
-    "add_note",
-    "search_notes",
+    "notes",
     "delete_note",
-    "create_reminder",
-    "list_reminders",
+    "reminders",
     "cancel_reminder",
+    "recall",
     "remember",
     "forget",
     "install_app",
@@ -701,10 +707,11 @@ def _mail_login() -> int:
 def _purge() -> int:
     """`allie purge --all`: what the machine recorded, gone (section 3.7, 4.6).
 
-    The database with its audit rows, notes and reminders; the memory file;
-    the logs; and every key and session in the Credential Manager. What is
-    there is listed first - by path and by entry name, never by value - and
-    nothing is deleted before `yes` is typed. `config.toml` and
+    The database with its audit rows, notes, reminders and conversation
+    archive (D45); the memory file; the logs; and every key and session in
+    the Credential Manager. What is there is listed first - by path and by
+    entry name, never by value - and nothing is deleted before `yes` is
+    typed. `config.toml` and
     `contacts.toml` stay: the user wrote those by hand, and a file edited
     calmly is not "what the assistant recorded".
     """
@@ -1067,6 +1074,7 @@ async def _talk(
     from loguru import logger
 
     from allie.agent.core import ToolRunner
+    from allie.agent.judge import GeminiJudge
     from allie.agent.limits import Limits
     from allie.announce.queue import AnnounceQueue
     from allie.app import LiveAssistant
@@ -1076,7 +1084,18 @@ async def _talk(
     from allie.audio.vad import Endpoint, SileroVAD
     from allie.audio.volume import SystemVolume
     from allie.audio.wake import LiveKitWakeWord, wake_model_path
+    from allie.computer.files import known_folders
+    from allie.computer.power import WindowsPower
+    from allie.computer.switches import (
+        RegistryTheme,
+        Switches,
+        WinRtRadios,
+        WmiBrightness,
+        WnfFocusAssist,
+    )
+    from allie.computer.windows import RunningApps, Win32Desktop
     from allie.documents import model as document_module
+    from allie.facts.service import Facts
     from allie.live.base import SessionConfig
     from allie.live.registry import MissingAPIKeyError, create_provider
     from allie.machine import Win32Machine
@@ -1089,26 +1108,32 @@ async def _talk(
     from allie.store.memory import UserMemory
     from allie.store.repos import (
         AuditRepo,
+        HistoryRepo,
         NotesRepo,
         ReminderRepo,
         SettingsRepo,
         UsageRepo,
     )
-    from allie.store.retention import blank_old_audit_summaries
+    from allie.store.retention import blank_old_audit_summaries, delete_old_history
     from allie.stt.gemini_stt import GeminiSTT
+    from allie.tools import computer as computer_tools
     from allie.tools import mail as mail_tools
     from allie.tools import memory as memory_tools
     from allie.tools import messaging as messaging_tools
     from allie.tools import notes as notes_tools
+    from allie.tools import outbox as outbox_tools
     from allie.tools import reminders as reminder_tools
     from allie.tools import store as store_tools
     from allie.tools import system as system_tools
     from allie.tools import weather as weather_tools
+    from allie.tools.briefing import briefing_for
     from allie.tools.documents import documents_tools_for
+    from allie.tools.facts import facts_for, news_for
+    from allie.tools.files import files_for
+    from allie.tools.history import recall_for
     from allie.tools.local import load_local_tools
     from allie.tools.media import (
         media_control,
-        open_media_for,
         play_music_for,
         play_video_for,
         set_volume_for,
@@ -1120,10 +1145,9 @@ async def _talk(
         get_current_time,
         open_app_for,
         open_settings,
-        open_url,
     )
     from allie.tools.trends import x_trends_for
-    from allie.tools.web import fetch_page_for, look_up_for, read_clipboard_for, search_web_for
+    from allie.tools.web import fetch_page_for, look_up_for, open_web_for, read_clipboard_for
     from allie.tts.live_voice import LiveVoice
     from allie.ui import tray as tray_ui
     from allie.usage.tracker import Pricing, UsageTracker
@@ -1175,6 +1199,12 @@ async def _talk(
     blanked = blank_old_audit_summaries(database, days=settings.retention.audit_days)
     if blanked:
         logger.info("retention: {count} audit summaries blanked", count=blanked)
+    # The conversation archive (D45): turns older than `[history] days` go,
+    # row and index, once per start - kept or not.
+    forgotten = delete_old_history(database, days=settings.history.days)
+    if forgotten:
+        logger.info("retention: {count} archived turns deleted", count=forgotten)
+    history = HistoryRepo(database) if settings.history.enabled else None
     # The table of section 3.11, once, for everyone who reads a row of it:
     # the tool round, the gate and the tracker.
     limits = Limits.from_settings(settings.limits)
@@ -1186,6 +1216,10 @@ async def _talk(
     # built beside the player for the same reason, and given back in the
     # same `finally`.
     weather = weather_tools.OpenMeteo()
+    # Quick facts from keyless services (D39): the region is the pack's,
+    # the geocoder the weather's; one kept connection, given back in the
+    # same `finally` as the weather's.
+    facts_service = Facts(pack.region, weather)
     # Pages the user asks about (17 Sep 2026), over a kept connection like
     # the weather; how long one may take is the user's `[web]` setting.
     reader = PageReader(seconds=settings.web.timeout_seconds)
@@ -1242,10 +1276,14 @@ async def _talk(
         # (D3, D10, D36): nothing on this machine turns speech into text,
         # and there is no setting for it.
         speech = GeminiSTT(google_key)
+        # And a small model of its own says what the answer meant - yes, no
+        # or unclear - shown the question's outline and never the call's
+        # values (D49). No word lists.
+        judge = GeminiJudge(google_key)
         # The program's own voice (D3, D4, D10, D32): the live model itself,
         # in the conversation's voice, reading from a session of its own -
-        # the gate's questions, the reminders, the filler and the three
-        # failure sentences. One voice, the assistant's; the sentences that
+        # the gate's questions, the reminders and the three failure
+        # sentences. One voice, the assistant's; the sentences that
         # never change are kept on disk, and what cannot be read is put on
         # the screen instead.
         voice = LiveVoice(
@@ -1265,7 +1303,14 @@ async def _talk(
         # The user's mailbox (3.3, 17 Sep 2026), opened afresh for each
         # question by the two tools below - or not set up, in which
         # case the tools say so and what to run.
-        mailbox = _mailbox_of(settings, load_api_key(mail_tools.MAIL_ENTRY))
+        mail_password = load_api_key(mail_tools.MAIL_ENTRY)
+        mailbox = _mailbox_of(settings, mail_password)
+        # The machine itself (D40): its power, and the radios both tools
+        # reach - Bluetooth is a switch, Wi-Fi off is a question.
+        machine = WindowsPower()
+        radios = WinRtRadios()
+        # The windows on the desktop, by app (D41).
+        running = RunningApps(Win32Desktop())
         # The tools on offer, by name, in one place. Every one of them
         # runs through the gate below and nowhere else (section 3.9).
         # `forget` and `install_app` are declared with the questions they
@@ -1278,6 +1323,18 @@ async def _talk(
                 # application opened.
                 system_status_for(Win32Machine()),
                 weather_tools.get_weather_for(weather),
+                # The day's start on request (D44): time, weather, unread
+                # mail, three headlines, today's reminders - never scheduled.
+                briefing_for(
+                    weather=weather,
+                    facts=facts_service,
+                    reminders=reminders,
+                    open_mailbox=mailbox,
+                ),
+                # Quick facts and headlines from keyless services (D39), so
+                # that look_up's searches go where nothing else answers.
+                facts_for(facts_service),
+                news_for(facts_service),
                 # The catalogue answers first, the player second and the
                 # Store last, so an installed application always wins
                 # its own name.
@@ -1288,13 +1345,45 @@ async def _talk(
                     unknown_publisher=pack.say(
                         "unknown_publisher", system_tools.TEXT["unknown_publisher"]
                     ),
+                    running=running,
                 ),
-                open_url,
+                # An open app, closed the way its close box does, after a
+                # question that names it as the catalogue does (D41).
+                computer_tools.close_app_for(
+                    running,
+                    catalog,
+                    confirm_prompt=pack.say(
+                        "close_app_confirm", computer_tools.TEXT["close_app_confirm"]
+                    ),
+                ),
+                # The machine's switches, and its power behind a question
+                # in the pack's words for each action (D40).
+                computer_tools.computer_for(
+                    Switches(WmiBrightness(), RegistryTheme(), WnfFocusAssist(), radios),
+                    machine,
+                    running=running,
+                ),
+                computer_tools.power_for(
+                    machine,
+                    radios,
+                    questions={
+                        action: pack.say(
+                            f"power_{action}_confirm",
+                            computer_tools.TEXT[f"power_{action}_confirm"],
+                        )
+                        for action in computer_tools.POWER_ACTIONS
+                    },
+                ),
+                # The user's own folders, searched, and a file opened or
+                # shown in its folder (D42); the folders are Windows' own.
+                files_for(known_folders()),
+                # A page or a search, in the user's browser for them to
+                # look at (D38: it was open_url and search_web); the engine
+                # is the user's (`[web] search_url`).
+                open_web_for(settings.web.search_url),
                 # A question is looked up and answered (D29); the browser
                 # opens only when the user asks to see the search.
                 look_up_for(search),
-                # The engine is the user's (`[web] search_url`).
-                search_web_for(settings.web.search_url),
                 # What was copied, and what a page says: both come back
                 # inside the `<untrusted>` block the prompt explains.
                 read_clipboard_for(),
@@ -1306,20 +1395,27 @@ async def _talk(
                 *reading_documents,
                 # The user's mail, read and never written, inside the
                 # same block.
-                mail_tools.read_latest_emails_for(mailbox),
-                mail_tools.search_emails_for(mailbox),
+                mail_tools.read_emails_for(mailbox),
+                # Mail from the user's own account, asked, read aloud and
+                # shown first (D43); nobody is added to the address book.
+                outbox_tools.send_email_for(
+                    _outbox_of(settings, mail_password),
+                    mailbox,
+                    own_address=settings.mail.user.strip(),
+                    confirm_prompt=pack.say(
+                        "send_email_confirm", outbox_tools.TEXT["send_email_confirm"]
+                    ),
+                ),
                 open_settings,
                 media_control,
                 # The volume as a number (D24): the keys above step it.
                 set_volume_for(SystemVolume()),
                 play_music_for(player),
                 play_video_for(player),
-                open_media_for(player),
                 # The user's notes (4.1, 17 Sep 2026): kept as said,
                 # found in any spelling, deleted only after the user has
                 # heard which.
-                notes_tools.add_note_for(notes),
-                notes_tools.search_notes_for(notes),
+                notes_tools.notes_for(notes),
                 notes_tools.delete_note_for(
                     notes,
                     confirm_prompt=pack.say(
@@ -1328,14 +1424,20 @@ async def _talk(
                 ),
                 # Reminders (4.2): the row here, the saying by the
                 # scheduler below, between turns.
-                reminder_tools.create_reminder_for(reminders),
-                reminder_tools.list_reminders_for(reminders),
+                reminder_tools.reminders_for(reminders),
                 reminder_tools.cancel_reminder_for(
                     reminders,
                     confirm_prompt=pack.say(
                         "reminder_cancel_confirm",
                         reminder_tools.TEXT["reminder_cancel_confirm"],
                     ),
+                ),
+                # What was said before, found by its words (D45); offered
+                # only while the archive is kept, as far back as it keeps.
+                *(
+                    [recall_for(history, max_days=settings.history.days)]
+                    if history is not None
+                    else []
                 ),
                 memory_tools.remember_for(memory),
                 memory_tools.forget_for(
@@ -1378,7 +1480,14 @@ async def _talk(
         # run from: the tool round (plan.md 4.4 rule 3). A second gate
         # would be a second way to run a tool, which is the thing
         # section 3.9 forbids.
-        gate = _gate(settings, tools, AuditRepo(database), limits=limits, pack=pack)
+        gate = _gate(
+            settings,
+            tools,
+            AuditRepo(database),
+            limits=limits,
+            pack=pack,
+            show=screen.notice,
+        )
         runner = ToolRunner(tools, gate, limits)
         # The one announce queue (invariant 5) and the loop that feeds it
         # (invariant 7): the scheduler never sees the model, and the
@@ -1440,7 +1549,6 @@ async def _talk(
                 end_sensitivity=live.end_sensitivity,
                 silence_ms=live.silence_ms,
                 web_search=live.web_search,
-                affective_dialog=live.affective_dialog,
                 compress_context=live.compress_context,
             )
 
@@ -1451,6 +1559,7 @@ async def _talk(
             tool_runner=runner,
             tts=voice,
             stt=speech,
+            judge=judge,
             # The sound both ways goes to the screen's meter (D20).
             speaker=SystemSpeaker(on_level=screen.level),
             locale=pack,
@@ -1471,7 +1580,7 @@ async def _talk(
             # What `look_up` and `x_trends` searched, for the screen (D29).
             searched=searched,
             on_state=screen.state if icon is None else _each(screen.state, icon.state),
-            on_turn=_finished(screen),
+            on_turn=_finished(screen, history),
             # The toggle's news goes to the state machine first - off is
             # an interruption - and to the screen after it.
             on_mode=screen.hands_free
@@ -1496,6 +1605,7 @@ async def _talk(
     finally:
         await player.aclose()
         await weather.aclose()
+        await facts_service.aclose()
         await reader.aclose()
         await trends.aclose()
         await telegram.close()
@@ -1618,7 +1728,13 @@ async def _model_checked(
 
 
 def _gate(
-    settings: Settings, tools: ToolRegistry, audit: AuditRepo, *, limits: Limits, pack: Locale
+    settings: Settings,
+    tools: ToolRegistry,
+    audit: AuditRepo,
+    *,
+    limits: Limits,
+    pack: Locale,
+    show: Callable[[str], None] | None = None,
 ) -> Dispatch:
     """The one permission gate, with everything it needs already in hand.
 
@@ -1628,7 +1744,8 @@ def _gate(
     bound here, so that `agent/core.py` never imports `policy.py` and a
     test can hand it a fake. Who to ask is not bound here: it comes with
     each turn, because it is the state machine's own microphone, and the
-    state machine is built after the gate.
+    state machine is built after the gate. `show` is where a question the
+    tool wants seen as well as heard goes (`Tool.shown`, D43).
     """
     from allie.agent import policy
 
@@ -1644,6 +1761,7 @@ def _gate(
             audit=audit,
             wording=wording,
             duplicate_window=limits.duplicate_window_sec,
+            show=show,
         )
 
     return dispatch
@@ -1740,14 +1858,19 @@ def _dollars(amount: float | None) -> str:
     return "?" if amount is None else f"${amount:.4f}"
 
 
-def _finished(screen: Screen) -> Callable[[Turn], None]:
+def _finished(screen: Screen, history: HistoryRepo | None = None) -> Callable[[Turn], None]:
     """What happens to a turn once it is over: the numbers to the log, the
-    words to the screen. Neither one keeps both (`logs.py`)."""
+    words to the screen (neither one keeps both, `logs.py`), and - while
+    the archive is kept (D45) - the words of a turn that got an answer to
+    the archive. One INSERT, well inside the 50 ms rule."""
     from allie.logs import log_turn
 
     def turn(finished: Turn) -> None:
         log_turn(finished)
         screen.turn(finished)
+        heard, said = finished.heard.strip(), finished.said.strip()
+        if history is not None and finished.failure is None and (heard or said):
+            history.add(finished.turn_id, heard, said)
 
     return turn
 
@@ -1762,6 +1885,17 @@ def _mailbox_of(settings: Settings, password: str | None) -> Callable[[], Mailbo
     if not (mail.host.strip() and mail.user.strip() and password):
         return None
     return lambda: ImapMailbox(mail.host, mail.port, mail.user, password, mail.mailbox)
+
+
+def _outbox_of(settings: Settings, password: str | None) -> Callable[[], Outbox] | None:
+    """How `send_email` reaches the outgoing server (D43): the same account
+    and app password as the mailbox, or nothing when mail is not set up."""
+    from allie.tools.outbox import SmtpOutbox
+
+    mail = settings.mail
+    if not (mail.host.strip() and mail.user.strip() and password):
+        return None
+    return lambda: SmtpOutbox(mail.smtp(), mail.smtp_port, mail.user, password)
 
 
 def _each[T](*listeners: Callable[[T], None]) -> Callable[[T], None]:

@@ -1,7 +1,7 @@
 """The assistant's own voice for the program's own sentences (plan.md D32).
 
-Until 2026-09-24 a gate's question, a reminder, the filler and the three
-failure sentences were read by Windows' Tolga, or by Google's separate
+Until 2026-09-24 a gate's question, a reminder, the filler (gone since
+D47) and the three failure sentences were read by Windows' Tolga, or by Google's separate
 synthesiser with Tolga behind it - a man's voice between the words of
 Friday's, and a different one again when the synthesiser's small free quota
 ran out. The owner asked for one voice. So the live model reads them itself,
@@ -30,8 +30,8 @@ much shorter than its text should take is read once more from the start
 (`too_short`). The user may hear a fragment and then the whole; never only
 the fragment.
 
-**The sentences the program always says are kept on disk.** The fillers,
-the hint after a question, the failures, the greeting: read once per voice
+**The sentences the program always says are kept on disk.** The hint
+after an unclear answer, the failures, the greeting: read once per voice
 at a start (`prepare`), kept as WAV files when the reading is as long as its
 text should be, and played from there ever after - at once, with no request
 and no network, which is exactly when the three failure sentences are
@@ -81,6 +81,10 @@ OUTPUT_RATE = 24_000
 
 # How fast the reader speaks: 13-16 characters of text a second of speech,
 # spaces and punctuation counted, measured on Kore and Orus (2026-09-24).
+# Measured again on Kore with D48's wording (2026-09-30): a median of 16,
+# whole readings up to 18.3 - still short of what `too_short` takes for a
+# cut (about 20), and a higher figure would miss the shortest cuts of short
+# sentences, so it stays.
 CHARS_PER_SECOND = 14.5
 
 # A reading whose speech is shorter than this multiple of what its text
@@ -310,8 +314,10 @@ class LiveVoice:
 
     def _path(self, directory: Path, text: str) -> Path:
         # Everything the sound depends on: the same words in another voice,
-        # model or language are another file.
-        key = "\n".join((self._model, self._voice, self._language_code, text))
+        # model, language or reader prompt are another file - the prompt
+        # since D48, when it stopped asking for a calm tone and the calm
+        # readings on disk would otherwise have gone on playing.
+        key = "\n".join((self._model, self._voice, self._language_code, READER_PROMPT, text))
         name = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
         return directory / f"{name}.wav"
 

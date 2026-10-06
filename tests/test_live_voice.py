@@ -28,6 +28,7 @@ from allie.live.base import (
     SessionConfig,
     TurnComplete,
 )
+from allie.tts import live_voice
 from allie.tts.base import TTSProvider
 from allie.tts.live_voice import (
     CHARS_PER_SECOND,
@@ -444,6 +445,25 @@ async def test_another_voice_is_another_file_and_the_old_ones_go(tmp_path: Path)
 
     (kept,) = wavs(tmp_path)
     assert kept != kore
+
+
+async def test_another_reader_prompt_reads_the_kept_sentences_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D48: the reader was told to read at the pace of conversation instead
+    of calmly. Keyed on the voice alone, the calm readings kept on disk would
+    have gone on playing for ever; keyed on the prompt too, the next start
+    reads them again, and the old files go."""
+    await voice_with(Voices(), tmp_path).prepare([HINT])
+    (calm,) = wavs(tmp_path)
+    monkeypatch.setattr(live_voice, "READER_PROMPT", READER_PROMPT + " Read briskly.")
+
+    provider = Voices()
+    await voice_with(provider, tmp_path).prepare([HINT])
+
+    (kept,) = wavs(tmp_path)
+    assert kept != calm
+    assert provider.opened, "the sentence was read again"
 
 
 async def test_a_broken_file_is_read_live_instead(tmp_path: Path) -> None:

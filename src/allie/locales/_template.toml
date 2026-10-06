@@ -26,22 +26,8 @@ name = "Your language"
 # assistant, not the one it shows them.
 language = "xx"
 
-[speech]
-# The words the assistant listens for after asking "shall I?" - the ones
-# people actually say, in your language. Whole words, any case. A word from
-# `no_words` anywhere in the answer wins over one from `yes_words`, so keep
-# the two lists apart. Leave the table out and the English words are used.
-#
-# Keep the list short and to words people really say. Until 2026-09-26 the
-# local recogniser was told them before it listened, and wrote a clear
-# "Evet." as "iptal." - Google's is told nothing but the language (D36).
-yes_words = ["yes", "ok", "okay", "confirm"]
-no_words = ["no", "cancel", "stop"]
-# What the assistant says while a tool is taking its time - "one moment,
-# let me check" - so that a second or two of silence does not feel like
-# one. Short, in your language, ending in a pause; list two or three and
-# they are said in turn. Leave it out and the English one is used.
-filler = ["One moment, let me check..."]
+# There is no list of yes and no words to translate (plan.md D49): what an
+# answer to "shall I?" meant is decided by a model, in any language.
 
 [live]
 # Two hints for the live speech model (plan.md D19). `language_code` is the
@@ -53,6 +39,25 @@ filler = ["One moment, let me check..."]
 # Leave both empty to let the server and the prompt use their defaults.
 language_code = "xx-XX"
 user_language_rule = "The user speaks <your language>. A short or quiet utterance is <your language> unless it is unmistakably another language; never switch languages on a guess."
+
+[region]
+# Where the user is, for the quick facts (plan.md D39). Leave a value empty,
+# or the table out, and the tool that needs it says it has nothing for this
+# region and the model looks it up instead.
+# currency: the ISO 4217 code rates are said against ("EUR").
+# rates: "tcmb" for the Turkish central bank's bulletin; empty for the ECB's.
+# news: Google News edition parameters ("hl=de&gl=DE&ceid=DE:de").
+# news_fallback: an RSS address read when Google News does not answer.
+# earthquakes: "afad" (Turkey); empty elsewhere.
+# football_league: ESPN's league code ("ger.1").
+currency = ""
+rates = ""
+news = ""
+news_fallback = ""
+earthquakes = ""
+football_league = ""
+# Aladhan's prayer-time method number; leave it out when unsure.
+# prayer_method = 3
 
 [probe]
 # The one question the setup wizard puts to a model to find out whether it
@@ -132,10 +137,8 @@ setting_saved = "Saved: {setting}"
 unreachable = "I could not reach the provider. Will you try again?"
 key_invalid = "Your API key is not being accepted any more. You need to renew it."
 took_too_long = "That took too long. Will you try again?"
-# Read after a tool's question ("... will be deleted. Shall I?"), so the
-# user knows only a yes or a no is being listened for; the second one when
-# the answer had neither.
-confirm_hint = "Say yes or no."
+# Asked once when the answer to a tool's question was neither a yes nor a
+# no. The question itself is asked alone (plan.md D49).
 confirm_again = "I did not catch that. Yes, or no?"
 # Said before a session opens once a spending limit is passed, and instead
 # of one when the user asked to be stopped at the limit.
@@ -169,6 +172,21 @@ unknown_publisher = "unknown publisher"
 # {contact} the person as the user said them, {app} the app's name (WhatsApp
 # or Telegram). "Say yes or no." is added after it.
 send_message_confirm = "Shall I send '{text}' to {contact} on {app}?"
+# Asked before a mail is sent, read aloud and shown in the window; {to} is
+# the address it really goes to, {subject} and {text} the mail word for word.
+send_email_confirm = "Shall I send the mail '{subject}' - '{text}' - to {to}?"
+# Asked before the power tool acts, one sentence per action. Each is a
+# whole question that holds no word that answers no. Shutdown and restart
+# wait thirty seconds, and the question says so; with Wi-Fi off the
+# assistant cannot hear, and the question says that too.
+power_lock_confirm = "Shall I lock the computer?"
+power_sleep_confirm = "Shall I put the computer to sleep?"
+power_shutdown_confirm = "It shuts down after thirty seconds; shall I shut the computer down?"
+power_restart_confirm = "It restarts after thirty seconds; shall I restart the computer?"
+power_wifi_off_confirm = "Once Wi-Fi is off I cannot hear you, and turning it back on is up to you; shall I turn it off?"
+# Asked before an open app is closed; {name} is the app as the Start menu
+# names it.
+close_app_confirm = "Shall I close {name}?"
 # `allie telegram login`: the questions in the order they are asked, and
 # the two sentences at the end. {name} is the account's own name; {reason}
 # is Telegram's own explanation, in English.

@@ -4,9 +4,9 @@ The contract is one sentence long: **a voice yields 16-bit signed mono PCM,
 little endian, at the rate it declares in `sample_rate`.** Raw PCM rather
 than a compressed format, so whatever plays it never decodes anything.
 
-What it says is short and already written: a gate's question and the hint
-after it, a reminder, the filler while a tool takes its time, one of three
-failure sentences (D3, D4, D10). Each item handed to `stream` is one whole
+What it says is short and already written: a gate's question and the
+sentence after an unclear answer, a reminder, one of three failure
+sentences (D3, D4, D10). Each item handed to `stream` is one whole
 utterance - the pipeline's regrouping of a model's fragments into sentences
 went with the pipeline, since nothing streams fragments here any more - and
 the streaming shape is what lets `app.py` cut any of them off mid-word when

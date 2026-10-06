@@ -24,12 +24,20 @@ import ctypes
 import locale as windows
 import tomllib
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
-__all__ = ["FALLBACK_CODE", "Locale", "available", "iso_code", "load", "system_code"]
+__all__ = [
+    "FALLBACK_CODE",
+    "Locale",
+    "Region",
+    "available",
+    "iso_code",
+    "load",
+    "system_code",
+]
 
 # The language every other one falls back to, and the language this project
 # writes its code in. Those two being the same is a convenience, not a rule.
@@ -40,6 +48,22 @@ SUFFIX = ".toml"
 # A file whose name starts with this is a scaffold rather than a language.
 # `_template.toml` is one; it is there to be copied and translated.
 NOT_A_LANGUAGE = "_"
+
+
+@dataclass(frozen=True, slots=True)
+class Region:
+    """Where the user is, as the quick facts need it (plan.md D39), from the
+    pack's `[region]` table. Identity, like `language_code`: English lends
+    none, and a field left empty makes the tool that needs it say so rather
+    than guess a country."""
+
+    currency: str = ""  # ISO 4217, what rates are said against
+    rates: str = ""  # "tcmb", or empty for the ECB's reference rates
+    news: str = ""  # Google News edition parameters: "hl=tr&gl=TR&ceid=TR:tr"
+    news_fallback: str = ""  # an RSS address read when Google does not answer
+    earthquakes: str = ""  # "afad", or empty
+    prayer_method: int | None = None  # Aladhan's method number
+    football_league: str = ""  # ESPN's league code: "tur.1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,21 +82,6 @@ class Locale:
     # is answered by the caller's own English constant through `say`.
     ui: Mapping[str, str]
 
-    # The words the confirmation window listens for, from `[speech]`
-    # (design.md 3.1 rule 2). They fall back the way sentences do, not the
-    # way identity does: a pack without them gets the English words beside
-    # the code that listens (`app.py`), together with the English hint that
-    # tells the user which words to say - so the two always agree. The
-    # recogniser is told none of them (D36): only `stt_language`.
-    yes_words: tuple[str, ...] = ()
-    no_words: tuple[str, ...] = ()
-
-    # What is said while a tool takes its time, from `[speech] filler`
-    # (design.md section 4, 2.8): said in turn, one per turn. They fall
-    # back like the yes and no words, to the English beside the code that
-    # says them (`app.py`).
-    fillers: tuple[str, ...] = ()
-
     # The question the setup wizard asks a model to see whether it calls a
     # tool, from `[probe]` (design.md section 3.2, 2.6). In the pack's own
     # language, so that one request also shows the model understands the
@@ -90,6 +99,10 @@ class Locale:
     # prompt to their defaults.
     language_code: str = ""
     user_language_rule: str = ""
+
+    # What the quick facts need to know about where the user is, from
+    # `[region]` (plan.md D39): identity too - English lends none.
+    region: Region = field(default_factory=Region)
 
     def say(self, key: str, default: str) -> str:
         """The sentence for `key`, or `default` - the last link of the chain.
@@ -117,12 +130,10 @@ def load(code: str | None = None, *, directory: Path | None = None) -> Locale:
         name=_text(pack, "name") or wanted,
         stt_language=_text(_table(pack, "stt"), "language") or wanted,
         ui={**_texts(_table(english, "ui")), **_texts(_table(pack, "ui"))},
-        yes_words=_words(_table(pack, "speech"), "yes_words"),
-        no_words=_words(_table(pack, "speech"), "no_words"),
-        fillers=_words(_table(pack, "speech"), "filler"),
         probe_question=_text(_table(pack, "probe"), "question").strip(),
         language_code=_text(_table(pack, "live"), "language_code").strip(),
         user_language_rule=_text(_table(pack, "live"), "user_language_rule").strip(),
+        region=_region(_table(pack, "region")),
     )
 
 
@@ -228,12 +239,18 @@ def _texts(values: Mapping[str, Any]) -> dict[str, str]:
     return {key: value for key, value in values.items() if isinstance(value, str)}
 
 
-def _words(values: Mapping[str, Any], key: str) -> tuple[str, ...]:
-    """A list of words, or nothing if the pack put something else there."""
-    found = values.get(key)
-    if not isinstance(found, list):
-        return ()
-    return tuple(word.strip() for word in found if isinstance(word, str) and word.strip())
+def _region(values: Mapping[str, Any]) -> Region:
+    """`[region]`, with anything of the wrong shape left empty."""
+    method = values.get("prayer_method")
+    return Region(
+        currency=_text(values, "currency").strip().upper(),
+        rates=_text(values, "rates").strip().casefold(),
+        news=_text(values, "news").strip(),
+        news_fallback=_text(values, "news_fallback").strip(),
+        earthquakes=_text(values, "earthquakes").strip().casefold(),
+        prayer_method=method if isinstance(method, int) and not isinstance(method, bool) else None,
+        football_league=_text(values, "football_league").strip(),
+    )
 
 
 def _ui_language_id() -> int:

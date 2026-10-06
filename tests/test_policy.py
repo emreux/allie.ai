@@ -24,11 +24,11 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
-from allie.agent.core import Confirm
+from allie.agent.core import Confirm, Question
 from allie.agent.policy import (
     DECLINED,
     DISABLED,
@@ -676,6 +676,39 @@ async def test_the_question_and_the_run_use_the_prepared_arguments() -> None:
     assert answer == "Spotify opened"
 
 
+async def test_the_question_carries_its_outline_with_every_value_masked() -> None:
+    """D49: the judge of the answer is shown the question's words and none
+    of the call's - a message, a note or a name could be written to sway
+    it."""
+    confirm = FakeConfirm(answer=True)
+
+    await gate(call("open_app", name="Spotify"), confirm=confirm)
+
+    [question] = confirm.asked
+    assert isinstance(question, Question)
+    assert question == "Spotify will be opened."
+    assert question.outline == "… will be opened."
+
+
+async def test_a_value_the_tool_reads_its_own_way_stays_in_the_outline() -> None:
+    """`power`'s whole question is the pack's sentence for its action
+    (`said_as`, D40): the tool's own words, not the call's, so the judge
+    sees it. A value it has no sentence for is masked all the same."""
+    power = replace(
+        open_app, confirm_prompt="{name}", said_as={"name": {"lock": "Lock the computer?"}}
+    )
+    confirm = FakeConfirm(answer=True)
+    registry = ToolRegistry([power])
+
+    await gate(call("open_app", name="lock"), confirm=confirm, registry=registry)
+    await gate(call("open_app", name="format c:"), confirm=confirm, registry=registry)
+
+    said, unknown = confirm.asked
+    assert isinstance(said, Question) and isinstance(unknown, Question)
+    assert (said, said.outline) == ("Lock the computer?", "Lock the computer?")
+    assert (unknown, unknown.outline) == ("format c:", "…")
+
+
 async def test_the_audit_row_holds_the_prepared_arguments(
     database: sqlite3.Connection, audit: AuditRepo
 ) -> None:
@@ -724,3 +757,91 @@ async def test_a_preparation_that_breaks_asks_nobody_and_says_it_failed() -> Non
     assert answer == FAILED.format(kind="RuntimeError")
     assert confirm.asked == []
     assert ran == []
+
+
+# --------------------------------------------------------------------------
+# said_as and shown (2026-09-27, D40 / D43)
+# --------------------------------------------------------------------------
+
+
+class Asked:
+    """A confirm that records what it was asked and what the screen held then."""
+
+    def __init__(self, screen: list[str] | None = None) -> None:
+        self.questions: list[str] = []
+        self.screen_then: list[list[str]] = []
+        self._screen = screen
+
+    async def __call__(self, question: str) -> bool:
+        self.questions.append(question)
+        self.screen_then.append(list(self._screen or []))
+        return True
+
+
+def _power() -> Tool:
+    @tool(risk="confirm", confirm_prompt="{action}")
+    async def power(action: Literal["lock", "sleep"]) -> str:
+        """Power."""
+        return f"did {action}"
+
+    return power
+
+
+async def test_a_value_is_said_the_way_the_tool_says_it_and_run_as_it_is() -> None:
+    spoken = replace(_power(), said_as={"action": {"lock": "Kilitleyeyim mi?"}})
+    asked = Asked()
+
+    said = await dispatch(
+        ToolCall(id="c1", name="power", arguments={"action": "lock"}),
+        turn_id="t1",
+        registry=ToolRegistry([spoken]),
+        confirm=asked,
+    )
+
+    assert asked.questions == ["Kilitleyeyim mi?"]
+    assert said == "did lock"
+
+
+async def test_a_value_the_tool_does_not_say_is_read_as_it_came() -> None:
+    spoken = replace(_power(), said_as={"action": {"lock": "Kilitleyeyim mi?"}})
+    asked = Asked()
+
+    await dispatch(
+        ToolCall(id="c1", name="power", arguments={"action": "sleep"}),
+        turn_id="t1",
+        registry=ToolRegistry([spoken]),
+        confirm=asked,
+    )
+
+    assert asked.questions == ["sleep"]
+
+
+async def test_a_shown_question_is_on_the_screen_before_it_is_asked() -> None:
+    screen: list[str] = []
+    shown = replace(_power(), said_as={"action": {"lock": "Kilitleyeyim mi?"}}, shown=True)
+    asked = Asked(screen)
+
+    await dispatch(
+        ToolCall(id="c1", name="power", arguments={"action": "lock"}),
+        turn_id="t1",
+        registry=ToolRegistry([shown]),
+        confirm=asked,
+        show=screen.append,
+    )
+
+    assert screen == ["Kilitleyeyim mi?"]
+    assert asked.screen_then == [["Kilitleyeyim mi?"]]
+
+
+async def test_a_question_not_marked_shown_stays_off_the_screen() -> None:
+    screen: list[str] = []
+
+    await dispatch(
+        ToolCall(id="c1", name="power", arguments={"action": "lock"}),
+        turn_id="t1",
+        registry=ToolRegistry([_power()]),
+        confirm=Asked(),
+        show=screen.append,
+    )
+
+    assert screen == []

@@ -25,13 +25,15 @@ from allie import __main__ as cli
 from allie import app, locales, setup_wizard
 from allie.agent import policy
 from allie.live.probe import QUESTION
-from allie.locales import FALLBACK_CODE, available, iso_code, load, system_code
+from allie.locales import FALLBACK_CODE, Region, available, iso_code, load, system_code
 from allie.messaging import telegram
 from allie.scheduler import runner as scheduler
+from allie.tools import computer as computer_tools
 from allie.tools import mail as mail_tools
 from allie.tools import memory as memory_tools
 from allie.tools import messaging as messaging_tools
 from allie.tools import notes as notes_tools
+from allie.tools import outbox as outbox_tools
 from allie.tools import reminders as reminder_tools
 from allie.tools import store as store_tools
 from allie.tools import system as system_tools
@@ -57,8 +59,10 @@ TABLES = {
     "tools.memory": memory_tools.TEXT,
     "tools.system": system_tools.TEXT,
     "tools.store": store_tools.TEXT,
+    "tools.computer": computer_tools.TEXT,
     "tools.messaging": messaging_tools.TEXT,
     "tools.mail": mail_tools.TEXT,
+    "tools.outbox": outbox_tools.TEXT,
     "tools.notes": notes_tools.TEXT,
     "tools.reminders": reminder_tools.TEXT,
     "scheduler.runner": scheduler.TEXT,
@@ -126,10 +130,8 @@ def test_a_pack_is_filed_under_the_name_of_its_own_file() -> None:
 
 def test_english_is_not_written_down_twice() -> None:
     """`en.toml` carries no sentences: English is already the constant the
-    chain ends at, and a second copy is a second thing to keep in step. The
-    same goes for the yes and no words the window listens for."""
+    chain ends at, and a second copy is a second thing to keep in step."""
     assert "ui" not in read(PACKAGED / "en.toml")
-    assert "speech" not in read(PACKAGED / "en.toml")
     assert "probe" not in read(PACKAGED / "en.toml")
 
 
@@ -280,12 +282,11 @@ def test_a_pack_that_does_not_parse_is_skipped_rather_than_fatal(tmp_path: Path)
 def test_a_pack_of_the_wrong_shape_is_read_as_far_as_it_makes_sense(tmp_path: Path) -> None:
     """Every value here is the wrong kind of thing, and each one falls back on
     its own rather than taking the whole pack down with it."""
-    write(tmp_path, "de", 'name = 5\nstt = "German"\n[speech]\nfiller = 3\n[ui]\nmodel = 7\n')
+    write(tmp_path, "de", 'name = 5\nstt = "German"\n[ui]\nmodel = 7\n')
 
     pack = load("de", directory=tmp_path)
 
     assert (pack.code, pack.name, pack.stt_language) == ("de", "de", "de")
-    assert pack.fillers == ()
     assert pack.say("model", "Which model?") == "Which model?"
 
 
@@ -337,64 +338,15 @@ def test_the_turkish_pack_has_the_words_the_store_install_asks_with() -> None:
 
 
 # --------------------------------------------------------------------------
-# The yes and no words (2.3)
+# No word lists (D49): a model judges the answer to the gate's question
 # --------------------------------------------------------------------------
 
 
-def test_turkish_knows_its_yes_and_no() -> None:
-    """The window of section 3.1 rule 2 listens for these; a pack without
-    them would have the assistant say "evet ya da hayır de" and hear neither."""
-    pack = load("tr")
-
-    assert pack.yes_words and pack.no_words
-    assert not set(pack.yes_words) & set(pack.no_words)
-
-
-def test_the_template_offers_the_three_lists_a_translator_has_to_fill() -> None:
-    assert set(read(PACKAGED / "_template.toml")["speech"]) == {"yes_words", "no_words", "filler"}
-
-
-def test_turkish_has_something_to_say_while_a_tool_takes_its_time() -> None:
-    """The filler of section 4 (2.8): a pack without one is heard saying
-    the English one in the middle of a Turkish answer."""
-    assert load("tr").fillers
-
-
-def test_the_fillers_come_from_the_pack_in_the_order_they_are_listed(tmp_path: Path) -> None:
-    write(tmp_path, "de", '[speech]\nfiller = [" Moment... ", "Ich schaue nach..."]\n')
-
-    assert load("de", directory=tmp_path).fillers == ("Moment...", "Ich schaue nach...")
-
-
-def test_a_pack_without_fillers_leaves_them_to_the_code(tmp_path: Path) -> None:
-    write(tmp_path, "de", '[speech]\nyes_words = ["ja"]\n')
-
-    assert load("de", directory=tmp_path).fillers == ()
-
-
-def test_the_yes_and_no_words_come_from_the_pack(tmp_path: Path) -> None:
-    write(tmp_path, "de", '[speech]\nyes_words = ["ja", " jawohl "]\nno_words = ["nein"]\n')
-
-    pack = load("de", directory=tmp_path)
-
-    assert (pack.yes_words, pack.no_words) == (("ja", "jawohl"), ("nein",))
-
-
-def test_a_pack_without_them_leaves_the_words_to_the_code(tmp_path: Path) -> None:
-    """Like a sentence: the English words live beside the code that listens
-    for them, with the English hint that names them, and not in `en.toml`."""
-    write(tmp_path, "en", '[speech]\nyes_words = ["yes"]\n')
-
-    assert load("de", directory=tmp_path).yes_words == ()
-    assert load("de", directory=tmp_path).no_words == ()
-
-
-def test_words_of_the_wrong_shape_are_read_as_far_as_they_make_sense(tmp_path: Path) -> None:
-    write(tmp_path, "de", '[speech]\nyes_words = "ja"\nno_words = ["nein", 3, ""]\n')
-
-    pack = load("de", directory=tmp_path)
-
-    assert (pack.yes_words, pack.no_words) == ((), ("nein",))
+def test_no_pack_lists_the_words_of_a_yes_or_a_no() -> None:
+    """They missed "tamamdır gönderebilirsin" and took "evet ama önce bana
+    oku" for a yes; `agent/judge.py` decides now, in any language."""
+    for path in shipped():
+        assert "speech" not in read(path), path.name
 
 
 # --------------------------------------------------------------------------
@@ -517,40 +469,81 @@ def test_hints_of_the_wrong_shape_are_no_hints(tmp_path: Path) -> None:
 # The questions a tool asks first (2026-09-26)
 # --------------------------------------------------------------------------
 
-# The five sentences read aloud before a `confirm` tool runs. `purge_confirm`
-# is not one of them: it is typed at a terminal, not said.
+# The sentences read aloud before a `confirm` tool runs - `power` has one
+# per action (D40). `purge_confirm` is not one of them: it is typed at a
+# terminal, not said.
 SPOKEN_QUESTIONS = (
     "forget_confirm",
     "note_delete_confirm",
     "reminder_cancel_confirm",
     "store_install_confirm",
     "send_message_confirm",
+    "send_email_confirm",
+    "close_app_confirm",
+    *(f"power_{action}_confirm" for action in computer_tools.POWER_ACTIONS),
 )
 
 
-def spoken_questions() -> list[tuple[str, str, tuple[str, ...]]]:
+def spoken_questions() -> list[tuple[str, str]]:
     """Every spoken question as each language says it - the pack's, else the
-    English constant beside the tool - with that language's no words."""
+    English constant beside the tool."""
     found = []
     for code in ("en", "tr"):
         pack = load(code)
-        _, no = app.confirm_words(pack)
         for key in SPOKEN_QUESTIONS:
-            found.append((f"{code}:{key}", pack.say(key, SENTENCES[key]), no))
+            found.append((f"{code}:{key}", pack.say(key, SENTENCES[key])))
     return found
 
 
 def test_every_spoken_question_is_a_question() -> None:
     """The owner heard "... gönderilecek." and was expected to know it was a
-    question. Each one now asks: "... göndereyim mi?"."""
-    for name, sentence, _ in spoken_questions():
+    question. Each one now asks: "... göndereyim mi?" - and since D49 it is
+    asked alone, with no "say yes or no" after it."""
+    for name, sentence in spoken_questions():
         assert sentence.rstrip().endswith("?"), name
 
 
-def test_no_spoken_question_holds_a_word_that_answers_no() -> None:
-    """ "... hatırlatıcısı iptal edilecek." invited "evet, iptal et" - and
-    "iptal" is a no word, which wins over the yes beside it. A question may
-    not put a no in the user's mouth."""
-    for name, sentence, no in spoken_questions():
-        heard = app.read_answer(f"evet yes {sentence}", yes=("evet", "yes"), no=no)
-        assert heard is True, name
+# --------------------------------------------------------------------------
+# The region (plan.md D39)
+# --------------------------------------------------------------------------
+
+
+def test_turkish_names_its_region_for_the_quick_facts() -> None:
+    region = load("tr").region
+
+    assert region == Region(
+        currency="TRY",
+        rates="tcmb",
+        news="hl=tr&gl=TR&ceid=TR:tr",
+        news_fallback="https://feeds.bbci.co.uk/turkce/rss.xml",
+        earthquakes="afad",
+        prayer_method=13,
+        football_league="tur.1",
+    )
+
+
+def test_english_lends_no_region() -> None:
+    assert load("en").region == Region()
+
+
+def test_a_region_with_the_wrong_shapes_is_empty_where_they_are_wrong(tmp_path: Path) -> None:
+    write(tmp_path, "en", "")
+    write(tmp_path, "xx", '[region]\ncurrency = 5\nprayer_method = "13"\nrates = "TCMB"\n')
+
+    region = load("xx", directory=tmp_path).region
+
+    assert (region.currency, region.prayer_method, region.rates) == ("", None, "tcmb")
+
+
+def test_the_template_offers_the_region_a_translator_may_fill() -> None:
+    region = read(PACKAGED / "_template.toml")["region"]
+
+    assert set(region) == {
+        "currency",
+        "rates",
+        "news",
+        "news_fallback",
+        "earthquakes",
+        "football_league",
+    }
+    assert "prayer_method" in (PACKAGED / "_template.toml").read_text(encoding="utf-8")

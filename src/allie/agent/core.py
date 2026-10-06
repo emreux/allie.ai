@@ -30,8 +30,9 @@ pending.
 
 The guard is the turn's, and the turn is the state machine's to end (D9):
 `new_turn` is called when the user's utterance has been answered whole, not
-at every `TurnComplete` the server sends - Gemini ends a server turn at the
-tool call itself (ADR-001 section 8).
+at every `TurnComplete` the server sends - Gemini's asynchronous default
+ended a server turn at the tool call itself (ADR-001 section 8). What the
+state machine reads to tell the two apart is `owed` (D46).
 
 The rest is the vocabulary the gate and the composition root still speak:
 who answers a tool's question, what the answer is when nobody can, where
@@ -62,9 +63,29 @@ __all__ = [
     "Confirm",
     "Dispatch",
     "PromptSource",
+    "Question",
     "ToolRunner",
     "decline",
 ]
+
+
+class Question(str):
+    """A gate's question as the user hears it, and its `outline`: the same
+    question with every value of the call masked as '…' (plan.md D49).
+
+    The outline is all the judge of the answer is shown (`agent/judge.py`):
+    the question's own words - "…göndereyim mi?" - and not a word of the
+    message, the note or the name in it, any of which could be written to
+    sway a model. A plain string where a question is expected has no outline;
+    the gate always asks with one.
+    """
+
+    outline: str
+
+    def __new__(cls, text: str, outline: str) -> Question:
+        question = super().__new__(cls, text)
+        question.outline = outline
+        return question
 
 
 # Asks the user a question out loud and answers yes (`True`), no (`False`),
@@ -130,6 +151,9 @@ class ToolRunner:
         # latest of them is what the next one waits for.
         self._pending: dict[asyncio.Task[None], ToolCall] = {}
         self._last: asyncio.Task[None] | None = None
+        # The rounds whose result has not been handed to the session yet
+        # (D46): what the state machine reads at a `TurnComplete`.
+        self._owed: set[asyncio.Task[None]] = set()
 
     def specs(self) -> list[ToolSpec]:
         """The tools a session is opened with (`SessionConfig.tools`)."""
@@ -139,6 +163,15 @@ class ToolRunner:
     def pending(self) -> int:
         """How many calls have not been answered yet - or dropped."""
         return len(self._pending)
+
+    @property
+    def owed(self) -> int:
+        """How many calls still wait for their result to be handed to the
+        session (D46). Not `pending`: a round stays pending until its
+        task's callback has run, and by then the session may already have
+        answered the result - `TurnComplete` included. A withdrawn call is
+        owed no longer at once: nothing will be sent for it."""
+        return len(self._owed)
 
     @property
     def ran(self) -> int:
@@ -169,6 +202,7 @@ class ToolRunner:
             name=f"tool {call.name}",
         )
         self._pending[task] = call
+        self._owed.add(task)
         self._last = task
         task.add_done_callback(self._forget)
 
@@ -179,12 +213,14 @@ class ToolRunner:
         withdrawn = set(ids)
         for task, call in list(self._pending.items()):
             if call.id in withdrawn:
+                self._owed.discard(task)
                 task.cancel()
 
     async def close(self) -> None:
         """The hang-up: every call pending is withdrawn, and this returns
         once they are gone. Harmless with nothing pending."""
         for task in list(self._pending):
+            self._owed.discard(task)
             task.cancel()
         await self.settled()
 
@@ -225,6 +261,9 @@ class ToolRunner:
                 result = TOOL_TIMED_OUT.format(seconds=seconds)
         else:
             result = refused
+        this = asyncio.current_task()
+        if this is not None:
+            self._owed.discard(this)
         try:
             await session.send_tool_result(call, result)
         except ProviderError as failure:
@@ -239,6 +278,9 @@ class ToolRunner:
 
     def _forget(self, task: asyncio.Task[None]) -> None:
         call = self._pending.pop(task)
+        # A round that never reached its send - cancelled before it ran,
+        # or crashed - owes nothing any more either.
+        self._owed.discard(task)
         if task.cancelled():
             return
         error = task.exception()

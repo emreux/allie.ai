@@ -153,18 +153,14 @@ class Usage:
 class ModelInfo:
     """One entry of a provider's model list, as the setup command shows it.
 
-    The optional fields are genuinely unknown for some providers rather than
-    merely absent. `supports_tools=None` means "nobody has tested this model
-    yet" - the probe replaces it with a measured answer instead of letting
-    the assistant fail silently at two in the morning.
+    Four more fields - the context window, whether it calls tools, two
+    prices - were never read by anything and went on 2026-09-27 (D37):
+    whether a model calls tools is what the probe (`live/probe.py`) finds
+    out, not what a list says.
     """
 
     id: str
     display_name: str
-    context_window: int | None = None
-    supports_tools: bool | None = None
-    input_price_per_mtok: float | None = None
-    output_price_per_mtok: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,13 +196,11 @@ class SessionConfig:
     # section 2) - the search runs on the server and no call reaches the
     # gate, which is why it is a flag here and not a `ToolSpec`.
     web_search: bool = False
-    # `affective_dialog`: the model reads the tone of the voice and answers
-    # in kind (Gemini `enable_affective_dialog`). `compress_context`: the
-    # server keeps the context under its own ceiling by dropping the oldest
-    # turns, so that a session has no fixed end (Gemini
+    # `compress_context`: the server keeps the context under its own
+    # ceiling by dropping the oldest turns, so that a session has no fixed
+    # end (Gemini
     # `context_window_compression` with the server's default window;
     # without it an audio session is capped at fifteen minutes).
-    affective_dialog: bool = False
     compress_context: bool = False
 
 
@@ -266,9 +260,11 @@ class OutputText:
 
 @dataclass(frozen=True, slots=True)
 class TurnComplete:
-    """The model has finished its turn. Gemini sends this *at* a tool call
-    too, before the result is even sent, and speaks the answer as a new turn
-    (measured 2026-09-18); the state machine counts the two as one."""
+    """The model has finished its turn. With its tools declared BLOCKING
+    Gemini sends it once the answer is spoken (D46, 2026-09-30); its
+    asynchronous default sent one *at* the tool call too, before the result
+    (measured 2026-09-18). The state machine ends the user's turn only at
+    one that comes with no result owed."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -301,7 +301,9 @@ async def test_the_session_is_opened_for_audio_with_the_prompt_and_the_tools() -
     # A schema with no properties is refused by the Live API (measured in
     # the spike, 2026-09-18): a tool without parameters is declared bare.
     assert declared[1].parameters_json_schema is None
-    assert declared[0].behavior is None
+    # D46 (2026-09-30): 3.8 Live's default became NON_BLOCKING at its GA,
+    # and a result answered on its own is answered out loud on its own.
+    assert [d.behavior for d in declared] == [types.Behavior.BLOCKING] * 2
     assert config.thinking_config is None
 
 
@@ -443,7 +445,7 @@ def test_what_the_adapter_announces() -> None:
 
     assert adapter.id == "gemini"
     assert adapter.capabilities == frozenset(
-        {"resumption", "transcripts", "web_search", "affective_dialog", "context_compression"}
+        {"resumption", "transcripts", "web_search", "context_compression"}
     )
     assert DEFAULT_MODEL == "gemini-3.8-live"
 
@@ -518,21 +520,12 @@ async def test_what_the_model_searched_for_and_where_it_read_is_logged() -> None
     assert line.startswith("INFO")
 
 
-async def test_affective_dialog_is_switched_on_when_asked() -> None:
-    """B7 (plan.md D25): the model reads the tone of the voice and answers
-    in kind. One boolean in the connect config; no API version to set,
-    the SDK's default for the Gemini API is already v1beta."""
+async def test_affective_dialog_is_never_sent() -> None:
+    """D37: Google removed affective dialog from the API; the field stays
+    the server's."""
     adapter, client = gemini()
 
-    await collect(adapter, SessionConfig(model="m", affective_dialog=True))
-
-    assert opened(client).enable_affective_dialog is True
-
-
-async def test_affective_dialog_is_left_to_the_server_by_default() -> None:
-    adapter, client = gemini()
-
-    await collect(adapter, SessionConfig(model="m"))
+    await collect(adapter, SessionConfig(model="m", compress_context=True))
 
     assert opened(client).enable_affective_dialog is None
 
@@ -561,8 +554,8 @@ async def test_without_compression_nothing_is_sent() -> None:
     assert opened(client).proactivity is None
 
 
-def test_the_adapter_announces_the_two_switches() -> None:
-    assert {"affective_dialog", "context_compression"} <= GeminiLive.capabilities
+def test_the_adapter_announces_compression() -> None:
+    assert "context_compression" in GeminiLive.capabilities
 
 
 # --------------------------------------------------------------------------
@@ -626,6 +619,79 @@ async def test_a_tool_result_goes_back_as_a_function_response_by_id_and_name() -
     assert response.name == "get_current_time"
     assert response.response == {"result": "2026-09-18T15:00 Friday"}
     assert response.scheduling is None
+
+
+async def asked(session: Any) -> list[ToolCall]:
+    """The calls the session's scripted messages delivered, in order."""
+    return [event.call async for event in session.events() if isinstance(event, ToolCallEvent)]
+
+
+def answered(client: FakeClient) -> list[list[tuple[str | None, str | None, Any]]]:
+    """Every `send_tool_response`, as the (id, name, response) of each result."""
+    return [
+        [(r.id, r.name, r.response) for r in kwargs["function_responses"]]
+        for method, kwargs in session_of(client).sent
+        if method == "send_tool_response"
+    ]
+
+
+async def test_the_results_of_one_message_go_back_together_once_all_are_in() -> None:
+    """D46 (2026-09-30): two calls in one message answered in two messages
+    were answered out loud twice - the owner's song and volume. They go back
+    in one, in the order they were asked, whichever finished first."""
+    adapter, client = gemini(calls(("c1", "play_music", {}), ("c2", "set_volume", {})))
+
+    async with adapter.connect(SessionConfig(model="m")) as session:
+        play, volume = await asked(session)
+        await session.send_tool_result(volume, "Volume set to 20 %.")
+        assert answered(client) == []
+        await session.send_tool_result(play, "Playing it.")
+
+    assert answered(client) == [
+        [
+            ("c1", "play_music", {"result": "Playing it."}),
+            ("c2", "set_volume", {"result": "Volume set to 20 %."}),
+        ]
+    ]
+
+
+async def test_calls_of_two_messages_are_answered_apart() -> None:
+    adapter, client = gemini(calls(("c1", "ping", {})), calls(("c2", "ping", {})))
+
+    async with adapter.connect(SessionConfig(model="m")) as session:
+        first, second = await asked(session)
+        await session.send_tool_result(first, "pong 1")
+        await session.send_tool_result(second, "pong 2")
+
+    assert answered(client) == [
+        [("c1", "ping", {"result": "pong 1"})],
+        [("c2", "ping", {"result": "pong 2"})],
+    ]
+
+
+async def test_a_withdrawn_call_lets_the_rest_of_its_message_go() -> None:
+    adapter, client = gemini(calls(("c1", "ping", {}), ("c2", "ping", {})), cancels("c2"))
+
+    async with adapter.connect(SessionConfig(model="m")) as session:
+        first, _ = await asked(session)
+        await session.send_tool_result(first, "pong")
+
+    assert answered(client) == [[("c1", "ping", {"result": "pong"})]]
+
+
+async def test_a_result_held_for_a_call_that_is_withdrawn_later_goes_then() -> None:
+    """The one answered first waited for its neighbour; the neighbour is
+    withdrawn - the user spoke - and nothing will come for it."""
+    adapter, client = gemini(calls(("c1", "ping", {}), ("c2", "ping", {})))
+
+    async with adapter.connect(SessionConfig(model="m")) as session:
+        first, _ = await asked(session)
+        await session.send_tool_result(first, "pong")
+        assert answered(client) == []
+        session_of(client).answers.append(cancels("c2"))
+        assert [e async for e in session.events() if isinstance(e, ToolCallCancelled)]
+
+    assert answered(client) == [[("c1", "ping", {"result": "pong"})]]
 
 
 async def test_an_id_the_model_never_issued_is_not_sent_back_as_an_empty_one() -> None:
@@ -837,8 +903,6 @@ async def test_only_models_that_can_hold_a_live_session_are_offered() -> None:
     listed = await adapter.list_models()
 
     assert [(m.id, m.display_name) for m in listed] == [("gemini-3.8-live", "Gemini 3.8 Live")]
-    assert listed[0].context_window == 128_000
-    assert listed[0].supports_tools is None
 
 
 async def test_a_refused_key_is_named_as_one_rather_than_left_to_the_caller() -> None:

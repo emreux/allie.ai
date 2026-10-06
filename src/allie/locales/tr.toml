@@ -10,15 +10,6 @@ name = "Türkçe"
 [stt]
 language = "tr"
 
-[speech]
-# What the confirmation window listens for (design.md 3.1 rule 2). Whole
-# words, any case; a "no" anywhere in the answer wins over a "yes".
-yes_words = ["evet", "onaylıyorum", "tamam", "olur"]
-no_words = ["hayır", "iptal", "vazgeç", "olmaz"]
-# Said while a tool takes its time (design.md 4): short, and ending in a
-# pause. Used in turn, so two of them are not the same one twice.
-filler = ["Bir saniye, bakıyorum...", "Hemen bakıyorum..."]
-
 [live]
 # The two hints the live model needs (plan.md D19, ADR-001 section 6). The
 # BCP-47 code goes to the session, for the recogniser behind the model and
@@ -29,6 +20,20 @@ filler = ["Bir saniye, bakıyorum...", "Hemen bakıyorum..."]
 # not written in it.
 language_code = "tr-TR"
 user_language_rule = "The user speaks Turkish. A short or quiet utterance is Turkish unless it is unmistakably another language; never switch languages on a guess."
+
+[region]
+# What the quick facts need to know about where the user is (plan.md D39).
+# Data, not sentences: the currency rates are said against, the source of
+# those rates, the Google News edition, the feed read when Google does not
+# answer, the earthquake service, Aladhan's prayer-time method (13 =
+# Diyanet) and ESPN's league code.
+currency = "TRY"
+rates = "tcmb"
+news = "hl=tr&gl=TR&ceid=TR:tr"
+news_fallback = "https://feeds.bbci.co.uk/turkce/rss.xml"
+earthquakes = "afad"
+prayer_method = 13
+football_league = "tur.1"
 
 [probe]
 # The one question the setup wizard puts to a model to see whether it calls
@@ -85,7 +90,6 @@ setting_saved = "Kaydedildi: {setting}"
 unreachable = "Sağlayıcıya bağlanamadım, tekrar dener misin?"
 key_invalid = "API anahtarın geçersiz görünüyor, yenilemen gerekiyor."
 took_too_long = "Bu iş uzadı, tekrar dener misin?"
-confirm_hint = "Evet ya da hayır de."
 confirm_again = "Anlayamadım. Evet mi, hayır mı?"
 daily_over = "Bugünkü harcama sınırını aştın."
 monthly_over = "Bu ayki harcama sınırını aştın."
@@ -116,6 +120,19 @@ unknown_publisher = "yayıncısı bilinmiyor"
 # word, {contact} the person as the user said them, {app} WhatsApp or
 # Telegram. The hint on how to answer is added after it.
 send_message_confirm = "{app} üzerinden {contact} kişisine '{text}' mesajını göndereyim mi?"
+# The one question before a mail goes (plan.md D43): read aloud and shown in
+# the window, with the recipient the mail really goes to.
+send_email_confirm = "'{text}' yazan, konusu '{subject}' olan maili {to} adresine göndereyim mi?"
+# The power tool's questions, one per action (plan.md D40). Each ends in a
+# question and holds no no word (D36).
+power_lock_confirm = "Bilgisayarı kilitleyeyim mi?"
+power_sleep_confirm = "Bilgisayarı uyku moduna alayım mı?"
+power_shutdown_confirm = "Otuz saniye sonra kapanır; bilgisayarı kapatayım mı?"
+power_restart_confirm = "Otuz saniye sonra yeniden başlar; bilgisayarı yeniden başlatayım mı?"
+power_wifi_off_confirm = "Wi-Fi kapanınca seni duyamam ve geri açmak sende kalır; kapatayım mı?"
+# Asked before an open app is closed (D41); {name} is the app as the
+# Start menu names it.
+close_app_confirm = "{name} uygulamasını kapatayım mı?"
 # `allie telegram login`: the questions, in order, and the two answers.
 telegram_api_id = "Telegram api_id'n (bir sayı). https://my.telegram.org adresinde 'API development tools' altından alınır"
 telegram_api_hash = "Telegram api_hash'in (yazarken görünmez)"

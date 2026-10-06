@@ -29,22 +29,24 @@ Nothing said after that point is written down as said.
 
 **A tool call runs through the gate and nowhere else** (rule 3). The runner
 of `agent/core.py` asks the guard, hands the call to the gate and sends the
-words back; what this file adds is the one who answers a tool's question -
-`confirm` - and the filler said when a tool takes its time.
+words back; what this file adds is the one who answers a tool's question,
+`confirm`. Nothing is said while a tool works (D47): the model waits for
+the result (D46), and what the tool does - a song starting - or the answer
+is what follows.
 
 **A tool that wants a yes gets one out loud, or does not run.** The gate
 hands `confirm` the sentence with the real argument values in it; this file
 waits for the model to finish what it was saying, pauses the session's input
-(D3: nothing said in the window reaches the model), reads the question in
-the assistant's voice from a session of its own (D32), tells the user how
-to answer, and opens the microphone for six seconds; Google's recogniser
-reads what was said (D36). A "no" anywhere in the answer wins
-over a "yes"; silence is a no, and so is a voice or the switch while the
-question is still being read; an answer with neither word in it is asked
-about once more, and a second such answer is a no as well. The exchange
-belongs to the gate, not to the model: only the tool's result reaches it.
-The words that count as yes and no come from the locale pack; the English
-ones below are the end of the chain.
+(D3: nothing said in the window reaches the model), reads the question - and
+only the question (D49) - in the assistant's voice from a session of its own
+(D32), and opens the microphone for six seconds as it ends; Google's
+recogniser reads what was said (D36), and a small model of its own decides
+what it meant: yes, no, or unclear (`agent/judge.py`, D49). It is shown the
+question's outline, never the call's values. Silence runs nothing, and
+neither does a voice or the switch while the question is still being read;
+an unclear answer is asked about once more, and a second one runs nothing
+either. The exchange belongs to the gate, not to the model: only the tool's
+result reaches it.
 
 **Switching off is an interruption and a hang-up** (rule 4). `Ctrl+Alt+H`
 is the only key, and off means silent as well as deaf: the speaker stops,
@@ -70,9 +72,10 @@ reminder is said asleep as it is said off.
 **What a turn cost is written down** (rule 6) when the model is done with
 it: what the user said and the model answered, the audio minutes both ways,
 the tokens when the provider reports them, priced by the tracker. A turn is
-one utterance and everything the model did until it said it was done - and
-Gemini says so *at* a tool call too, so a `TurnComplete` with a call in it
-or a tool still running is not the end of anything (ADR-001 section 8).
+one utterance and everything the model did until it said it was done: a
+`TurnComplete` while a tool still owes its result is not the end of
+anything. Declared BLOCKING (D46) the tools send none at the call; the
+asynchronous default sent one there (ADR-001 section 8).
 Past the day's or the month's limit every new session opens with a warning,
 and with `hard_stop` on none is opened at all.
 
@@ -101,16 +104,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import re
 import uuid
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
 from loguru import logger
 
-from allie.agent.core import ToolRunner
+from allie.agent.core import Question, ToolRunner
+from allie.agent.judge import Judge
 from allie.agent.prompts import ANNOUNCED_PREFIX
 from allie.announce.queue import Announcement, AnnounceQueue
 from allie.audio.player import LivePlayback, PlaybackError, Speaker
@@ -137,7 +140,6 @@ from allie.live.base import (
     UsageReport,
 )
 from allie.locales import Locale
-from allie.store.normalize import normalize_search
 from allie.stt.base import NO_SPEECH_CEILING, SAMPLE_RATE, Audio, STTProvider, Transcript
 from allie.tts.base import TTSProvider
 from allie.usage.tracker import UsageTracker
@@ -145,24 +147,18 @@ from allie.web.search import Searched
 
 __all__ = [
     "CONFIRM_WINDOW_SECONDS",
-    "FILLERS",
-    "FILLER_DELAY_SECONDS",
     "IDLE_CLOSE_SECONDS",
     "MAX_OPEN_FAILURES",
     "MIN_UTTERANCE_SECONDS",
-    "NO_WORDS",
     "RESUME_MINUTES",
     "TEXT",
-    "YES_WORDS",
     "Answer",
     "Capture",
     "Heard",
     "LiveAssistant",
     "State",
     "Turn",
-    "confirm_words",
     "hear",
-    "read_answer",
 ]
 
 
@@ -191,10 +187,10 @@ class State(StrEnum):
 # after the question has been read; what comes after it is a no.
 CONFIRM_WINDOW_SECONDS = 6.0
 
-# How one confirmation window ended (`LiveAssistant._ask`): a word of the
-# pack's, neither word (worth one more question), nothing heard, or the
-# exchange stopped from outside.
-Answer = Literal["yes", "no", "neither", "unheard", "stopped"]
+# How one confirmation window ended (`LiveAssistant._ask`): the judge's yes
+# or no, an unclear answer (worth one more question), nothing heard or
+# nothing the judge could decide, or the exchange stopped from outside.
+Answer = Literal["yes", "no", "unclear", "unheard", "stopped"]
 
 # Shorter than this and it was a noise rather than a word. Below a syllable,
 # so nothing anybody meant to say is thrown away.
@@ -208,26 +204,6 @@ RESUME_MINUTES = LiveSettings().resume_minutes
 # Rule 1: how many sessions in a row may fail to open before the assistant
 # switches itself off rather than say the same sentence at every onset.
 MAX_OPEN_FAILURES = 3
-
-# The last link of the chain of section 3.12 for the two words the window
-# listens for, as `TEXT` is for the sentences: the pack's `[speech]` table
-# answers first, and a pack that has none gets these.
-YES_WORDS = ("yes", "ok", "okay", "confirm")
-NO_WORDS = ("no", "cancel", "stop")
-
-# The end of the same chain for what is said while a tool takes its time:
-# the pack's `[speech] filler` answers first. Said in turn, so a pack that
-# lists two is not heard saying the same one every time.
-FILLERS = ("One moment, let me check...",)
-
-# How long a tool round may stay silent before the filler is said. A native
-# tool answers in milliseconds and the model's first sound follows within a
-# second of the result (ADR-001 section 3: the model is silent for the whole
-# of a tool call, `NON_BLOCKING` or not); above a second the round is slow
-# for some other reason - a page, the Store, the weather - and that is the
-# silence worth saying something about. Measured 2026-09-10 in the old
-# product: a filler said at 300 ms held a ready answer back for two seconds.
-FILLER_DELAY_SECONDS = 1.0
 
 # What is done at the wake word (D21): the chime, a sentence in the local
 # voice, or nothing. The config validates the word; this is its type.
@@ -243,9 +219,8 @@ TEXT: dict[str, str] = {
     "unreachable": "I could not reach the provider. Will you try again?",
     "key_invalid": "Your API key is not being accepted any more. You need to renew it.",
     "took_too_long": "That took too long. Will you try again?",
-    # Read after the gate's question, so the user knows what kind of answer is
-    # being listened for - and again, alone, when the answer had neither.
-    "confirm_hint": "Say yes or no.",
+    # Asked once when the judge found the answer unclear (D49). The question
+    # itself is asked alone: a hint after it was talked over, unheard.
     "confirm_again": "I did not catch that. Yes, or no?",
     # Said before a session opens once a spending limit is passed - every
     # time, until the day or the month turns; and instead of a session with
@@ -348,17 +323,9 @@ class _Turn:
     # Something is under way: the user spoke, the model owes an answer or is
     # giving it. Cleared once the answer has been heard.
     open: bool = False
-    # A tool was asked for in the server turn under way: its `TurnComplete`
-    # is not the end of the user's turn (ADR-001 section 8).
-    called: bool = False
     # The server stopped the model: nothing after that is written down as said.
     cut: bool = False
     first_sound_ms: float | None = None
-    # Whether the model has made a sound since the last tool call, and the
-    # filler waiting to be said if it does not (once a turn, however many
-    # rounds): dropped the moment the model sounds, or the turn ends.
-    sounded: bool = True
-    filler: asyncio.Task[None] | None = None
     audio_in_ms: int = 0
     audio_out_ms: int = 0
     tool_calls: int = 0
@@ -417,9 +384,6 @@ class Capture(Protocol):
 
     def wake(self) -> None: ...
 
-    @property
-    def taking(self) -> bool: ...
-
     def start(self) -> None: ...
 
     def stop(self) -> None: ...
@@ -471,13 +435,13 @@ class LiveAssistant:
         tool_runner: ToolRunner,
         tts: TTSProvider,
         stt: STTProvider,
+        judge: Judge,
         speaker: Speaker,
         locale: Locale,
         tracker: UsageTracker | None = None,
         announcements: AnnounceQueue | None = None,
         idle_close_seconds: float = IDLE_CLOSE_SECONDS,
         resume_minutes: float = RESUME_MINUTES,
-        filler_delay: float = FILLER_DELAY_SECONDS,
         greeting: Greeting = "chime",
         searched: Searched | None = None,
         on_state: Callable[[State], None] | None = None,
@@ -498,6 +462,8 @@ class LiveAssistant:
         self._runner = tool_runner
         self._tts = tts
         self._stt = stt
+        # What an answer to a gate's question meant (D49).
+        self._judge = judge
         self._speaker = speaker
         self._locale = locale
         self._tracker = tracker
@@ -507,7 +473,6 @@ class LiveAssistant:
         self._announcements = announcements
         self._idle_close = idle_close_seconds
         self._resume_seconds = resume_minutes * 60
-        self._filler_delay = filler_delay
         self._on_state = on_state
         self._on_turn = on_turn
         # The screen's listener for the mode. Told after this file has acted
@@ -516,9 +481,6 @@ class LiveAssistant:
         self._on_session = on_session
 
         self._said = {key: locale.say(key, default) for key, default in TEXT.items()}
-        self._yes, self._no = confirm_words(locale)
-        self._fillers = locale.fillers or FILLERS
-        self._fillers_said = 0
         self._state = State.IDLE
         # The model's voice, queued as it arrives (rule 2).
         self._playback = LivePlayback(speaker)
@@ -539,7 +501,7 @@ class LiveAssistant:
         self._session_open = False
         self._conversation: asyncio.Task[None] | None = None
         # Everything running beside the event loop: the conversation, the
-        # settling of an answer, the filler. Waited for by `settled`.
+        # settling of an answer. Waited for by `settled`.
         self._tasks: set[asyncio.Task[None]] = set()
         self._crash: BaseException | None = None
         self._crashed = asyncio.Event()
@@ -567,11 +529,11 @@ class LiveAssistant:
 
     def fixed_sentences(self) -> list[str]:
         """What the program always says in the same words (D32): the
-        fillers, the hint after a question and the one after an answer with
-        neither word in it, the three failures, the limits, the greeting.
-        The voice keeps these, so that they cost no request and need no
-        network - the failures are said exactly when there is none."""
-        return [*self._fillers, *self._said.values()]
+        question after an unclear answer, the three failures, the limits,
+        the greeting. The voice keeps these, so that they cost no request
+        and need no network - the failures are said exactly when there is
+        none."""
+        return list(self._said.values())
 
     async def begin(self) -> None:
         """Opens the microphone, before anything is said."""
@@ -622,7 +584,7 @@ class LiveAssistant:
 
     async def settled(self) -> None:
         """Returns once nothing is under way beside the loop: no session, no
-        answer still draining, no filler. A task that crashed meanwhile
+        answer still draining. A task that crashed meanwhile
         comes out of here as its exception."""
         while self._tasks:
             await asyncio.wait(set(self._tasks))
@@ -862,8 +824,6 @@ class LiveAssistant:
         match event:
             case AudioChunk(pcm16=pcm16, sample_rate=rate):
                 turn.open = True
-                turn.sounded = True
-                _drop(turn.filler)
                 if turn.first_sound_ms is None and self._quiet_at is not None:
                     turn.first_sound_ms = (_now() - self._quiet_at) * 1000
                 self._start_answer()
@@ -881,9 +841,6 @@ class LiveAssistant:
                 # its own.
                 self._playback.stop()
                 turn.cut = True
-                # A tool call in the server turn just cut no longer owes us
-                # a `TurnComplete` of its own: the next one ends the turn.
-                turn.called = False
                 # The machine rests now rather than when the turn is closed:
                 # the sound is already gone, and a server that went quiet
                 # after `interrupted` must not leave the microphone deaf and
@@ -891,13 +848,7 @@ class LiveAssistant:
                 self._spawn(self._quieten())
             case ToolCallEvent(call=call):
                 turn.open = True
-                turn.called = True
-                turn.sounded = False
                 self._runner.run(call, session, confirm=self.confirm)
-                if turn.filler is None:
-                    # The clock of the filler starts here (D19): the model is
-                    # silent for as long as the tool takes.
-                    turn.filler = self._spawn(self._filler_after(turn))
             case ToolCallCancelled(ids=ids):
                 self._runner.cancel(ids)
             case InputText(text=text):
@@ -908,12 +859,13 @@ class LiveAssistant:
                     turn.said.append(text)
             case TurnComplete():
                 self._playback.flush()
-                if turn.called:
-                    # Gemini ends its turn at the tool call, before the
-                    # result is even sent; the answer comes as a new turn
-                    # (ADR-001 section 8). The user's turn goes on.
-                    turn.called = False
-                else:
+                # The user's turn ends here unless a tool of it still owes
+                # its result (D46). Declared BLOCKING, the tools send no
+                # `TurnComplete` at the call, and the answer's comes with
+                # nothing owed; the asynchronous default ended the server
+                # turn at the call itself (ADR-001 section 8), with the
+                # call owed - and the answer came as a turn of its own.
+                if not self._runner.owed:
                     self._end_turn(session)
             case UsageReport(usage=usage):
                 turn.usage = turn.usage + usage
@@ -991,7 +943,6 @@ class LiveAssistant:
         next turn starts now - what the server sends from here on is the
         next utterance's."""
         finished = self._turn
-        _drop(finished.filler)
         finished.audio_in_ms = session.audio_in_ms - finished.in_at
         finished.audio_out_ms = session.audio_out_ms - finished.out_at
         finished.tool_calls = self._runner.ran
@@ -1044,7 +995,6 @@ class LiveAssistant:
         """The session ended under the turn: what there is of it is written
         down as it stands, and the rest is forgotten."""
         turn = self._turn
-        _drop(turn.filler)
         turn.tool_calls = self._runner.ran
         turn.searched = self._take_searched()
         turn.audio_in_ms = session.audio_in_ms - turn.in_at
@@ -1058,58 +1008,31 @@ class LiveAssistant:
             self._on_turn(turn)
 
     # ----------------------------------------------------------------------
-    # The filler, and the question a tool asks
+    # The question a tool asks
     # ----------------------------------------------------------------------
-
-    async def _filler_after(self, turn: _Turn) -> None:
-        """Says the filler once `filler_delay` has passed with no sound from
-        the model since the tool was called - through the same queue as the
-        model's voice, so that the answer follows it rather than talking
-        over it. Never while a question is being asked: the user is
-        answering it."""
-        await asyncio.sleep(self._filler_delay)
-        if (
-            turn is not self._turn
-            or turn.sounded
-            or self._session is None
-            or self._state in (State.CONFIRMING, State.ANNOUNCING, State.OFF)
-        ):
-            return
-        filler = self._filler()
-        self._start_answer()
-        try:
-            async with contextlib.aclosing(self._tts.stream([filler])) as buffers:
-                async for buffer in buffers:
-                    self._playback.push(buffer, sample_rate=self._tts.sample_rate)
-        finally:
-            # Also when the model's voice cut it short: what was pushed of
-            # it is an answer of its own, and the model's follows.
-            self._playback.flush()
-
-    def _filler(self) -> str:
-        """The next of the pack's fillers, in turn."""
-        chosen = self._fillers[self._fillers_said % len(self._fillers)]
-        self._fillers_said += 1
-        return chosen
 
     async def confirm(self, question: str) -> bool | None:
         """Asks `question` out loud and listens for a yes (section 3.1 rule 2).
 
         The gate's `Confirm`, run inside the tool's own round. `question`
-        already holds the real argument values; what is added is how to
-        answer, since the user cannot know that only two words are being
-        listened for. The model's voice is heard to its end first - it may
-        have said "let me check" before it asked - and the session's input
-        is paused for the whole exchange (D3), so that the yes never reaches
-        the model: only the tool's result does. Nothing runs without a clear
-        yes. `False` is a no the user gave: a no word, a no beside a yes, a
-        voice or the switch while the question is still being read. `None`
-        is an answer nobody heard - silence, a noise, two answers with
-        neither word in them - which the gate tells the model apart from a
-        refusal (2026-09-26). Stopped from outside - the model withdrew the
-        call, or the switch went off - it lets the microphone go on the way
-        out.
+        already holds the real argument values, and is asked alone (D49):
+        the window opens as it ends. The model's voice is heard to its end
+        first - it may have said "let me check" before it asked - and the
+        session's input is paused for the whole exchange (D3), so that the
+        yes never reaches the model: only the tool's result does. What the
+        answer meant is the judge's to say (`agent/judge.py`), shown the
+        question's outline - never the call's values - and the words heard.
+        Nothing runs without a clear yes. `False` is a no the user gave, or
+        a voice or the switch while the question is still being read.
+        `None` is an answer nobody heard or nobody understood - silence, a
+        noise, two unclear answers, a judge that could not decide - which
+        the gate tells the model apart from a refusal (2026-09-26). Stopped
+        from outside - the model withdrew the call, or the switch went off -
+        it lets the microphone go on the way out.
         """
+        # The gate asks with the outline; a plain string has none, and is
+        # shown to the judge as it is.
+        about = question.outline if isinstance(question, Question) else question
         await self._playback.drained()
         self._answered()
         if self._state is State.OFF:
@@ -1119,11 +1042,9 @@ class LiveAssistant:
         self._enter(State.CONFIRMING)
         self._capture.pause()
         try:
-            # Two utterances: the question live, with the real values in it,
-            # and the hint kept on disk (D32).
-            answer = await self._ask(question, self._said["confirm_hint"])
-            if answer == "neither":
-                answer = await self._ask(self._said["confirm_again"])
+            answer = await self._ask(question, about=about)
+            if answer == "unclear":
+                answer = await self._ask(self._said["confirm_again"], about=about)
         finally:
             self._capture.resume()
             self._active()
@@ -1131,22 +1052,24 @@ class LiveAssistant:
                 self._rest()
         if answer == "yes":
             return True
-        if answer in ("unheard", "neither"):
+        if answer in ("unheard", "unclear"):
             return None
         return False
 
-    async def _ask(self, *prompt: str) -> Answer:
-        """Reads `prompt`, opens the window, and reads the answer.
+    async def _ask(self, prompt: str, *, about: str) -> Answer:
+        """Reads `prompt`, opens the window, and has the judge say what the
+        answer meant, asked `about` - the question's outline, the first
+        question's for the second.
 
-        `neither`: something was said with neither word in it, or the
-        recogniser could not read it - worth one more try. `unheard`:
-        silence, or a noise the recogniser calls nothing - not worth one,
-        nobody was there to hear it. `stopped`: the user spoke over the
+        `unclear`: something was said that was neither a yes nor a no, or
+        the recogniser could not read it - worth one more try. `unheard`:
+        silence, a noise the recogniser calls nothing, or a judge that could
+        not decide - not worth one. `stopped`: the user spoke over the
         question, switched the assistant off, or the call was withdrawn.
         Every answer the window gets is one line in the log: three declines
         on 2026-09-25 left no trace of what had been heard.
         """
-        await self._play(prompt)
+        await self._play([prompt])
         if self._withdrawn():
             return "stopped"
 
@@ -1165,13 +1088,17 @@ class LiveAssistant:
 
         heard = await self._heard(pcm)
         if not heard.text:
-            empty: Answer = "neither" if heard.missed else "unheard"
+            empty: Answer = "unclear" if heard.missed else "unheard"
             logger.info("confirm answer: no words -> {answer}", answer=empty)
             return empty
-        verdict = read_answer(heard.text, yes=self._yes, no=self._no)
-        answer: Answer = "yes" if verdict is True else "no" if verdict is False else "neither"
-        logger.info("confirm answer: {text!r} -> {answer}", text=heard.text, answer=answer)
-        return answer
+        verdict = await self._judge.decide(about, heard.text)
+        if verdict is None:
+            # Fail closed (D49): what could not be judged is not a yes, and
+            # asking again would reach the same judge.
+            logger.info("confirm answer: {text!r} -> not judged", text=heard.text)
+            return "unheard"
+        logger.info("confirm answer: {text!r} -> {answer}", text=heard.text, answer=verdict)
+        return verdict
 
     async def _heard(self, pcm: Audio) -> Heard:
         """What the user answered, and what to make of it when they said nothing."""
@@ -1292,8 +1219,8 @@ class LiveAssistant:
                 self._capture.unmute()
 
     def _start_answer(self) -> None:
-        """The model's voice - or the filler in its place - is about to play:
-        deaf for it on a microphone that needs it (D18), and `SPEAKING`."""
+        """The model's voice is about to play: deaf for it on a microphone
+        that needs it (D18), and `SPEAKING`."""
         if not self._answering:
             self._capture.mute()
             self._answering = True
@@ -1369,12 +1296,6 @@ class LiveAssistant:
             self._crashed.set()
 
 
-def _drop(task: asyncio.Task[None] | None) -> None:
-    """Cancels `task`, when there is one still to cancel."""
-    if task is not None and not task.done():
-        task.cancel()
-
-
 def _failure_of(error: ProviderError) -> str:
     """Which of the three sentences a provider's refusal is (rule 7)."""
     if isinstance(error, AuthenticationError):
@@ -1417,51 +1338,6 @@ def hear(transcript: Transcript) -> Heard:
 
     # There was speech, or an engine with no opinion, and no words came of it.
     return Heard(missed=True, confidence=transcript.confidence)
-
-
-# A word, for the purpose of hearing "yes" in an answer: letters and digits in
-# any script. Punctuation and the spaces between are where words end.
-_WORD = re.compile(r"\w+")
-
-
-def confirm_words(locale: Locale) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """The yes and the no words of `locale`, or the English ones written here.
-
-    Resolved in one place: the pack writes them, the window that judges the
-    answer (`read_answer`) reads them. Until D36 the local recogniser was
-    told them as well, and that is what turned a clear "Evet." into
-    "iptal." (measured 2026-09-26); Google is told nothing but the language.
-    """
-    return (tuple(locale.yes_words) or YES_WORDS, tuple(locale.no_words) or NO_WORDS)
-
-
-def read_answer(text: str, *, yes: Iterable[str], no: Iterable[str]) -> bool | None:
-    """Whether `text` says yes, says no, or says neither.
-
-    Whole words, folded the way search is (`store/normalize.py`): "Evet." and
-    "EVET" are the same word, and "evetlemedim" is not it. A `no` word
-    anywhere wins over a `yes` word - "yes, but no" is a no - because the
-    window only ever guards something that should not happen by mistake.
-    `None` means neither was heard, and is the caller's cue to ask once more.
-    """
-    said = _spaced(text)
-    if any(phrase in said for phrase in _phrases(no)):
-        return False
-    if any(phrase in said for phrase in _phrases(yes)):
-        return True
-    return None
-
-
-def _phrases(words: Iterable[str]) -> list[str]:
-    """Each entry as it would appear inside `_spaced` text; blanks dropped."""
-    spaced = (_spaced(word) for word in words)
-    return [phrase for phrase in spaced if phrase.strip()]
-
-
-def _spaced(text: str) -> str:
-    """The words of `text`, folded, one space between and one either side -
-    so that a phrase of one or more words can be found only at word edges."""
-    return f" {' '.join(_WORD.findall(normalize_search(text)))} "
 
 
 async def _one_buffer(pcm16: bytes) -> AsyncIterator[bytes]:

@@ -34,6 +34,7 @@ from allie import __main__ as cli
 from allie import app, locales, logs, setup_wizard
 from allie.__main__ import BUILTIN_TOOLS, TEXT, build_parser, main, use_utf8
 from allie.agent import core
+from allie.agent import judge as judge_module
 from allie.agent.limits import Limits
 from allie.agent.policy import NO_SUCH_TOOL
 from allie.agent.prompts import DOCUMENTS_RULE, SEARCH_RULE, SYSTEM_PROMPT
@@ -262,6 +263,9 @@ class Wiring:
     # Google's recogniser, the one thing that hears the yes or no (D36):
     # what it was built with.
     recognisers: list[dict[str, Any]] = field(default_factory=list)
+    # The small model that says what the heard answer meant (D49): what it
+    # was built with.
+    judges: list[dict[str, Any]] = field(default_factory=list)
     stop: BaseException | None = None
     # The probe of 2.6 at startup: what it was asked, as (provider id,
     # model, question), and what it answers.
@@ -343,8 +347,8 @@ class FakeWakeWord:
 
 @pytest.fixture
 def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
-    """Replaces the speech model, the tool round, the capture and the state
-    machine, and points the database at this test's directory - the real
+    """Replaces the speech model, the judge, the tool round, the capture and
+    the state machine, and points the database at this test's directory - the real
     `open_database` runs, so that the schema is built the way it is built
     in life."""
     seen = Wiring()
@@ -360,6 +364,11 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
         def __init__(self, api_key: str, **rest: Any) -> None:
             seen.happened.append("recogniser")
             seen.recognisers.append({"api_key": api_key, **rest})
+
+    class FakeJudge:
+        def __init__(self, api_key: str, **rest: Any) -> None:
+            seen.happened.append("judge")
+            seen.judges.append({"api_key": api_key, **rest})
 
     async def catalogue_here(**_: Any) -> AppCatalog:
         seen.happened.append("app catalogue")
@@ -407,6 +416,7 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
 
     monkeypatch.setattr(probe, "probe_tool_support", probed)
     monkeypatch.setattr(gemini_stt, "GeminiSTT", FakeGemini)
+    monkeypatch.setattr(judge_module, "GeminiJudge", FakeJudge)
     monkeypatch.setattr(system.AppCatalog, "load", catalogue_here)
     monkeypatch.setattr(capture, "SystemMicrophone", FakeMicrophone)
     monkeypatch.setattr(capture, "LiveCapture", capture_here)
@@ -545,7 +555,7 @@ def test_the_language_that_was_chosen_is_the_one_it_speaks(
     configured: Path, wiring: Wiring
 ) -> None:
     """`config.toml` says `tr`, so the pack the state machine gets says `tr` -
-    the yes and no words, the fillers and the sentences (section 3.12)."""
+    the yes and no words and the sentences (section 3.12)."""
     main(["run", "--terminal"])
 
     assert wiring.built[0]["locale"].code == "tr"
@@ -608,23 +618,19 @@ def test_web_search_reaches_the_session_and_its_rule_the_prompt(
     assert config.system_prompt.index(SEARCH_RULE) > config.system_prompt.index(SYSTEM_PROMPT)
 
 
-def test_the_two_session_switches_reach_the_session(configured: Path, wiring: Wiring) -> None:
-    """The defaults (D25, 2026-09-21): compression on, affective dialog off."""
+def test_compression_reaches_the_session_on_by_default(configured: Path, wiring: Wiring) -> None:
+    """The default (D25, 2026-09-21): compression on."""
     main(["run", "--terminal"])
 
-    config = session_of(wiring)
-    assert (config.affective_dialog, config.compress_context) == (False, True)
+    assert session_of(wiring).compress_context is True
 
 
-def test_the_two_session_switches_can_be_flipped(configured: Path, wiring: Wiring) -> None:
-    configured_with(
-        live=LiveSettings(primary=f"gemini:{MODEL}", affective_dialog=True, compress_context=False)
-    )
+def test_compression_can_be_switched_off(configured: Path, wiring: Wiring) -> None:
+    configured_with(live=LiveSettings(primary=f"gemini:{MODEL}", compress_context=False))
 
     main(["run", "--terminal"])
 
-    config = session_of(wiring)
-    assert (config.affective_dialog, config.compress_context) == (True, False)
+    assert session_of(wiring).compress_context is False
 
 
 def test_the_wake_word_is_built_from_the_wake_table_and_handed_to_the_capture(
@@ -889,10 +895,18 @@ def test_the_speech_model_is_ready_before_the_assistant_is(
     better found out about before anything slow. The probe of 2.6 comes
     next, for the same reason: one session on the network, and worth
     knowing about before the load. Google's recogniser is built once the
-    apps are read, before the state machine that asks it."""
+    apps are read, the judge of what it heard beside it (D49), both before
+    the state machine that asks them."""
     main(["run", "--terminal"])
 
-    assert wiring.happened == ["database", "probe", "app catalogue", "recogniser", "assistant"]
+    assert wiring.happened == [
+        "database",
+        "probe",
+        "app catalogue",
+        "recogniser",
+        "judge",
+        "assistant",
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -908,29 +922,33 @@ def test_every_tool_of_phase_two_is_on_offer(configured: Path, wiring: Wiring) -
         "get_current_time",
         "system_status",
         "get_weather",
+        "briefing",
+        "facts",
+        "news",
         "open_app",
-        "open_url",
+        "close_app",
+        "computer",
+        "power",
+        "files",
+        "open_web",
         "look_up",
-        "search_web",
         "read_clipboard",
         "fetch_page",
         "x_trends",
         "open_documents",
         "ask_documents",
-        "read_latest_emails",
-        "search_emails",
+        "read_emails",
+        "send_email",
         "open_settings",
         "media_control",
         "set_volume",
         "play_music",
         "play_video",
-        "open_media",
-        "add_note",
-        "search_notes",
+        "notes",
         "delete_note",
-        "create_reminder",
-        "list_reminders",
+        "reminders",
         "cancel_reminder",
+        "recall",
         "remember",
         "forget",
         "install_app",
@@ -971,6 +989,18 @@ def test_google_hears_the_yes_or_no_on_the_gemini_key_and_is_told_nothing_else(
 
     assert wiring.recognisers == [{"api_key": "AIza-not-a-real-key"}]
     assert type(wiring.built[-1]["stt"]).__name__ == "FakeGemini"
+
+
+def test_a_small_model_judges_the_answer_on_the_gemini_key(
+    configured: Path, wiring: Wiring
+) -> None:
+    """D49: what the recogniser heard is judged - yes, no or unclear - by a
+    small model of Google's on the same stored key, and the state machine is
+    handed it. No word list."""
+    main(["run", "--terminal"])
+
+    assert wiring.judges == [{"api_key": "AIza-not-a-real-key"}]
+    assert type(wiring.built[-1]["judge"]).__name__ == "FakeJudge"
 
 
 def test_send_message_asks_its_question_in_the_language_of_the_pack(
@@ -1041,13 +1071,14 @@ def test_without_a_gemini_key_the_yes_or_no_cannot_be_heard_and_that_is_one_sent
     assert "gemini" in printed and "allie setup" in printed
     assert wiring.happened == []
     assert wiring.recognisers == []
+    assert wiring.judges == []
 
 
 def test_the_program_s_own_sentences_are_read_in_the_assistant_s_voice(
     configured: Path, wiring: Wiring
 ) -> None:
-    """D32: one voice. The gate's questions, the reminders, the filler and
-    the failures are read by the live model itself - the provider the
+    """D32: one voice. The gate's questions, the reminders and the
+    failures are read by the live model itself - the provider the
     conversation uses, its model, its voice, the pack's language - and the
     ones that never change are kept on this machine."""
     from allie.tts.live_voice import LiveVoice
@@ -1951,7 +1982,7 @@ def test_without_a_mail_table_the_mail_tools_are_on_offer_but_not_set_up(
 
     main(["run", "--terminal"])
 
-    latest = wiring.runners[0].registry.get("read_latest_emails")
+    latest = wiring.runners[0].registry.get("read_emails")
     assert latest is not None
     assert asyncio.run(latest.run()) == NOT_SET_UP
 
@@ -1977,7 +2008,7 @@ def test_with_a_mail_table_and_a_password_the_mailbox_is_the_one_named(
 
     main(["run", "--terminal"])
 
-    latest = wiring.runners[0].registry.get("read_latest_emails")
+    latest = wiring.runners[0].registry.get("read_emails")
     assert latest is not None
     assert asyncio.run(latest.run()) == mail.NO_MAIL
     assert built == [("imap.example.test", 993, "emre@example.test", "app-password", "Archive")]
@@ -2607,3 +2638,26 @@ def test_doctor_on_a_bare_setup_says_what_is_not_there(
         assert unwrapped(said(key)) in out, key
     assert "(henüz oluşmadı)" in out
     assert "speech model" not in out
+
+
+def test_a_finished_turn_is_archived_and_recall_is_offered(
+    configured: Path, wiring: Wiring
+) -> None:
+    rows: list[tuple[str, str, str]] = []
+
+    async def during() -> None:
+        on_turn = wiring.built[0]["on_turn"]
+        on_turn(Turn(heard="Kaş'a gidiyorum", said="İyi tatiller.", turn_id="t1"))
+        on_turn(Turn(heard="Saat kaç?", said="", turn_id="t2", failure="unreachable"))
+        found = wiring.databases[0].execute("SELECT turn_id, heard, said FROM history")
+        rows.extend((str(a), str(b), str(c)) for a, b, c in found)
+
+    wiring.during_run = during
+    main(["run", "--terminal"])
+
+    # The fake's own turn comes first; the failed one is never kept.
+    assert rows == [
+        (TURN.turn_id, TURN.heard, TURN.said),
+        ("t1", "Kaş'a gidiyorum", "İyi tatiller."),
+    ]
+    assert "recall" in wiring.runners[0].tools
