@@ -5,7 +5,9 @@ loop was gone: the prompt is the rules it names and nothing else, it pins
 no language, it carries no clock, and nothing in its module can change
 between two sessions. New with the live product: the line the assistant
 sends after it has read a reminder aloud begins with a prefix the prompt
-itself names, so that the two cannot drift apart.
+itself names, so that the two cannot drift apart. New with the phone
+(D58): a prompt of its own for the written conversation, made of its own
+three rules and the three the voice shares with it.
 """
 
 from __future__ import annotations
@@ -23,9 +25,13 @@ from allie.agent.prompts import (
     LANGUAGE_RULE,
     LIVE_RULES,
     PERSONALITY,
+    REMOTE_PERSONALITY,
+    REMOTE_PROMPT,
+    REMOTE_RULES,
     SEARCH_RULE,
     SYSTEM_PROMPT,
     UNTRUSTED_RULE,
+    WRITTEN,
 )
 
 
@@ -163,3 +169,80 @@ def test_the_search_rule_sends_quick_facts_to_their_tools_first() -> None:
     are `facts`', headlines are `news`'; the rest is `look_up`'s."""
     assert "facts" in SEARCH_RULE and "news" in SEARCH_RULE
     assert "look_up" in SEARCH_RULE
+
+
+# --------------------------------------------------------------------------
+# The phone's prompt (D58)
+# --------------------------------------------------------------------------
+
+
+def test_the_phone_s_prompt_is_its_own_three_rules_and_the_three_it_shares() -> None:
+    """The language, the fallback and what to make of outside words are
+    the voice's, word for word; who the user is now, how an answer looks
+    and what the phone does differently are the phone's own."""
+    rules = (
+        REMOTE_PERSONALITY,
+        WRITTEN,
+        LANGUAGE_RULE,
+        LANGUAGE_FALLBACK,
+        UNTRUSTED_RULE,
+        REMOTE_RULES,
+    )
+
+    assert "\n\n".join(rules) == REMOTE_PROMPT
+
+
+def test_on_the_phone_the_user_is_away_and_writes() -> None:
+    """Nothing is heard and nothing is said aloud: the user writes from
+    their phone, and the assistant acts on the computer for them."""
+    said = REMOTE_PROMPT.casefold()
+
+    assert "phone" in REMOTE_PERSONALITY.casefold()
+    assert "hear" not in said
+    assert "aloud" not in said
+
+
+def test_the_phone_keeps_the_character_of_the_voice() -> None:
+    """D52, in writing: it picks one and says why, never claims to be
+    neutral, and says it is an AI to whoever asks in earnest."""
+    said = REMOTE_PERSONALITY.casefold()
+
+    assert "pick one" in said
+    assert "never say that you are neutral" in said
+    assert "sincerely asks whether you are an ai, say so honestly" in said
+
+
+def test_an_answer_on_the_phone_is_short_plain_text() -> None:
+    """Telegram shows an asterisk and a hash as they are: no markdown."""
+    said = WRITTEN.casefold()
+
+    assert "screen" in said
+    assert "markdown" in said
+    assert "digits" in said
+
+
+def test_on_the_phone_the_questions_are_buttons_the_model_does_not_ask() -> None:
+    """D59: the gate asks with two buttons; a declined or unanswered tool is
+    said and not tried again."""
+    said = REMOTE_RULES.casefold()
+
+    assert "button" in said
+    assert "declined" in said
+    assert "did not answer" in said
+
+
+def test_on_the_phone_a_document_asked_for_is_sent_and_a_question_is_answered() -> None:
+    """D60, the reading the owner confirmed (2026-10-23, "1.doğru"): "send
+    me the file" sends the file itself, and a question about what is inside
+    one is answered from it."""
+    assert "send_document" in REMOTE_RULES
+    assert "ask_documents" in REMOTE_RULES
+
+
+def test_the_phone_s_prompt_carries_no_clock_and_pins_no_language() -> None:
+    """Frozen for the same reasons as the voice's: a digit is a cache that
+    stops hitting, and a language named here beats the rule that mirrors."""
+    said = REMOTE_PROMPT.casefold()
+
+    assert not [character for character in REMOTE_PROMPT if character.isdigit()]
+    assert not [name for name in ("turkish", "türkçe", "english", "german") if name in said]

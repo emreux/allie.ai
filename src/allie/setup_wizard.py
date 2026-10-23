@@ -69,6 +69,12 @@ first, on the Gemini entry - there is no local one to choose since D36
 question either: the assistant does, in its own voice (D32). What setup
 does not ask about in `[live]` it keeps from the file: the session numbers
 are the owner's to tune.
+
+**The phone remote is a row of the list** (plan.md D57). Setting it up takes
+BotFather's token, checked with Telegram before anything is kept, and a
+six-digit code shown here and sent from the phone: its sender becomes the
+one person the bot answers. The token goes to the Credential Manager
+(`telegram-bot`), the rest to `[remote]`; switching off keeps both.
 """
 
 from __future__ import annotations
@@ -111,6 +117,8 @@ from allie.live.registry import (
     load_catalog,
     needs_base_url,
 )
+from allie.remote.bot import BOT_ENTRY, BotApi, BotError
+from allie.remote.pairing import new_code, pair
 from allie.store.db import open_database
 from allie.store.memory import MemoryFileError, UserMemory
 from allie.store.repos import SettingsRepo
@@ -259,6 +267,27 @@ TEXT: dict[str, str] = {
     "voice_style_upbeat": "upbeat",
     "voice_style_warm": "warm",
     "voice_style_youthful": "youthful",
+    # The phone remote's row (plan.md D57): off, or on with the bot's name;
+    # set up with BotFather's token and a code sent from the phone.
+    "setting_telegram": "Telegram: {value}",
+    "telegram_off": "off",
+    "telegram_on": "on · @{bot}",
+    "telegram_action": "Telegram: what should happen?",
+    "telegram_setup": "Set up (a new bot or a new phone)",
+    "telegram_enable": "Switch on",
+    "telegram_disable": "Switch off",
+    "telegram_botfather": (
+        "In Telegram, open @BotFather and send /newbot; then send /setjoingroups, choose your "
+        "bot and Disable, so that nobody can add it to a group. BotFather gives you a token."
+    ),
+    "telegram_token": "Paste the bot's token (nothing is shown as you type)",
+    "telegram_token_refused": "Telegram did not take that token - mistyped, or revoked since.",
+    "telegram_unreachable": "Telegram could not be reached. Check the connection and try again.",
+    "telegram_pair": "From your phone, open @{bot} in Telegram and send it this code: {code}",
+    "telegram_pair_sent": "Press Enter once the code is sent",
+    "telegram_pair_missing": "The code did not reach the bot. Nothing was changed; try again.",
+    # Written to the phone once it is paired.
+    "telegram_paired": "Paired: from now on I answer you here.",
 }
 
 
@@ -536,6 +565,11 @@ class _Setting:
             rows.append(row("api_key", said["key_stored" if stored else "key_missing"]))
         rows.append(row("model", settings.live.model))
         rows.append(row("microphone", self._microphone(settings.audio.input_device)))
+        on = settings.remote.enabled and _paired(settings)
+        telegram = (
+            said["telegram_on"].format(bot=settings.remote.bot) if on else said["telegram_off"]
+        )
+        rows.append(row("telegram", telegram))
         return rows
 
     async def change(self, key: str) -> bool:
@@ -588,6 +622,9 @@ class _Setting:
 
         if key == "provider":
             return await self._provider(settings)
+
+        if key == "telegram":
+            return await self._telegram(settings)
 
         raise ValueError(f"no setting is called {key!r}")
 
@@ -676,6 +713,59 @@ class _Setting:
         ]
         return _answered(await self._prompter.choose("voice", options))
 
+    async def _telegram(self, settings: Settings) -> bool:
+        """The phone remote (D57): set up with a bot and a phone, or switched
+        off and on. Off keeps the token until `purge`; on is offered only
+        with a token and a paired phone; while neither switch applies,
+        setting up is the one thing to do and is not asked about."""
+        said = wording()
+        options = [Option("setup", said["telegram_setup"])]
+        if settings.remote.enabled:
+            options.append(Option("disable", said["telegram_disable"]))
+        elif _paired(settings):
+            options.append(Option("enable", said["telegram_enable"]))
+        action = (
+            _answered(await self._prompter.choose("telegram_action", options))
+            if len(options) > 1
+            else "setup"
+        )
+        if action == "disable":
+            _save(remote={"enabled": False})
+            return True
+        if action == "enable":
+            _save(remote={"enabled": True})
+            return True
+        return await self._pair_phone(said)
+
+    async def _pair_phone(self, said: Mapping[str, str]) -> bool:
+        """BotFather's token, checked with `getMe`, then the code shown here
+        and sent from the phone (`remote/pairing.py`). The token and the
+        phone are kept only once the code has arrived; anything short of
+        that changes nothing."""
+        prompter = self._prompter
+        prompter.say("telegram_botfather")
+        token = _answered(await prompter.secret("telegram_token")).strip()
+        if not token:
+            return False
+        bot = BotApi(token)
+        try:
+            info = await bot.me()
+            code = new_code()
+            prompter.say("telegram_pair", bot=info.username, code=code)
+            _answered(await prompter.ask("telegram_pair_sent"))
+            owner = await pair(bot, code, paired=said["telegram_paired"])
+        except BotError as failure:
+            prompter.say(_telegram_refusal(failure))
+            return False
+        finally:
+            await bot.aclose()
+        if owner is None:
+            prompter.say("telegram_pair_missing")
+            return False
+        store_api_key(BOT_ENTRY, token)
+        _save(remote={"enabled": True, "owner_id": owner, "bot": info.username})
+        return True
+
     def _current(self, settings: Settings) -> Assistant | None:
         """The assistant whose wake phrase the settings name."""
         return next(
@@ -701,6 +791,19 @@ def _voice_words(said: Mapping[str, str], entry: ProviderEntry, name: str) -> st
         return name
     sounds = said.get(f"voice_style_{voice.style}", voice.style)
     return said["voice_option"].format(name=name, style=sounds)
+
+
+def _paired(settings: Settings) -> bool:
+    """Whether a phone was paired with a bot whose token is still stored."""
+    return settings.remote.owner_id != 0 and load_api_key(BOT_ENTRY) is not None
+
+
+def _telegram_refusal(failure: BotError) -> str:
+    """What is said when Telegram would not take the token, or could not be
+    asked at all."""
+    return (
+        "telegram_token_refused" if failure.kind in ("token", "refused") else "telegram_unreachable"
+    )
 
 
 def _save(**changes: Mapping[str, object]) -> Path:

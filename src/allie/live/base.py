@@ -113,11 +113,19 @@ class ToolCall:
     the beginning of. The id is what the result is matched to on the way
     back; the name travels with it because Gemini matches by name and
     refuses a result without one.
+
+    `signature` came back on 2026-10-23 with the phone's text path (plan.md
+    D58): Gemini 3 signs every function call of a text request with an
+    opaque *thought signature* that must travel back with the call when it
+    is resent as history, or the next request is refused (measured
+    2026-09-09). Only the text adapter (`text/gemini.py`) sets and reads it;
+    a live session never does.
     """
 
     id: str
     name: str
     arguments: Mapping[str, Any]
+    signature: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)

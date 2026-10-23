@@ -32,14 +32,17 @@ from loguru import logger
 
 from allie import __main__ as cli
 from allie import app, locales, logs, setup_wizard
-from allie.__main__ import BUILTIN_TOOLS, TEXT, build_parser, main, use_utf8
+from allie.__main__ import BUILTIN_TOOLS, PHONE_TOOLS, TEXT, build_parser, main, use_utf8
 from allie.agent import core
+from allie.agent import text as text_agent
 from allie.agent.limits import Limits
 from allie.agent.policy import NO_SUCH_TOOL
-from allie.agent.prompts import DOCUMENTS_RULE, SEARCH_RULE, SYSTEM_PROMPT
+from allie.agent.prompts import DOCUMENTS_RULE, REMOTE_PROMPT, SEARCH_RULE, SYSTEM_PROMPT
 from allie.app import State, Turn
 from allie.audio import capture
 from allie.audio import wake as wake_module
+from allie.computer import awake
+from allie.computer.awake import REASON
 from allie.config import (
     KEYRING_SERVICE,
     AudioSettings,
@@ -48,6 +51,7 @@ from allie.config import (
     LiveSettings,
     LocaleSettings,
     MessagingSettings,
+    RemoteSettings,
     RetentionSettings,
     Settings,
     WakeSettings,
@@ -62,10 +66,16 @@ from allie.live import probe
 from allie.live.base import ProviderError, SessionConfig, ToolCall, Usage
 from allie.live.probe import ProbeResult, remember, remembered
 from allie.messaging.contacts import CONTACTS_FILE_NAME
+from allie.remote import bot as bot_module
+from allie.remote import channel as channel_module
+from allie.remote.bot import BOT_ENTRY
+from allie.remote.questions import ButtonQuestion
 from allie.store import db
 from allie.store.memory import MEMORY_FILE_NAME
 from allie.store.repos import AuditRepo, SettingsRepo, UsageRepo
 from allie.store.retention import SECONDS_PER_DAY
+from allie.text import gemini as text_gemini
+from allie.tools import computer as computer_tools
 from allie.tools import system
 from allie.tools.system import AppCatalog, AppEntry
 from allie.ui import status
@@ -73,6 +83,7 @@ from allie.usage.tracker import UsageTracker
 from allie.web import search as search_module
 from allie.web.search import Searched
 from tests.conftest import MemoryKeyring
+from tests.test_awake import HANDLE, FakeKernel
 
 MODEL = "gemini-3.8-live"
 TURN = Turn(heard="saat kaç", said="Üç buçuk.", usage=Usage(300, 10))
@@ -2665,3 +2676,292 @@ def test_a_finished_turn_is_archived_and_recall_is_offered(
         ("t1", "Kaş'a gidiyorum", "İyi tatiller."),
     ]
     assert "recall" in wiring.runners[0].tools
+
+
+# --------------------------------------------------------------------------
+# run: the phone remote (D57-D61)
+# --------------------------------------------------------------------------
+
+BOT_TOKEN = "123456:not-a-real-token"  # noqa: S105  # a test's stand-in, not a secret
+OWNER = 987654321
+
+
+@dataclass
+class Phone:
+    """What `run` built for the phone remote, and what the stand-ins saw."""
+
+    kernel: FakeKernel = field(default_factory=FakeKernel)
+    tokens: list[str] = field(default_factory=list)
+    channels: list[Any] = field(default_factory=list)
+    # The channel tells `run` the token was refused, and stops.
+    refuse: bool = False
+
+
+@pytest.fixture
+def phone(monkeypatch: pytest.MonkeyPatch, wiring: Wiring) -> Phone:
+    """Stands in for the bot, the channel, the text agent and Windows' power
+    requests, and keeps the state machine running until the channel has
+    started - it is a task beside it, ended when the state machine ends."""
+    seen = Phone()
+
+    class FakeBotApi:
+        def __init__(self, token: str, **_: Any) -> None:
+            seen.tokens.append(token)
+
+    class FakeChannel:
+        def __init__(self, bot: Any, question: Any, **parts: Any) -> None:
+            self.bot = bot
+            self.question = question
+            self.parts = parts
+            # What the power request had been through when the channel started.
+            self.held_while_running: list[tuple[str, object]] | None = None
+            self.cancelled = False
+            seen.channels.append(self)
+
+        async def run(self) -> None:
+            self.held_while_running = list(seen.kernel.calls)
+            if seen.refuse:
+                self.parts["on_refused"]()
+                return
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    class FakeAgent:
+        def __init__(self, provider: Any, **parts: Any) -> None:
+            self.provider = provider
+            self.parts = parts
+
+    async def until_the_channel_runs() -> None:
+        for _ in range(100):
+            if seen.channels and seen.channels[0].held_while_running is not None:
+                return
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(bot_module, "BotApi", FakeBotApi)
+    monkeypatch.setattr(channel_module, "RemoteChannel", FakeChannel)
+    monkeypatch.setattr(text_agent, "Agent", FakeAgent)
+    monkeypatch.setattr(awake, "WindowsKernel", lambda: seen.kernel)
+    wiring.during_run = until_the_channel_runs
+    return seen
+
+
+def remote_on(**tables: Any) -> None:
+    """`configured`, with the phone remote switched on for `OWNER` and the
+    bot's token stored."""
+    configured_with(remote=RemoteSettings(enabled=True, owner_id=OWNER), **tables)
+    store_api_key(BOT_ENTRY, BOT_TOKEN)
+
+
+def phone_agent(phone: Phone) -> Any:
+    """A conversation as the channel would start one."""
+    [channel] = phone.channels
+    return channel.parts["agent_for"]()
+
+
+def test_with_the_switch_a_token_and_an_owner_the_phone_is_answered_while_awake(
+    configured: Path, wiring: Wiring, phone: Phone
+) -> None:
+    """D57, D61: the channel runs beside the state machine inside a power
+    request, and both end together - the request given back."""
+    remote_on()
+
+    assert main(["run", "--terminal"]) == 0
+
+    assert phone.tokens == [BOT_TOKEN]
+    [channel] = phone.channels
+    assert channel.parts["owner_id"] == OWNER
+    assert channel.held_while_running == [("create", REASON), ("set", HANDLE)]
+    assert channel.cancelled
+    assert phone.kernel.calls[2:] == [("clear", HANDLE), ("close", HANDLE)]
+
+
+@pytest.mark.parametrize(
+    ("enabled", "owner", "token"),
+    [(False, OWNER, BOT_TOKEN), (True, 0, BOT_TOKEN), (True, OWNER, None)],
+    ids=["switched off", "nobody paired", "no token"],
+)
+def test_without_the_switch_an_owner_and_a_token_no_bot_is_built(
+    configured: Path,
+    wiring: Wiring,
+    phone: Phone,
+    enabled: bool,
+    owner: int,
+    token: str | None,
+) -> None:
+    configured_with(remote=RemoteSettings(enabled=enabled, owner_id=owner))
+    if token is not None:
+        store_api_key(BOT_ENTRY, token)
+
+    assert main(["run", "--terminal"]) == 0
+
+    assert phone.tokens == []
+    assert phone.channels == []
+    assert phone.kernel.calls == []
+
+
+def test_the_phone_is_offered_the_voice_s_tools_without_sleep_and_with_send_document(
+    configured: Path, wiring: Wiring, phone: Phone
+) -> None:
+    """D60: the assistant's own sleep belongs to the room, `send_document`
+    to the phone alone. With a wake word, as on the owner's machine, so that
+    the voice has a `go_to_sleep` to leave out."""
+    remote_on(wake=WakeSettings(enabled=True, model="hey_vesper"))
+
+    main(["run", "--terminal"])
+
+    tools = phone_agent(phone).parts["tools"]
+    voice = [name for name in BUILTIN_TOOLS if name != "go_to_sleep"]
+    assert [spec.name for spec in tools.specs()] == list(PHONE_TOOLS)
+    assert (*voice, "send_document") == PHONE_TOOLS
+    assert wiring.runners[0].tools == list(BUILTIN_TOOLS)
+
+
+def test_each_side_s_gate_runs_only_its_own_tools(
+    configured: Path, wiring: Wiring, phone: Phone
+) -> None:
+    """Two registries, one gate function (D60): what the phone was not
+    offered does not exist there, and the voice cannot send a document."""
+    remote_on(wake=WakeSettings(enabled=True, model="hey_vesper"))
+
+    main(["run", "--terminal"])
+
+    phone_gate = phone_agent(phone).parts["dispatch"]
+    sleep = ToolCall(id="c1", name="go_to_sleep", arguments={})
+    send = ToolCall(id="c2", name="send_document", arguments={"folder": "Ali", "file": "x"})
+    [runner] = wiring.runners
+    phone_said = asyncio.run(phone_gate(sleep, turn_id="t1", confirm=nobody_asked))
+    voice_said = asyncio.run(runner.dispatch(send, turn_id="t2", confirm=nobody_asked))
+    assert phone_said == NO_SUCH_TOOL.format(name="go_to_sleep")
+    assert voice_said == NO_SUCH_TOOL.format(name="send_document")
+
+
+def test_what_send_document_queues_is_what_the_channel_sends(
+    configured: Path, wiring: Wiring, phone: Phone, tmp_path: Path
+) -> None:
+    folder = tmp_path / "data" / "documents" / "Ali Yılmaz"
+    folder.mkdir(parents=True)
+    (folder / "fatura.pdf").write_bytes(b"%PDF-1.7")
+    remote_on()
+
+    main(["run", "--terminal"])
+
+    send = phone_agent(phone).parts["tools"].get("send_document")
+    asyncio.run(send.run(folder="Ali Yılmaz", file="fatura"))
+    assert phone.channels[0].parts["outgoing"].drain() == [folder / "fatura.pdf"]
+
+
+def test_the_phone_s_power_says_the_phone_is_cut_off_and_the_voice_s_does_not(
+    configured: Path, wiring: Wiring, phone: Phone
+) -> None:
+    """D60 (the owner, 2026-10-23: "2. eklensin"), in the pack's words."""
+    remote_on()
+
+    main(["run", "--terminal"])
+
+    pack = locales.load("tr")
+    cut = pack.say("remote_cut_off", computer_tools.TEXT["remote_cut_off"])
+
+    def asked(action: str) -> str:
+        key = f"power_{action}_confirm"
+        return pack.say(key, computer_tools.TEXT[key])
+
+    phone_power = phone_agent(phone).parts["tools"].get("power").said_as["action"]
+    voice_power = wiring.runners[0].registry.get("power").said_as["action"]
+    assert phone_power["sleep"] == f"{asked('sleep')} {cut}"
+    assert phone_power["restart"] == f"{asked('restart')} {cut}"
+    assert phone_power["lock"] == asked("lock")
+    assert voice_power == {action: asked(action) for action in computer_tools.POWER_ACTIONS}
+
+
+def test_the_phone_is_told_the_written_rules_with_the_voice_s_additions(
+    configured: Path, wiring: Wiring, phone: Phone, tmp_path: Path
+) -> None:
+    """D58: the written prompt in place of the spoken one, followed by what
+    follows the spoken one - the pack's language, the search rule, the
+    folders, the user's facts, the time - read again for every message."""
+    (tmp_path / "data" / "documents" / "Ali Yılmaz").mkdir(parents=True)
+    remote_on()
+
+    main(["run", "--terminal"])
+
+    agent = phone_agent(phone)
+    prompt = agent.parts["system_prompt"]()
+    language = locales.load("tr").user_language_rule
+    folders = DOCUMENTS_RULE.format(folders='"Ali Yılmaz"')
+    assert prompt.startswith(f"{REMOTE_PROMPT}\n\n{language}\n\n{SEARCH_RULE}\n\n{folders}\n\n")
+    assert SYSTEM_PROMPT not in prompt
+    assert session_of(wiring).system_prompt.startswith(SYSTEM_PROMPT)
+    assert agent.parts["model"] == "gemini-3.5-flash-lite"
+
+
+def test_the_phone_s_model_is_told_to_think_minimally(
+    configured: Path, wiring: Wiring, phone: Phone, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The desk of 2026-10-23: told MINIMAL, Flash-Lite was as right and a
+    little quicker (a median 1.2 s a request against 1.5 s). One model for
+    every conversation of the run."""
+    built: list[dict[str, Any]] = []
+
+    class Recording:
+        def __init__(self, api_key: str, **options: Any) -> None:
+            built.append(options)
+
+    monkeypatch.setattr(text_gemini, "GeminiAdapter", Recording)
+    remote_on()
+
+    main(["run", "--terminal"])
+
+    assert built == [{"thinking_level": "MINIMAL"}]
+
+
+def test_the_channel_has_the_table_s_numbers_and_the_pack_s_words(
+    configured: Path, wiring: Wiring, phone: Phone
+) -> None:
+    configured_with(
+        remote=RemoteSettings(enabled=True, owner_id=OWNER, stale_minutes=5, fresh_minutes=20)
+    )
+    store_api_key(BOT_ENTRY, BOT_TOKEN)
+
+    main(["run", "--terminal"])
+
+    [channel] = phone.channels
+    assert (channel.parts["stale_minutes"], channel.parts["fresh_minutes"]) == (5, 20)
+    assert channel.parts["wording"]["remote_done"] == "Tamam."
+    assert isinstance(channel.question, ButtonQuestion)
+
+
+def test_a_refused_token_is_said_on_the_screen_and_the_voice_runs_on(
+    configured: Path, wiring: Wiring, phone: Phone, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The channel has stopped (its ERROR line is its own); the computer is
+    no longer kept awake for a phone that cannot reach it."""
+    phone.refuse = True
+    remote_on()
+
+    assert main(["run", "--terminal"]) == 0
+
+    assert "assistant" in wiring.happened
+    assert said("remote_token_refused") in unwrapped(capsys.readouterr().out)
+    assert phone.kernel.calls == [
+        ("create", REASON),
+        ("set", HANDLE),
+        ("clear", HANDLE),
+        ("close", HANDLE),
+    ]
+
+
+def test_purge_deletes_the_bot_s_token(
+    recorded: Recorded, vault: MemoryKeyring, terminal: type[ScriptedTerminal]
+) -> None:
+    store_api_key(BOT_ENTRY, BOT_TOKEN)
+    terminal.answers = {"purge_confirm": "yes"}
+
+    assert main(["purge", "--all"]) == 0
+
+    named = [fields["name"] for key, fields in terminal.said if key == "purge_secret"]
+    assert named == ["gemini", "telegram", "telegram-session", "telegram-bot"]
+    assert vault.vault == {}
+    assert BOT_TOKEN not in str(terminal.said)

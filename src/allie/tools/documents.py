@@ -17,16 +17,25 @@ not fit and what was not read is said after the block, in our own words.
 
 What the tools answer is addressed to the model, in English; the user
 hears the model's own words.
+
+`send_document` is the phone's alone (D60): one of a folder's files, of any
+kind, queued as the answer - the channel sends it when the turn is over,
+with the model's words as its caption. The owner asked for the file itself
+and nothing around it ("dosyanın kendisi gelsin"), so the tool tells the
+model not to describe it. It is `safe`: it only ever reaches the owner's
+own chat.
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Protocol
 
 from allie.documents.folder import Bundle, Folder, FolderError, Listing, Shelf
 from allie.documents.model import Answers, DocumentError
+from allie.remote.bot import MAX_FILE_BYTES
 from allie.tools.registry import Tool, tool
 from allie.tools.untrusted import wrap
 
@@ -39,9 +48,13 @@ __all__ = [
     "LEFT_OUT",
     "NOT_READ",
     "NO_QUESTION",
+    "QUEUED",
     "SUBFOLDERS",
+    "TOO_BIG",
+    "Outbox",
     "card",
     "documents_tools_for",
+    "send_document_for",
 ]
 
 NO_QUESTION = "Nothing to ask: the question was empty. Ask the user what they want to know."
@@ -59,12 +72,25 @@ LEFT_OUT = (
     "the user the answer may be missing something."
 )
 FOLDER_GONE = "Folder {name!r} could not be read ({reason})."
+QUEUED = (
+    "{file!r} from folder {folder!r} is queued: it reaches the user's phone as your answer "
+    "when you have finished. Do not describe it, summarise it or say that it is coming."
+)
+TOO_BIG = "{file!r} is over 50 MB, the most Telegram takes, so it cannot be sent. Tell the user."
 
 FOLDER = "The folder's name as the user said it, without any grammatical ending added to it."
 QUESTION = (
     "The question as a full sentence that makes sense on its own and names what it is "
     "about - not 'and the date?'."
 )
+FILE = "The file's name as the folder lists it, with or without its extension."
+
+
+class Outbox(Protocol):
+    """Where `send_document` leaves a file: the phone's answer, sent when the
+    turn is over (`remote/channel.py::Outgoing`)."""
+
+    def add(self, path: Path) -> None: ...
 
 
 def documents_tools_for(shelf: Shelf, model: Answers) -> list[Tool]:
@@ -118,6 +144,36 @@ def documents_tools_for(shelf: Shelf, model: Answers) -> list[Tool]:
         return "\n".join((block, *_notes(bundle)))
 
     return [open_documents, ask_documents]
+
+
+def send_document_for(shelf: Shelf, outgoing: Outbox) -> Tool:
+    """`send_document`, bound to the user's root and the turn's outgoing
+    files."""
+
+    @tool(risk="safe")
+    async def send_document(folder: Annotated[str, FOLDER], file: Annotated[str, FILE]) -> str:
+        """Sends one file from one of the user's document folders to the
+        user's phone as your answer. Use it whenever the user asks you to
+        send a document or a file, or the information in one: the file
+        itself is the answer, so do not also read it, summarise it or
+        describe it. A question about something inside a document is
+        ask_documents'. Pass the folder's name as the user said it and the
+        file's name as the folder lists it; a name that is not there is
+        answered with the folder's files. One call per file."""
+        try:
+            found = await asyncio.to_thread(shelf.find, folder)
+            path = await asyncio.to_thread(found.find, file)
+            size = (await asyncio.to_thread(path.stat)).st_size
+        except FolderError as failure:
+            return str(failure)
+        except OSError as failure:
+            return FOLDER_GONE.format(name=folder, reason=type(failure).__name__)
+        if size > MAX_FILE_BYTES:
+            return TOO_BIG.format(file=path.name)
+        outgoing.add(path)
+        return QUEUED.format(file=path.name, folder=found.name)
+
+    return send_document
 
 
 def card(folder: Folder, listing: Listing) -> str:

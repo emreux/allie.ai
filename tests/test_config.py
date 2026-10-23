@@ -31,6 +31,7 @@ from allie.config import (
     LocaleSettings,
     MailSettings,
     MessagingSettings,
+    RemoteSettings,
     Settings,
     TelegramSettings,
     ToolSettings,
@@ -609,3 +610,47 @@ def test_the_archive_is_on_and_keeps_thirty_days_by_default() -> None:
 def test_the_archive_keeps_one_day_to_a_year(days: int) -> None:
     with pytest.raises(ValidationError):
         HistorySettings(days=days)
+
+
+# --------------------------------------------------------------------------
+# [remote]: the phone remote (plan.md D57)
+# --------------------------------------------------------------------------
+
+
+def test_the_phone_remote_is_off_until_it_is_set_up() -> None:
+    """Off, nobody paired; the text model of D58 on the stored Gemini key;
+    five minutes for a button, a new conversation after half an hour, and a
+    message ten minutes old is not acted on."""
+    remote = RemoteSettings()
+
+    assert (remote.enabled, remote.owner_id, remote.bot) == (False, 0, "")
+    assert remote.model == "gemini-3.5-flash-lite"
+    assert (remote.answer_seconds, remote.fresh_minutes, remote.stale_minutes) == (300, 30, 10)
+
+
+def test_the_remote_table_round_trips_and_holds_no_token(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """The bot's token is a secret (`telegram-bot` in the Credential
+    Manager); the table has nowhere to put it."""
+    store_api_key("telegram-bot", "123456:SECRET")
+    remote = RemoteSettings(enabled=True, owner_id=987654321, bot="allie_bot")
+    save_settings(Settings(remote=remote))
+
+    loaded = load_settings().remote
+
+    assert (loaded.enabled, loaded.owner_id, loaded.bot) == (True, 987654321, "allie_bot")
+    assert "SECRET" not in config_path().read_text(encoding="utf-8")
+    assert not any("token" in name or "key" in name for name in RemoteSettings.model_fields)
+
+
+@pytest.mark.parametrize("field", ["answer_seconds", "fresh_minutes", "stale_minutes"])
+def test_the_remote_times_are_more_than_nothing(field: str) -> None:
+    with pytest.raises(ValidationError):
+        RemoteSettings(**{field: 0})
+
+
+def test_an_owner_is_a_person_not_a_group() -> None:
+    """A Telegram user's id is positive; a group's is negative."""
+    with pytest.raises(ValidationError):
+        RemoteSettings(owner_id=-100123)

@@ -15,6 +15,11 @@ D40): `power`'s `confirm_prompt` is `{action}`, and the gate reads `lock` as
 **What would cut the answer off waits for it.** Sleep waits two seconds and
 Wi-Fi three, so that the model can say what it is doing before the machine
 stops listening; shutdown and restart wait thirty, for "stop it".
+
+**On the phone, what cuts the phone off says so** (D60): after sleep, Wi-Fi
+off, a shutdown or a restart nothing reaches the computer from outside
+until somebody at it brings it back, and the phone's `power` asks those four
+questions with `cut_off` after them. Locking leaves it in reach.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from allie.tools.system import AppCatalog
 __all__ = [
     "CLOSE_APP",
     "CLOSE_WAIT_SECONDS",
+    "CUTS_OFF",
     "NOT_OPEN",
     "POWER_ACTIONS",
     "SLEEP_SECONDS",
@@ -63,10 +69,17 @@ TEXT: dict[str, str] = {
         "Once Wi-Fi is off I cannot hear you, and turning it back on is up to you; "
         "shall I turn it off?"
     ),
+    # Said on the phone after the question of each action in `CUTS_OFF`.
+    "remote_cut_off": (
+        "After this you cannot reach me from the phone until somebody at the computer "
+        "brings it back."
+    ),
 }
 
 PowerAction = Literal["lock", "sleep", "shutdown", "restart", "wifi_off"]
 POWER_ACTIONS: tuple[str, ...] = get_args(PowerAction)
+# The actions after which the phone cannot reach the computer (D60).
+CUTS_OFF: tuple[str, ...] = ("sleep", "wifi_off", "shutdown", "restart")
 ComputerAction = Literal[
     "brightness",
     "bluetooth",
@@ -163,6 +176,7 @@ def power_for(
     radios: Radios,
     *,
     questions: Mapping[str, str] | None = None,
+    cut_off: str = "",
     later: Later = _later,
     shutdown_seconds: int = SHUTDOWN_SECONDS,
     sleep_seconds: float = SLEEP_SECONDS,
@@ -170,7 +184,8 @@ def power_for(
 ) -> Tool:
     """`power`, bound to the machine, the radios and the pack's questions
     (`questions` by action; an action it leaves out is asked in `TEXT`'s
-    English)."""
+    English). `cut_off`, the phone's, follows the question of each action
+    in `CUTS_OFF`."""
 
     async def wifi_off() -> None:
         outcome = await radios.set("wifi", False)
@@ -215,6 +230,8 @@ def power_for(
     said = {
         action: given.get(action) or TEXT[f"power_{action}_confirm"] for action in POWER_ACTIONS
     }
+    if cut_off:
+        said.update({action: f"{said[action]} {cut_off}" for action in CUTS_OFF})
     return replace(power, said_as={"action": said})
 
 

@@ -108,6 +108,24 @@ voice_style_soft = "yumuşak"
 voice_style_upbeat = "neşeli"
 voice_style_warm = "sıcak"
 voice_style_youthful = "genç"
+# The phone remote's row (plan.md D57): set up with BotFather's token and a
+# code sent from the phone; {bot} is the bot's username, {code} six digits.
+setting_telegram = "Telegram: {value}"
+telegram_off = "kapalı"
+telegram_on = "açık · @{bot}"
+telegram_action = "Telegram: ne yapılsın?"
+telegram_setup = "Kur (yeni bot ya da yeni telefon)"
+telegram_enable = "Aç"
+telegram_disable = "Kapat"
+telegram_botfather = "Telegram'da @BotFather'ı aç ve /newbot gönder; sonra /setjoingroups gönderip botunu seç ve Disable de, kimse onu bir gruba ekleyemesin. BotFather sana bir anahtar (token) verir."
+telegram_token = "Botun anahtarını yapıştır (yazarken görünmez)"
+telegram_token_refused = "Telegram bu anahtarı kabul etmedi; yanlış yazılmış ya da iptal edilmiş."
+telegram_unreachable = "Telegram'a ulaşılamadı. Bağlantıyı kontrol edip yeniden dene."
+telegram_pair = "Telefonundan Telegram'da @{bot} botunu aç ve şu kodu gönder: {code}"
+telegram_pair_sent = "Kodu gönderince Enter'a bas"
+telegram_pair_missing = "Kod bota ulaşmadı. Hiçbir şey değişmedi; yeniden dene."
+# Written to the phone once it is paired.
+telegram_paired = "Eşleştik: artık sana buradan cevap veririm."
 
 # Spoken out loud rather than shown, so they are short (item 1.10).
 unreachable = "Sağlayıcıya bağlanamadım, tekrar dener misin?"
@@ -153,6 +171,9 @@ power_sleep_confirm = "Bilgisayarı uyku moduna alayım mı?"
 power_shutdown_confirm = "Otuz saniye sonra kapanır; bilgisayarı kapatayım mı?"
 power_restart_confirm = "Otuz saniye sonra yeniden başlar; bilgisayarı yeniden başlatayım mı?"
 power_wifi_off_confirm = "Wi-Fi kapanınca seni duyamam ve geri açmak sende kalır; kapatayım mı?"
+# On the phone (D60), after the question of sleep, Wi-Fi off, shutdown and
+# restart: nothing reaches the computer from the phone after them.
+remote_cut_off = "Bundan sonra bana telefondan ulaşamazsın; biri bilgisayarın başında geri açana kadar."
 # Asked before an open app is closed (D41); {name} is the app as the
 # Start menu names it.
 close_app_confirm = "{name} uygulamasını kapatayım mı?"
@@ -164,6 +185,20 @@ telegram_code = "Telegram'ın az önce Telegram uygulamana gönderdiği kod (SMS
 telegram_password = "Telegram iki adımlı doğrulama şifren (yazarken görünmez)"
 telegram_logged_in = "Telegram'a {name} olarak giriş yapıldı. Oturum Windows Kimlik Bilgisi Yöneticisi'nde."
 telegram_login_failed = "Telegram girişi başarısız: {reason}"
+remote_yes = "Evet"
+remote_no = "Hayır"
+remote_answered_yes = "→ Evet"
+remote_answered_no = "→ Hayır"
+remote_unanswered = "→ Cevap gelmedi, yapmadım."
+remote_question_closed = "Bu soru kapandı."
+remote_stale = "Ben cevap veremezken {count} mesaj gelmiş; hiçbirini yapmadım. Hâlâ istediklerini yeniden yaz."
+remote_done = "Tamam."
+remote_text_only = "Şimdilik yalnız yazılı mesajları okuyabiliyorum."
+remote_rate_limit = "Google'ın sınırına takıldım (dakikada 15, günde 500 istek); biraz sonra yeniden dene."
+remote_unreachable = "Google'a ulaşamadım; birazdan yeniden dene."
+remote_key_refused = "Google anahtarı reddetti; bilgisayarda Ayarlar'dan yenile."
+remote_failed = "Bir şey ters gitti; yeniden dene."
+remote_file_failed = "{file} gönderilemedi."
 duplicate_done = "Bunu {ago} önce zaten yaptın."
 duplicate_uncertain = "Bunu {ago} önce denedin, sonucu belirsiz kaldı."
 seconds_ago = "{count} saniye"
@@ -200,6 +235,8 @@ not_set_up = "Henüz kurulum yapılmamış. Önce 'allie setup' çalıştır."
 cannot_start = "Asistan başlayamıyor: {problem}"
 stopped = "Durduruldu."
 model_no_tools = "Model araç çağıramıyor; asistanın işlerinin çoğu buna bağlı. Başka bir model seçmek için 'allie setup' çalıştır."
+# The phone remote (D57): Telegram refused the bot's token; the voice runs on.
+remote_token_refused = "Telegram bot anahtarını reddetti: Ayarlar'da Telegram yeniden kurulana kadar telefona cevap veremem."
 
 # Shown by `allie cost` (design.md section 6): two small tables, today
 # and this month, one row per model. Amounts are written by the code, as

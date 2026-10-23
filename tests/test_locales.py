@@ -27,6 +27,8 @@ from allie.agent import policy
 from allie.live.probe import QUESTION
 from allie.locales import FALLBACK_CODE, Region, available, iso_code, load, system_code
 from allie.messaging import telegram
+from allie.remote import channel as remote_channel
+from allie.remote import questions as remote_questions
 from allie.scheduler import runner as scheduler
 from allie.tools import computer as computer_tools
 from allie.tools import mail as mail_tools
@@ -67,6 +69,8 @@ TABLES = {
     "tools.reminders": reminder_tools.TEXT,
     "scheduler.runner": scheduler.TEXT,
     "messaging.telegram": telegram.TEXT,
+    "remote.questions": remote_questions.TEXT,
+    "remote.channel": remote_channel.TEXT,
 }
 SENTENCES = {key: text for table in TABLES.values() for key, text in table.items()}
 

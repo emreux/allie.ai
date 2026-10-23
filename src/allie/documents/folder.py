@@ -43,12 +43,15 @@ __all__ = [
     "MAX_PDF_BYTES",
     "MAX_TOTAL_CHARS",
     "NOT_A_DOCUMENT",
+    "NO_FILE",
+    "NO_FILES",
     "NO_FOLDER",
     "NO_FOLDERS_YET",
     "NO_NAME",
     "NO_ROOT",
     "OLD_KINDS",
     "PDF_MIME",
+    "TWO_FILES",
     "TWO_FOLDERS",
     "UNREADABLE",
     "Bundle",
@@ -107,6 +110,20 @@ NO_FOLDER = (
 )
 TWO_FOLDERS = (
     "Two folders answer to {name!r}: {names}. Neither is read until the user renames one of them."
+)
+# A file is looked for among the user's own folder's files, so a miss names
+# them: the model may pick one or ask (spec of 2026-10-23 section 4). At the
+# desk (2026-10-23) "the invoice file" in a folder with one invoice was asked
+# about rather than sent; the owner wants the file when the choice is plain.
+NO_FILE = (
+    "Folder {folder!r} has no file named {name!r}. It holds: {names}. When one of them is "
+    "plainly the one the user asked for, call send_document again with its name and do not "
+    "ask; ask only when it could be several."
+)
+NO_FILES = "Folder {folder!r} holds no files."
+TWO_FILES = (
+    "Several files in folder {folder!r} answer to {name!r}: {names}. Call again with the full "
+    "name of the one the user means, or ask them."
 )
 
 
@@ -232,6 +249,36 @@ class Folder:
                 chars += len(readable.text)
             files.append(readable)
         return Bundle(tuple(files), tuple(left_out), tuple(not_read))
+
+    def find(self, spoken: str) -> Path:
+        """The one file at the top of this folder that `spoken` names, of any
+        kind - it is sent, not read (D60): its folded name first, then its
+        folded name without the extension, then the files whose name holds
+        the name said without its extension - "fatura.pdf" is the folder's
+        one "Fatura_2026-10.pdf" (the desk of 2026-10-23: told the files, the
+        model asked the owner instead of sending it). Raises `FolderError`."""
+        said = " ".join(spoken.split())
+        files = [
+            entry
+            for entry in sorted(self.path.iterdir(), key=_order)
+            if not _ignored(entry.name) and entry.is_file()
+        ]
+        if not files:
+            raise FolderError(NO_FILES.format(folder=self.name))
+        wanted = _key(said)
+        matches = [entry for entry in files if _key(entry.name) == wanted] or [
+            entry for entry in files if _key(entry.stem) == wanted
+        ]
+        part = _key(Path(said).stem)
+        if not matches and part:
+            matches = [entry for entry in files if part in _key(entry.stem)]
+        if not matches:
+            names = ", ".join(entry.name for entry in files)
+            raise FolderError(NO_FILE.format(folder=self.name, name=said, names=names))
+        if len(matches) > 1:
+            names = ", ".join(entry.name for entry in matches)
+            raise FolderError(TWO_FILES.format(folder=self.name, name=said, names=names))
+        return matches[0]
 
 
 class Shelf:

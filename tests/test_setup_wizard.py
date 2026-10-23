@@ -56,6 +56,7 @@ from allie.config import (
     AudioSettings,
     LiveSettings,
     LocaleSettings,
+    RemoteSettings,
     Settings,
     WakeSettings,
     config_path,
@@ -76,6 +77,7 @@ from allie.live.base import (
 )
 from allie.live.probe import NO_TOOL_CALL, QUESTION, ProbeResult, remembered
 from allie.live.registry import ADAPTERS, ProviderEntry, Voice, load_catalog
+from allie.remote.bot import BOT_ENTRY, Batch, BotError, BotInfo, Incoming
 from allie.setup_wizard import (
     TEXT,
     Option,
@@ -1242,6 +1244,7 @@ async def test_the_list_shows_every_setting_as_it_stands(
         "api_key",
         "model",
         "microphone",
+        "telegram",
     ]
     stored = locales.load("tr").say("key_stored", TEXT["key_stored"])
     assert prompter.labelled["settings"][:4] == [
@@ -1820,3 +1823,208 @@ async def test_walking_away_from_the_window_s_page_is_the_wizard_s_cancel(
     assert exit_code == 1
     assert not config_path().is_file()
     assert vault.vault == {}
+
+
+# --------------------------------------------------------------------------
+# The Telegram row (plan.md D57): the phone remote, set up and switched
+# --------------------------------------------------------------------------
+
+GOOD_TOKEN = "123456:good-token"  # noqa: S105  # a test's stand-in, not a secret
+BAD_TOKEN = "123456:revoked"  # noqa: S105  # a test's stand-in, not a secret
+OFFLINE_TOKEN = "123456:offline"  # noqa: S105  # a test's stand-in, not a secret
+CODE = "482913"
+OWNER = 987654321
+
+
+class FakeTelegram:
+    """Stands in for `BotApi`: `getMe` answers for the good token, and what
+    is waiting for the bot is what the phone sent (`waiting`)."""
+
+    built: ClassVar[list[FakeTelegram]] = []
+    waiting: ClassVar[list[Incoming]] = []
+
+    def __init__(self, token: str, **_: object) -> None:
+        self.token = token
+        self.sent: list[tuple[int, str]] = []
+        self.confirmed: list[int] = []
+        self.closed = False
+        FakeTelegram.built.append(self)
+
+    async def me(self) -> BotInfo:
+        if self.token == BAD_TOKEN:
+            raise BotError("token", status=401)
+        if self.token == OFFLINE_TOKEN:
+            raise BotError("unreachable")
+        return BotInfo(id=1, username="allie_test_bot")
+
+    async def updates(self, offset: int | None, *, wait: int = 50) -> Batch:
+        if offset is not None:
+            self.confirmed.append(offset)
+            return Batch((), None)
+        waiting = tuple(FakeTelegram.waiting)
+        return Batch(waiting, max(update.update_id for update in waiting) + 1 if waiting else None)
+
+    async def send(self, chat: int, text: str, *, buttons: object = ()) -> int:
+        self.sent.append((chat, text))
+        return 1
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def telegram(monkeypatch: pytest.MonkeyPatch) -> type[FakeTelegram]:
+    FakeTelegram.built = []
+    FakeTelegram.waiting = []
+    monkeypatch.setattr("allie.setup_wizard.BotApi", FakeTelegram)
+    monkeypatch.setattr("allie.setup_wizard.new_code", lambda: CODE)
+    return FakeTelegram
+
+
+def from_the_phone(text: str, *, update_id: int = 8) -> Incoming:
+    return Incoming(
+        update_id=update_id, chat_id=OWNER, private=True, sender_id=OWNER, text=text, date=0
+    )
+
+
+def paired_before(*, enabled: bool) -> None:
+    """A phone paired with a bot earlier: the token stored, the owner kept."""
+    settings = load_settings()
+    remote = RemoteSettings(enabled=enabled, owner_id=OWNER, bot="allie_bot")
+    save_settings(settings.model_copy(update={"remote": remote}))
+    store_api_key(BOT_ENTRY, GOOD_TOKEN)
+
+
+async def test_the_telegram_row_is_off_until_a_phone_is_paired(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    prompter = settings_list()
+
+    await settings_run(prompter)
+
+    assert prompter.labelled["settings"][-1] == row("telegram", turkish("telegram_off"))
+
+
+async def test_the_telegram_row_names_the_bot_once_on(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    set_up()
+    paired_before(enabled=True)
+    prompter = settings_list()
+
+    await settings_run(prompter)
+
+    on = turkish("telegram_on").format(bot="allie_bot")
+    assert prompter.labelled["settings"][-1] == row("telegram", on)
+
+
+async def test_setting_up_keeps_the_token_and_the_phone_that_sent_the_code(
+    config_home: Path, vault: MemoryKeyring, telegram: type[FakeTelegram]
+) -> None:
+    """D57: BotFather's steps, the token checked with getMe, the code shown,
+    the phone's message read - and only then anything kept. Nothing to choose
+    while there is nothing to switch: Kur is the one thing to do."""
+    set_up()
+    telegram.waiting = [from_the_phone("/start", update_id=7), from_the_phone(CODE)]
+    prompter = settings_list(
+        settings=["telegram"], telegram_token=GOOD_TOKEN, telegram_pair_sent=""
+    )
+
+    await settings_run(prompter)
+
+    remote = load_settings().remote
+    assert (remote.enabled, remote.owner_id, remote.bot) == (True, OWNER, "allie_test_bot")
+    assert vault.vault[(KEYRING_SERVICE, BOT_ENTRY)] == GOOD_TOKEN
+    assert prompter.asked == ["settings", "telegram_token", "telegram_pair_sent", "settings"]
+    assert ("telegram_botfather", {}) in prompter.said
+    assert ("telegram_pair", {"bot": "allie_test_bot", "code": CODE}) in prompter.said
+    [bot] = telegram.built
+    assert bot.confirmed == [9]
+    assert bot.sent == [(OWNER, turkish("telegram_paired"))]
+    assert bot.closed
+    assert GOOD_TOKEN not in str(prompter.said)
+
+
+@pytest.mark.parametrize(
+    ("token", "sentence"),
+    [(BAD_TOKEN, "telegram_token_refused"), (OFFLINE_TOKEN, "telegram_unreachable")],
+)
+async def test_a_token_telegram_will_not_take_is_said_and_nothing_is_kept(
+    config_home: Path,
+    vault: MemoryKeyring,
+    telegram: type[FakeTelegram],
+    token: str,
+    sentence: str,
+) -> None:
+    set_up()
+    prompter = settings_list(settings=["telegram"], telegram_token=token)
+
+    await settings_run(prompter)
+
+    assert (sentence, {}) in prompter.said
+    assert "telegram_pair_sent" not in prompter.asked
+    assert (KEYRING_SERVICE, BOT_ENTRY) not in vault.vault
+    assert load_settings().remote == RemoteSettings()
+    assert telegram.built[0].closed
+
+
+async def test_a_code_that_did_not_arrive_is_said_and_nothing_is_kept(
+    config_home: Path, vault: MemoryKeyring, telegram: type[FakeTelegram]
+) -> None:
+    set_up()
+    telegram.waiting = [from_the_phone("123456")]
+    prompter = settings_list(
+        settings=["telegram"], telegram_token=GOOD_TOKEN, telegram_pair_sent=""
+    )
+
+    await settings_run(prompter)
+
+    assert ("telegram_pair_missing", {}) in prompter.said
+    assert (KEYRING_SERVICE, BOT_ENTRY) not in vault.vault
+    assert load_settings().remote == RemoteSettings()
+    assert telegram.built[0].sent == []
+
+
+async def test_switching_off_keeps_the_token_and_the_phone(
+    config_home: Path, vault: MemoryKeyring, telegram: type[FakeTelegram]
+) -> None:
+    """Off is a switch, not a deletion: the token stays until `purge`."""
+    set_up()
+    paired_before(enabled=True)
+    prompter = settings_list(settings=["telegram"], telegram_action="disable")
+
+    await settings_run(prompter)
+
+    remote = load_settings().remote
+    assert prompter.offered["telegram_action"] == ["setup", "disable"]
+    assert (remote.enabled, remote.owner_id, remote.bot) == (False, OWNER, "allie_bot")
+    assert vault.vault[(KEYRING_SERVICE, BOT_ENTRY)] == GOOD_TOKEN
+    assert telegram.built == []
+
+
+async def test_switching_on_again_is_offered_with_a_token_and_a_phone(
+    config_home: Path, vault: MemoryKeyring, telegram: type[FakeTelegram]
+) -> None:
+    set_up()
+    paired_before(enabled=False)
+    prompter = settings_list(settings=["telegram"], telegram_action="enable")
+
+    await settings_run(prompter)
+
+    assert prompter.offered["telegram_action"] == ["setup", "enable"]
+    assert load_settings().remote.enabled
+    assert telegram.built == []
+
+
+async def test_walking_away_from_the_token_keeps_everything_as_it_was(
+    config_home: Path, vault: MemoryKeyring, telegram: type[FakeTelegram]
+) -> None:
+    set_up()
+    prompter = settings_list(settings=["telegram"], telegram_token=None)
+
+    exit_code = await settings_run(prompter)
+
+    assert exit_code == 0
+    assert load_settings().remote == RemoteSettings()
+    assert telegram.built == []

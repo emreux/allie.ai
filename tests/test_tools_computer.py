@@ -160,6 +160,25 @@ async def test_the_question_is_the_packs_sentence_for_the_action(machine: FakeMa
     assert said == "The computer is locked."
 
 
+async def test_on_the_phone_an_action_that_cuts_it_off_says_so(machine: FakeMachine) -> None:
+    """D60 (the owner, 2026-10-23: "2. eklensin"): after sleep, Wi-Fi off, a
+    shutdown or a restart nothing reaches the computer from the phone until
+    somebody at it brings it back, and the phone's question says so after
+    the action's own. A locked computer is still in reach: its question
+    stays as it is."""
+    cut = "Bundan sonra bana telefondan ulaşamazsın."
+    tool = power_for(machine, FakeRadios(), questions={"sleep": "Uyutayım mı?"}, cut_off=cut)
+
+    _, asked = await gate(tool, action="sleep")
+
+    assert asked == [f"Uyutayım mı? {cut}"]
+    assert tool.said_as is not None
+    questions = tool.said_as["action"]
+    assert questions["lock"] == TEXT["power_lock_confirm"]
+    for action in ("wifi_off", "shutdown", "restart"):
+        assert questions[action] == f"{TEXT[f'power_{action}_confirm']} {cut}"
+
+
 async def test_sleep_waits_for_the_answer_to_be_said(machine: FakeMachine) -> None:
     later = Later()
 

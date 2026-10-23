@@ -82,16 +82,25 @@ if TYPE_CHECKING:
     from allie.audio.capture import LiveCapture
     from allie.live.base import LiveProvider, ToolCall
     from allie.locales import Locale
+    from allie.remote.channel import RemoteChannel
     from allie.store.memory import UserMemory
     from allie.store.repos import AuditRepo, HistoryRepo, ModelUsage, SettingsRepo
     from allie.tools.mail import Mailbox
     from allie.tools.outbox import Outbox
-    from allie.tools.registry import ToolRegistry
+    from allie.tools.registry import Tool, ToolRegistry
     from allie.ui.status import Screen
     from allie.ui.tray import Tray
     from allie.ui.window import Switch
 
-__all__ = ["BUILTIN_TOOLS", "DOCTOR_TEXT", "TEXT", "build_parser", "main", "use_utf8"]
+__all__ = [
+    "BUILTIN_TOOLS",
+    "DOCTOR_TEXT",
+    "PHONE_TOOLS",
+    "TEXT",
+    "build_parser",
+    "main",
+    "use_utf8",
+]
 
 _OK = 0
 _GAVE_UP = 1
@@ -109,6 +118,13 @@ TEXT: dict[str, str] = {
     "model_no_tools": (
         "The model does not call tools, and most of what the assistant does depends on that. "
         "Run 'allie setup' to choose another."
+    ),
+    # The phone remote (D57): Telegram refused the bot's token - revoked or
+    # mistyped. The phone gets no answer until the settings row sets it up
+    # again; the voice runs on.
+    "remote_token_refused": (
+        "Telegram refused the bot's token: the phone gets no answer until Telegram is set "
+        "up again in Settings."
     ),
     # `allie cost` (section 6): two small tables, today and this month,
     # one row per model. The amounts are written by the code as `$0.0004` -
@@ -192,6 +208,23 @@ BUILTIN_TOOLS: tuple[str, ...] = (
     "send_message",
     "go_to_sleep",
 )
+
+# What the phone is offered (D60): the voice's tools in the same order,
+# without the assistant's own sleep - it belongs to the room, and in writing
+# reads like the computer's - and with `send_document`, which only the phone
+# has. `test_cli.py` checks the phone's registry against it, as it checks
+# the voice's against `BUILTIN_TOOLS`.
+PHONE_TOOLS: tuple[str, ...] = (
+    *(name for name in BUILTIN_TOOLS if name != "go_to_sleep"),
+    "send_document",
+)
+
+# How much the phone's text model thinks before it answers (D58). At the
+# desk (2026-10-23) MINIMAL was as right (15 of 15 messages) and a little
+# quicker: a median 1.2 s a request against 1.5 s left to the model, asked
+# in turn. A whole message took 2-4 s - and 13-20 s while Google's free tier
+# was slow, whatever the level.
+PHONE_THINKING = "MINIMAL"
 
 # What `allie doctor` says, line by line. Labels rather than sentences,
 # and every value written by the code: a path, a number, a name. Never a
@@ -773,12 +806,14 @@ def _recorded_files() -> list[Path]:
 
 def _secret_entries() -> list[str]:
     """Every name a secret may be stored under: one per provider in the
-    catalogue, the two of Telegram, and the mail password."""
+    catalogue, the two of Telegram, the mail password and the phone remote's
+    bot token (D57)."""
     from allie.live.registry import load_catalog
     from allie.messaging.telegram import HASH_ENTRY, SESSION_ENTRY
+    from allie.remote.bot import BOT_ENTRY
     from allie.tools.mail import MAIL_ENTRY
 
-    return [*load_catalog(), HASH_ENTRY, SESSION_ENTRY, MAIL_ENTRY]
+    return [*load_catalog(), HASH_ENTRY, SESSION_ENTRY, MAIL_ENTRY, BOT_ENTRY]
 
 
 def _autostart(action: str) -> int:
@@ -1309,166 +1344,160 @@ async def _talk(
         radios = WinRtRadios()
         # The windows on the desktop, by app (D41).
         running = RunningApps(Win32Desktop())
+        # `power`'s question for each action, in the pack's words (D40) -
+        # the voice's, and the phone's, which says after four of them that
+        # the phone is cut off (D60).
+        power_questions = {
+            action: pack.say(
+                f"power_{action}_confirm", computer_tools.TEXT[f"power_{action}_confirm"]
+            )
+            for action in computer_tools.POWER_ACTIONS
+        }
         # The tools on offer, by name, in one place. Every one of them
         # runs through the gate below and nowhere else (section 3.9).
         # `forget` and `install_app` are declared with the questions they
         # ask, in the pack's words.
-        tools = ToolRegistry(
-            [
-                get_current_time,
-                # The machine's own state and the weather (15 Sep 2026):
-                # the two questions about the world that need no
-                # application opened.
-                system_status_for(Win32Machine()),
-                weather_tools.get_weather_for(weather),
-                # The day's start on request (D44): time, weather, unread
-                # mail, three headlines, today's reminders - never scheduled.
-                briefing_for(
-                    weather=weather,
-                    facts=facts_service,
-                    reminders=reminders,
-                    open_mailbox=mailbox,
+        builtin: list[Tool] = [
+            get_current_time,
+            # The machine's own state and the weather (15 Sep 2026):
+            # the two questions about the world that need no
+            # application opened.
+            system_status_for(Win32Machine()),
+            weather_tools.get_weather_for(weather),
+            # The day's start on request (D44): time, weather, unread
+            # mail, three headlines, today's reminders - never scheduled.
+            briefing_for(
+                weather=weather,
+                facts=facts_service,
+                reminders=reminders,
+                open_mailbox=mailbox,
+            ),
+            # Quick facts and headlines from keyless services (D39), so
+            # that look_up's searches go where nothing else answers.
+            facts_for(facts_service),
+            news_for(facts_service),
+            # The catalogue answers first, the player second and the
+            # Store last, so an installed application always wins
+            # its own name.
+            open_app_for(
+                catalog,
+                media=player.open_named,
+                store=store,
+                unknown_publisher=pack.say(
+                    "unknown_publisher", system_tools.TEXT["unknown_publisher"]
                 ),
-                # Quick facts and headlines from keyless services (D39), so
-                # that look_up's searches go where nothing else answers.
-                facts_for(facts_service),
-                news_for(facts_service),
-                # The catalogue answers first, the player second and the
-                # Store last, so an installed application always wins
-                # its own name.
-                open_app_for(
-                    catalog,
-                    media=player.open_named,
-                    store=store,
-                    unknown_publisher=pack.say(
-                        "unknown_publisher", system_tools.TEXT["unknown_publisher"]
-                    ),
-                    running=running,
+                running=running,
+            ),
+            # An open app, closed the way its close box does, after a
+            # question that names it as the catalogue does (D41).
+            computer_tools.close_app_for(
+                running,
+                catalog,
+                confirm_prompt=pack.say(
+                    "close_app_confirm", computer_tools.TEXT["close_app_confirm"]
                 ),
-                # An open app, closed the way its close box does, after a
-                # question that names it as the catalogue does (D41).
-                computer_tools.close_app_for(
-                    running,
-                    catalog,
-                    confirm_prompt=pack.say(
-                        "close_app_confirm", computer_tools.TEXT["close_app_confirm"]
-                    ),
+            ),
+            # The machine's switches, and its power behind a question
+            # in the pack's words for each action (D40).
+            computer_tools.computer_for(
+                Switches(WmiBrightness(), RegistryTheme(), WnfFocusAssist(), radios),
+                machine,
+                running=running,
+            ),
+            computer_tools.power_for(machine, radios, questions=power_questions),
+            # The user's own folders, searched, and a file opened or
+            # shown in its folder (D42); the folders are Windows' own.
+            files_for(known_folders()),
+            # A page or a search, in the user's browser for them to
+            # look at (D38: it was open_url and search_web); the engine
+            # is the user's (`[web] search_url`).
+            open_web_for(settings.web.search_url),
+            # A question is looked up and answered (D29); the browser
+            # opens only when the user asks to see the search.
+            look_up_for(search),
+            # What was copied, and what a page says: both come back
+            # inside the `<untrusted>` block the prompt explains.
+            read_clipboard_for(),
+            fetch_page_for(reader),
+            # What is trending on X, and why (D30).
+            x_trends_for(trends, search),
+            # The user's document folders, answered from by a second
+            # model (D35).
+            *reading_documents,
+            # The user's mail, read and never written, inside the
+            # same block.
+            mail_tools.read_emails_for(mailbox),
+            # Mail from the user's own account, asked, read aloud and
+            # shown first (D43); nobody is added to the address book.
+            outbox_tools.send_email_for(
+                _outbox_of(settings, mail_password),
+                mailbox,
+                own_address=settings.mail.user.strip(),
+                confirm_prompt=pack.say(
+                    "send_email_confirm", outbox_tools.TEXT["send_email_confirm"]
                 ),
-                # The machine's switches, and its power behind a question
-                # in the pack's words for each action (D40).
-                computer_tools.computer_for(
-                    Switches(WmiBrightness(), RegistryTheme(), WnfFocusAssist(), radios),
-                    machine,
-                    running=running,
+            ),
+            open_settings,
+            media_control,
+            # The volume as a number (D24): the keys above step it.
+            set_volume_for(SystemVolume()),
+            play_music_for(player),
+            play_video_for(player),
+            # The user's notes (4.1, 17 Sep 2026): kept as said,
+            # found in any spelling, deleted only after the user has
+            # heard which.
+            notes_tools.notes_for(notes),
+            notes_tools.delete_note_for(
+                notes,
+                confirm_prompt=pack.say(
+                    "note_delete_confirm", notes_tools.TEXT["note_delete_confirm"]
                 ),
-                computer_tools.power_for(
-                    machine,
-                    radios,
-                    questions={
-                        action: pack.say(
-                            f"power_{action}_confirm",
-                            computer_tools.TEXT[f"power_{action}_confirm"],
-                        )
-                        for action in computer_tools.POWER_ACTIONS
-                    },
+            ),
+            # Reminders (4.2): the row here, the saying by the
+            # scheduler below, between turns.
+            reminder_tools.reminders_for(reminders),
+            reminder_tools.cancel_reminder_for(
+                reminders,
+                confirm_prompt=pack.say(
+                    "reminder_cancel_confirm",
+                    reminder_tools.TEXT["reminder_cancel_confirm"],
                 ),
-                # The user's own folders, searched, and a file opened or
-                # shown in its folder (D42); the folders are Windows' own.
-                files_for(known_folders()),
-                # A page or a search, in the user's browser for them to
-                # look at (D38: it was open_url and search_web); the engine
-                # is the user's (`[web] search_url`).
-                open_web_for(settings.web.search_url),
-                # A question is looked up and answered (D29); the browser
-                # opens only when the user asks to see the search.
-                look_up_for(search),
-                # What was copied, and what a page says: both come back
-                # inside the `<untrusted>` block the prompt explains.
-                read_clipboard_for(),
-                fetch_page_for(reader),
-                # What is trending on X, and why (D30).
-                x_trends_for(trends, search),
-                # The user's document folders, answered from by a second
-                # model (D35).
-                *reading_documents,
-                # The user's mail, read and never written, inside the
-                # same block.
-                mail_tools.read_emails_for(mailbox),
-                # Mail from the user's own account, asked, read aloud and
-                # shown first (D43); nobody is added to the address book.
-                outbox_tools.send_email_for(
-                    _outbox_of(settings, mail_password),
-                    mailbox,
-                    own_address=settings.mail.user.strip(),
-                    confirm_prompt=pack.say(
-                        "send_email_confirm", outbox_tools.TEXT["send_email_confirm"]
-                    ),
+            ),
+            # What was said before, found by its words (D45); offered
+            # only while the archive is kept, as far back as it keeps.
+            *([recall_for(history, max_days=settings.history.days)] if history is not None else []),
+            memory_tools.remember_for(memory),
+            memory_tools.forget_for(
+                memory,
+                confirm_prompt=pack.say("forget_confirm", memory_tools.TEXT["forget_confirm"]),
+            ),
+            store_tools.install_app_for(
+                catalog,
+                store,
+                confirm_prompt=pack.say(
+                    "store_install_confirm", store_tools.TEXT["store_install_confirm"]
                 ),
-                open_settings,
-                media_control,
-                # The volume as a number (D24): the keys above step it.
-                set_volume_for(SystemVolume()),
-                play_music_for(player),
-                play_video_for(player),
-                # The user's notes (4.1, 17 Sep 2026): kept as said,
-                # found in any spelling, deleted only after the user has
-                # heard which.
-                notes_tools.notes_for(notes),
-                notes_tools.delete_note_for(
-                    notes,
-                    confirm_prompt=pack.say(
-                        "note_delete_confirm", notes_tools.TEXT["note_delete_confirm"]
-                    ),
+            ),
+            # One tool for both messaging apps; it asks first, in the
+            # pack's words, and hears the contact, the app and the text.
+            messaging_tools.send_message_for(
+                {
+                    "whatsapp": messaging_tools.WhatsAppChannel(whatsapp, book),
+                    "telegram": telegram,
+                },
+                default_app=settings.messaging.default_app,
+                confirm_prompt=pack.say(
+                    "send_message_confirm",
+                    messaging_tools.TEXT["send_message_confirm"],
                 ),
-                # Reminders (4.2): the row here, the saying by the
-                # scheduler below, between turns.
-                reminder_tools.reminders_for(reminders),
-                reminder_tools.cancel_reminder_for(
-                    reminders,
-                    confirm_prompt=pack.say(
-                        "reminder_cancel_confirm",
-                        reminder_tools.TEXT["reminder_cancel_confirm"],
-                    ),
-                ),
-                # What was said before, found by its words (D45); offered
-                # only while the archive is kept, as far back as it keeps.
-                *(
-                    [recall_for(history, max_days=settings.history.days)]
-                    if history is not None
-                    else []
-                ),
-                memory_tools.remember_for(memory),
-                memory_tools.forget_for(
-                    memory,
-                    confirm_prompt=pack.say("forget_confirm", memory_tools.TEXT["forget_confirm"]),
-                ),
-                store_tools.install_app_for(
-                    catalog,
-                    store,
-                    confirm_prompt=pack.say(
-                        "store_install_confirm", store_tools.TEXT["store_install_confirm"]
-                    ),
-                ),
-                # One tool for both messaging apps; it asks first, in the
-                # pack's words, and hears the contact, the app and the text.
-                messaging_tools.send_message_for(
-                    {
-                        "whatsapp": messaging_tools.WhatsAppChannel(whatsapp, book),
-                        "telegram": telegram,
-                    },
-                    default_app=settings.messaging.default_app,
-                    confirm_prompt=pack.say(
-                        "send_message_confirm",
-                        messaging_tools.TEXT["send_message_confirm"],
-                    ),
-                ),
-                # Asleep at the user's word (D50), only with a wake word.
-                *([go_to_sleep_for(bedtime)] if bedtime is not None else []),
-                # The owner's own, from %APPDATA%\allie\tools:
-                # read here, through the same gate, never in the repository.
-                *load_local_tools(),
-            ]
-        )
+            ),
+            # Asleep at the user's word (D50), only with a wake word.
+            *([go_to_sleep_for(bedtime)] if bedtime is not None else []),
+        ]
+        # The owner's own, from %APPDATA%\allie\tools: read here, through
+        # the same gate, never in the repository.
+        local_tools = load_local_tools()
+        tools = ToolRegistry([*builtin, *local_tools])
         # The detector is a tenth of a second, loaded here rather than
         # inside the first block of audio it is asked about - it is the
         # doorman now (D5), asked about every block.
@@ -1489,6 +1518,27 @@ async def _talk(
             show=screen.notice,
         )
         runner = ToolRunner(tools, gate, limits)
+        # The phone remote (D57-D61): Telegram's written messages, answered
+        # beside the voice through a gate of its own - built only when it is
+        # switched on, a bot's token is stored and a phone was paired.
+        phone = _phone_remote(
+            settings,
+            pack,
+            builtin=builtin,
+            local_tools=local_tools,
+            power=computer_tools.power_for(
+                machine,
+                radios,
+                questions=power_questions,
+                cut_off=pack.say("remote_cut_off", computer_tools.TEXT["remote_cut_off"]),
+            ),
+            shelf=shelf,
+            memory=memory,
+            google_key=google_key,
+            audit=AuditRepo(database),
+            limits=limits,
+            screen=screen,
+        )
         # The one announce queue (invariant 5) and the loop that feeds it
         # (invariant 7): the scheduler never sees the model, and the
         # state machine reads the queue only between turns.
@@ -1595,12 +1645,19 @@ async def _talk(
         if own is not None:
             own.start()
         ticking = asyncio.create_task(scheduler.run())
+        # The phone's answers beside the voice's, the computer kept awake
+        # for them (D61); ended with the state machine.
+        answering = asyncio.create_task(_answer_the_phone(phone)) if phone is not None else None
         try:
             await assistant.run()
         finally:
             ticking.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await ticking
+            if answering is not None:
+                answering.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await answering
             if own is not None:
                 own.stop()
     finally:
@@ -1617,12 +1674,15 @@ def _system_prompt(
     memory: UserMemory,
     pack: Locale,
     *,
+    base: str | None = None,
     web_search: bool = False,
     folders: Sequence[str] = (),
 ) -> str:
     """What the model is told at every session open (plan.md 4.5).
 
-    The frozen rules first, byte for byte; then the pack's sentence naming
+    The frozen rules first, byte for byte - the voice's `SYSTEM_PROMPT`, or
+    `base` in its place: the phone's `REMOTE_PROMPT` (D58), with the same
+    additions after it; then the pack's sentence naming
     the language the user speaks (D19 - measured 2026-09-18: without it a
     short "Saat kaç" is heard as Hindi), when the pack has one; then, when
     the session carries a search tool (D22) or `look_up` is on offer (D29),
@@ -1636,7 +1696,7 @@ def _system_prompt(
     from allie.agent.prompts import DOCUMENTS_RULE, SEARCH_RULE, SYSTEM_PROMPT
     from allie.tools.reminders import current_time_line
 
-    rules = SYSTEM_PROMPT
+    rules = SYSTEM_PROMPT if base is None else base
     if pack.user_language_rule:
         rules = f"{rules}\n\n{pack.user_language_rule}"
     if web_search:
@@ -1661,6 +1721,112 @@ def _documents_shelf(documents: DocumentSettings) -> Shelf:
     else:
         shelf.root.mkdir(parents=True, exist_ok=True)
     return shelf
+
+
+def _phone_remote(
+    settings: Settings,
+    pack: Locale,
+    *,
+    builtin: Sequence[Tool],
+    local_tools: Sequence[Tool],
+    power: Tool,
+    shelf: Shelf,
+    memory: UserMemory,
+    google_key: str,
+    audit: AuditRepo,
+    limits: Limits,
+    screen: Screen,
+) -> RemoteChannel | None:
+    """The phone remote (D57-D61), or `None` - and no bot at all - unless
+    `[remote]` is switched on, a bot's token is stored and a phone was paired.
+
+    The phone is offered the voice's tools in the same order (D60): its own
+    `power`, whose questions say what cuts the phone off; no assistant's
+    sleep; `send_document`, which queues into the channel's `Outgoing`; then
+    the owner's own. Its gate is a second one from `_gate` - the same
+    `policy.dispatch`, audit table, `[tools]` and limits - with nothing to
+    show on the computer's screen: the question is on the phone, with two
+    buttons (D59). A conversation is a text agent on `[remote] model` (D58),
+    told the written rules with the voice's additions after them, read again
+    for every message.
+    """
+    from allie.agent.prompts import REMOTE_PROMPT
+    from allie.agent.text import Agent
+    from allie.remote import channel as remote_channel
+    from allie.remote import questions as remote_questions
+    from allie.remote.bot import BOT_ENTRY, BotApi
+    from allie.remote.channel import Outgoing, RemoteChannel
+    from allie.remote.questions import ButtonQuestion
+    from allie.text.gemini import GeminiAdapter
+    from allie.tools.documents import send_document_for
+    from allie.tools.registry import ToolRegistry
+
+    remote = settings.remote
+    token = load_api_key(BOT_ENTRY)
+    if not (remote.enabled and remote.owner_id and token):
+        return None
+    outgoing = Outgoing()
+    tools = ToolRegistry(
+        [
+            *(
+                power if tool.spec.name == "power" else tool
+                for tool in builtin
+                if tool.spec.name != "go_to_sleep"
+            ),
+            send_document_for(shelf, outgoing),
+            *local_tools,
+        ]
+    )
+    gate = _gate(settings, tools, audit, limits=limits, pack=pack)
+    reader = GeminiAdapter(google_key, thinking_level=PHONE_THINKING)
+
+    def conversation() -> Agent:
+        return Agent(
+            reader,
+            model=remote.model,
+            system_prompt=lambda: _system_prompt(
+                memory, pack, base=REMOTE_PROMPT, web_search=True, folders=shelf.names()
+            ),
+            tools=tools,
+            dispatch=gate,
+            limits=limits,
+        )
+
+    bot = BotApi(token)
+    question = ButtonQuestion(
+        bot,
+        remote.owner_id,
+        wording={key: pack.say(key, default) for key, default in remote_questions.TEXT.items()},
+        seconds=remote.answer_seconds,
+    )
+    return RemoteChannel(
+        bot,
+        question,
+        owner_id=remote.owner_id,
+        agent_for=conversation,
+        outgoing=outgoing,
+        wording={key: pack.say(key, default) for key, default in remote_channel.TEXT.items()},
+        stale_minutes=remote.stale_minutes,
+        fresh_minutes=remote.fresh_minutes,
+        on_refused=lambda: screen.notice(
+            pack.say("remote_token_refused", TEXT["remote_token_refused"])
+        ),
+    )
+
+
+async def _answer_the_phone(channel: RemoteChannel) -> None:
+    """The phone remote, run inside a power request (D61): the computer
+    stays awake while the phone can reach it, and may sleep once it cannot.
+    A failure is the log's, by its class alone; the voice runs on."""
+    from loguru import logger
+
+    from allie.computer.awake import StayAwake
+
+    try:
+        with StayAwake():
+            await channel.run()
+    except Exception as failure:
+        logger.error("the phone remote stopped: {kind}", kind=type(failure).__name__)
 
 
 def _session_told(

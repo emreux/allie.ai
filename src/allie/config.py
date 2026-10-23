@@ -61,6 +61,7 @@ __all__ = [
     "LocaleSettings",
     "MailSettings",
     "MediaSettings",
+    "RemoteSettings",
     "RetentionSettings",
     "Settings",
     "ToolSettings",
@@ -435,6 +436,45 @@ class TelegramSettings(BaseModel):
     api_id: int = 0
 
 
+class RemoteSettings(BaseModel):
+    """The `[remote]` table (plan.md D57): Allie answering the owner's phone
+    through a Telegram bot.
+
+    `enabled` is the settings row's switch; `owner_id` the Telegram user
+    paired with a code from the phone, the only one answered; `bot` the
+    bot's username, for the row to show. The bot's token is a secret and
+    lives in the Credential Manager under `telegram-bot`, never here. `model`
+    reads the written messages (D58), on the stored Gemini key. A question's
+    buttons wait `answer_seconds`; after `fresh_minutes` without a message
+    the next one starts a new conversation; a message older than
+    `stale_minutes` when it arrives is not acted on.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    owner_id: int = 0
+    bot: str = ""
+    model: str = "gemini-3.5-flash-lite"
+    answer_seconds: float = 300.0
+    fresh_minutes: float = 30.0
+    stale_minutes: float = 10.0
+
+    @field_validator("answer_seconds", "fresh_minutes", "stale_minutes")
+    @classmethod
+    def _must_be_positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError(f"expected more than 0, got {value}")
+        return value
+
+    @field_validator("owner_id")
+    @classmethod
+    def _a_person(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError(f"expected a Telegram user's id, got {value}")
+        return value
+
+
 class MailSettings(BaseModel):
     """The `[mail]` table: the one mailbox `read_emails` reads (section 3.6,
     phase 3.3; 17 Sep 2026).
@@ -568,6 +608,7 @@ class Settings(BaseSettings):
     retention: RetentionSettings = RetentionSettings()
     history: HistorySettings = HistorySettings()
     mail: MailSettings = MailSettings()
+    remote: RemoteSettings = RemoteSettings()
 
     @classmethod
     def settings_customise_sources(
