@@ -410,6 +410,36 @@ async def test_one_knob_alone_is_sent_alone() -> None:
     assert detection.silence_duration_ms is None
 
 
+async def test_client_turns_switch_the_server_s_detector_off() -> None:
+    """D54: the referee marks where the answer starts and ends itself, as
+    the recogniser did; the end-of-speech knobs mean nothing then."""
+    adapter, client = gemini()
+
+    await collect(
+        adapter, SessionConfig(model="m", client_turns=True, end_sensitivity="HIGH", silence_ms=300)
+    )
+
+    realtime = opened(client).realtime_input_config
+    assert realtime is not None
+    detection = realtime.automatic_activity_detection
+    assert detection is not None
+    assert detection.disabled is True
+    assert detection.end_of_speech_sensitivity is None
+    assert detection.silence_duration_ms is None
+
+
+async def test_a_temperature_is_sent_only_when_asked_for() -> None:
+    """D54: the referee asks for 0 - at the server's default it took "hmm"
+    for a yes in three runs of six. Everything else keeps the default."""
+    adapter, client = gemini()
+    await collect(adapter, SessionConfig(model="m"))
+    assert opened(client).temperature is None
+
+    adapter, client = gemini()
+    await collect(adapter, SessionConfig(model="m", temperature=0.0))
+    assert opened(client).temperature == 0.0
+
+
 async def test_a_resumption_handle_is_asked_for_and_given_back() -> None:
     """Asked for on every open, so that handles come; given, the
     conversation continues where the last session left it (plan.md D5)."""
@@ -580,6 +610,23 @@ async def test_audio_goes_as_pcm_at_the_session_s_rate() -> None:
         assert session.audio_in_ms == 1000
     [(_, kwargs)] = session_of(client).sent
     assert kwargs["audio"].mime_type == "audio/pcm;rate=24000"
+
+
+async def test_an_utterance_goes_between_its_two_marks_in_half_second_chunks() -> None:
+    """D54: speech starts, the audio, speech ends - the end is what makes
+    the server answer when its own detector is off (the recogniser's
+    finding of 2026-09-14). Counted like any audio sent."""
+    adapter, client = gemini()
+
+    async with adapter.connect(SessionConfig(model="m", client_turns=True)) as session:
+        await session.send_utterance(bytes(38_400))  # 1.2 s at 16 kHz
+        assert session.audio_in_ms == 1200
+    sent = session_of(client).sent
+    assert [method for method, _ in sent] == ["send_realtime_input"] * 5
+    assert sent[0][1] == {"activity_start": types.ActivityStart()}
+    assert [len(kwargs["audio"].data) for _, kwargs in sent[1:4]] == [16_000, 16_000, 6_400]
+    assert {kwargs["audio"].mime_type for _, kwargs in sent[1:4]} == {INPUT_MIME}
+    assert sent[4][1] == {"activity_end": types.ActivityEnd()}
 
 
 async def test_a_text_turn_goes_as_client_content() -> None:

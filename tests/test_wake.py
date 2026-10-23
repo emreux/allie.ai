@@ -14,12 +14,15 @@ from allie.audio import wake as module
 from allie.audio.wake import (
     CHIME_RATE,
     DEBOUNCE_SECONDS,
+    FALLING_NOTES,
     HOP_SECONDS,
     WINDOW_SECONDS,
     BatchedModel,
+    Bedtime,
     LiveKitWakeWord,
     WakeModelMissingError,
     chime,
+    falling_chime,
     wake_model_path,
 )
 from allie.stt.base import SAMPLE_RATE, Audio
@@ -213,6 +216,33 @@ def test_the_chime_is_two_short_notes_at_the_speaker_s_rate() -> None:
     peak = float(np.abs(samples).max()) / 32767
     assert 0.15 <= peak <= 0.4  # around -12 dBFS, not a shock
     assert samples[0] == 0 and samples[-1] == 0  # faded, no click
+
+
+def test_the_falling_chime_is_the_wake_chime_turned_round() -> None:
+    """D50: put to sleep at the user's word, the assistant plays the wake
+    chime's two notes high to low - same notes, length, level and fade."""
+    rising = np.frombuffer(chime(), dtype="<i2")
+    falling = np.frombuffer(falling_chime(), dtype="<i2")
+    half = len(rising) // 2
+
+    assert tuple(reversed(module.CHIME_NOTES)) == FALLING_NOTES
+    assert len(falling) == len(rising)
+    assert np.array_equal(falling[:half], rising[half:])
+    assert np.array_equal(falling[half:], rising[:half])
+    assert falling[0] == 0 and falling[-1] == 0
+
+
+def test_bedtime_calls_whoever_hooked_it() -> None:
+    """D50: the tool asks; the state machine hooked `on_ask` at its start.
+    Asked with nobody hooked, nothing happens."""
+    bedtime = Bedtime()
+    asked: list[bool] = []
+
+    bedtime.ask()
+    bedtime.on_ask = lambda: asked.append(True)
+    bedtime.ask()
+
+    assert asked == [True]
 
 
 def test_the_user_s_own_model_is_found_by_its_path(tmp_path: Path) -> None:

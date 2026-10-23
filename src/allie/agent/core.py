@@ -73,7 +73,7 @@ class Question(str):
     """A gate's question as the user hears it, and its `outline`: the same
     question with every value of the call masked as '…' (plan.md D49).
 
-    The outline is all the judge of the answer is shown (`agent/judge.py`):
+    The outline is all the referee of the answer is shown (`agent/referee.py`):
     the question's own words - "…göndereyim mi?" - and not a word of the
     message, the note or the name in it, any of which could be written to
     sway a model. A plain string where a question is expected has no outline;

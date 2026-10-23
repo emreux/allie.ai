@@ -2,12 +2,12 @@
 
 `setup` is wired to the wizard here rather than driven through it - the wizard
 has its own suite, and a test that opened a real prompt would hang. `run` is
-the same idea one level up: the state machine, the recogniser and the model
+the same idea one level up: the state machine, the referee and the model
 that answers all have their own suites, so what is tested here is that they are
 handed to each other correctly and that starting up fails in words.
 
 **Nothing may touch the hardware.** A test that opened the microphone would
-record the room, and one that built Google's recogniser would reach for the
+record the room, and one that opened a session would reach for the
 network. Both are replaced; everything else is the code that ships.
 
 **A machine that is not set up is not a crash.** No settings, or a key that has
@@ -34,7 +34,6 @@ from allie import __main__ as cli
 from allie import app, locales, logs, setup_wizard
 from allie.__main__ import BUILTIN_TOOLS, TEXT, build_parser, main, use_utf8
 from allie.agent import core
-from allie.agent import judge as judge_module
 from allie.agent.limits import Limits
 from allie.agent.policy import NO_SUCH_TOOL
 from allie.agent.prompts import DOCUMENTS_RULE, SEARCH_RULE, SYSTEM_PROMPT
@@ -67,7 +66,6 @@ from allie.store import db
 from allie.store.memory import MEMORY_FILE_NAME
 from allie.store.repos import AuditRepo, SettingsRepo, UsageRepo
 from allie.store.retention import SECONDS_PER_DAY
-from allie.stt import gemini_stt
 from allie.tools import system
 from allie.tools.system import AppCatalog, AppEntry
 from allie.ui import status
@@ -80,6 +78,8 @@ MODEL = "gemini-3.8-live"
 TURN = Turn(heard="saat kaç", said="Üç buçuk.", usage=Usage(300, 10))
 # What setup wrote down about the model, unless a test says otherwise.
 PASSED = ProbeResult(ok=True, first_token_ms=12.0)
+# What `run` offers without a wake word: everything but sleeping behind one (D50).
+WITHOUT_A_WAKE_WORD = [name for name in BUILTIN_TOOLS if name != "go_to_sleep"]
 
 
 @pytest.fixture(autouse=True)
@@ -260,12 +260,6 @@ class Wiring:
     captures: list[FakeLiveCapture] = field(default_factory=list)
     microphones: list[Any] = field(default_factory=list)
     databases: list[sqlite3.Connection] = field(default_factory=list)
-    # Google's recogniser, the one thing that hears the yes or no (D36):
-    # what it was built with.
-    recognisers: list[dict[str, Any]] = field(default_factory=list)
-    # The small model that says what the heard answer meant (D49): what it
-    # was built with.
-    judges: list[dict[str, Any]] = field(default_factory=list)
     stop: BaseException | None = None
     # The probe of 2.6 at startup: what it was asked, as (provider id,
     # model, question), and what it answers.
@@ -347,7 +341,7 @@ class FakeWakeWord:
 
 @pytest.fixture
 def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
-    """Replaces the speech model, the judge, the tool round, the capture and
+    """Replaces the speech model, the tool round, the capture and
     the state machine, and points the database at this test's directory - the real
     `open_database` runs, so that the schema is built the way it is built
     in life."""
@@ -359,16 +353,6 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
         connection = really_open(path)
         seen.databases.append(connection)
         return connection
-
-    class FakeGemini:
-        def __init__(self, api_key: str, **rest: Any) -> None:
-            seen.happened.append("recogniser")
-            seen.recognisers.append({"api_key": api_key, **rest})
-
-    class FakeJudge:
-        def __init__(self, api_key: str, **rest: Any) -> None:
-            seen.happened.append("judge")
-            seen.judges.append({"api_key": api_key, **rest})
 
     async def catalogue_here(**_: Any) -> AppCatalog:
         seen.happened.append("app catalogue")
@@ -415,8 +399,6 @@ def wiring(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Wiring:
         return seen.verdict
 
     monkeypatch.setattr(probe, "probe_tool_support", probed)
-    monkeypatch.setattr(gemini_stt, "GeminiSTT", FakeGemini)
-    monkeypatch.setattr(judge_module, "GeminiJudge", FakeJudge)
     monkeypatch.setattr(system.AppCatalog, "load", catalogue_here)
     monkeypatch.setattr(capture, "SystemMicrophone", FakeMicrophone)
     monkeypatch.setattr(capture, "LiveCapture", capture_here)
@@ -679,6 +661,36 @@ def test_with_the_wake_word_off_the_capture_has_no_detector(
     assert FakeWakeWord.built == []
 
 
+def test_with_a_wake_word_the_user_can_put_it_to_sleep(configured: Path, wiring: Wiring) -> None:
+    """D50: `go_to_sleep` is offered with a wake word, and the tool and the
+    state machine are handed the same `Bedtime`."""
+    configured_with(wake=WakeSettings(enabled=True, model="hey_vesper"))
+
+    main(["run", "--terminal"])
+
+    [runner] = wiring.runners
+    [parts] = wiring.built
+    bedtime = parts["bedtime"]
+    assert isinstance(bedtime, wake_module.Bedtime)
+    asked: list[bool] = []
+    bedtime.on_ask = lambda: asked.append(True)
+    tool = runner.registry.get("go_to_sleep")
+    assert tool is not None
+    asyncio.run(tool.run())
+    assert asked == [True]
+
+
+def test_without_a_wake_word_there_is_no_sleeping_by_voice(
+    configured: Path, wiring: Wiring
+) -> None:
+    main(["run", "--terminal"])
+
+    [runner] = wiring.runners
+    [parts] = wiring.built
+    assert runner.tools == WITHOUT_A_WAKE_WORD
+    assert parts["bedtime"] is None
+
+
 def test_a_wake_model_that_is_not_there_is_a_sentence(
     configured: Path, wiring: Wiring, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -894,17 +906,15 @@ def test_the_speech_model_is_ready_before_the_assistant_is(
     """The database comes first of all: cheap, and a disk that refuses is
     better found out about before anything slow. The probe of 2.6 comes
     next, for the same reason: one session on the network, and worth
-    knowing about before the load. Google's recogniser is built once the
-    apps are read, the judge of what it heard beside it (D49), both before
-    the state machine that asks them."""
+    knowing about before the load. The state machine comes once the apps
+    are read; the referee beside it opens nothing until a window has an
+    answer (D54)."""
     main(["run", "--terminal"])
 
     assert wiring.happened == [
         "database",
         "probe",
         "app catalogue",
-        "recogniser",
-        "judge",
         "assistant",
     ]
 
@@ -976,31 +986,25 @@ def test_a_tool_file_beside_the_settings_is_on_offer(configured: Path, wiring: W
 
     [runner] = wiring.runners
     assert runner.tools[-1] == "start_my_project"
-    assert runner.tools[:-1] == list(BUILTIN_TOOLS)
+    assert runner.tools[:-1] == WITHOUT_A_WAKE_WORD
 
 
-def test_google_hears_the_yes_or_no_on_the_gemini_key_and_is_told_nothing_else(
+def test_the_live_model_hears_and_judges_the_yes_or_no_from_a_session_of_its_own(
     configured: Path, wiring: Wiring
 ) -> None:
-    """D36: no setting, no engine behind it, no word list - told the
-    pack's yes and no words, the local engine wrote a clear "Evet." as
-    "iptal." (2026-09-26)."""
+    """D54: no recogniser and no judge of their own - the provider the
+    conversation uses, its model and the pack's language, and the state
+    machine is handed it. No setting, no word list."""
+    from allie.agent.referee import LiveReferee
+
     main(["run", "--terminal"])
 
-    assert wiring.recognisers == [{"api_key": "AIza-not-a-real-key"}]
-    assert type(wiring.built[-1]["stt"]).__name__ == "FakeGemini"
-
-
-def test_a_small_model_judges_the_answer_on_the_gemini_key(
-    configured: Path, wiring: Wiring
-) -> None:
-    """D49: what the recogniser heard is judged - yes, no or unclear - by a
-    small model of Google's on the same stored key, and the state machine is
-    handed it. No word list."""
-    main(["run", "--terminal"])
-
-    assert wiring.judges == [{"api_key": "AIza-not-a-real-key"}]
-    assert type(wiring.built[-1]["judge"]).__name__ == "FakeJudge"
+    [parts] = wiring.built
+    referee = parts["referee"]
+    assert isinstance(referee, LiveReferee)
+    assert referee._provider is parts["provider"]
+    assert (referee._model, referee._language_code) == (MODEL, "tr-TR")
+    assert "stt" not in parts and "judge" not in parts
 
 
 def test_send_message_asks_its_question_in_the_language_of_the_pack(
@@ -1031,7 +1035,7 @@ def test_a_contacts_file_that_names_one_person_twice_is_a_sentence_before_anythi
 
     assert main(["run", "--terminal"]) == 1
 
-    assert "recogniser" not in wiring.happened
+    assert "assistant" not in wiring.happened
     out = capsys.readouterr().out
     assert said("cannot_start", "tr").split("{")[0] in out
     assert CONTACTS_FILE_NAME in out
@@ -1070,8 +1074,6 @@ def test_without_a_gemini_key_the_yes_or_no_cannot_be_heard_and_that_is_one_sent
     printed = capsys.readouterr().out
     assert "gemini" in printed and "allie setup" in printed
     assert wiring.happened == []
-    assert wiring.recognisers == []
-    assert wiring.judges == []
 
 
 def test_the_program_s_own_sentences_are_read_in_the_assistant_s_voice(
@@ -1240,7 +1242,7 @@ def test_a_memory_file_that_does_not_parse_is_a_sentence_rather_than_a_traceback
 
     assert main(["run", "--terminal"]) == 1
 
-    assert "recogniser" not in wiring.happened
+    assert "assistant" not in wiring.happened
     assert path.read_text(encoding="utf-8") == "[user]\nfacts = [oops\n"
     assert said("cannot_start", "tr").split("{")[0] in capsys.readouterr().out
 
@@ -2016,7 +2018,10 @@ def test_with_a_mail_table_and_a_password_the_mailbox_is_the_one_named(
 
 def test_the_tools_run_offers_are_the_ones_doctor_counts(configured: Path, wiring: Wiring) -> None:
     """`BUILTIN_TOOLS` is what `doctor` reports without building anything;
-    it has to be the registry `run` builds, in order."""
+    it has to be the registry `run` builds, in order. With a wake word, as on
+    the owner's machine, which is when all of them are offered."""
+    configured_with(wake=WakeSettings(enabled=True, model="hey_vesper"))
+
     main(["run", "--terminal"])
 
     assert wiring.runners[0].tools == list(BUILTIN_TOOLS)
@@ -2595,7 +2600,6 @@ def test_doctor_reports_the_installation_and_never_a_key(
     assert line("doctor_model", model=f"gemini:{MODEL}", provider="Google Gemini Live") in out
     assert line("doctor_key_stored") in out
     assert line("doctor_verdict_ok", days=3) in out
-    assert line("doctor_stt_gemini", model="gemini-3.5-transcribe-live") in out
     assert line("doctor_voice_goes") in out
     assert line("doctor_text_goes", provider="Google Gemini Live") in out
     assert line("doctor_memory", path=configured / MEMORY_FILE_NAME, count=3) in out

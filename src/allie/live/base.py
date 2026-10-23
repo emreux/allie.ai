@@ -202,6 +202,17 @@ class SessionConfig:
     # `context_window_compression` with the server's default window;
     # without it an audio session is capped at fifteen minutes).
     compress_context: bool = False
+    # `temperature`: how freely the model picks its words; `None` is the
+    # server's default, which the conversation and the reader keep. The
+    # referee asks for 0 (D54): at the default it took a hesitant "hmm" for
+    # a yes in three runs of six, at 0 for unclear ten times of ten. An
+    # adapter whose provider has no such knob ignores it.
+    temperature: float | None = None
+    # `client_turns`: the client marks where the user's speech starts and
+    # ends (`LiveSession.send_utterance`), and the server's own detector is
+    # off - the end-of-speech knobs above mean nothing then. What the
+    # referee hears is one recorded answer, whole (D54).
+    client_turns: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -347,6 +358,13 @@ class LiveSession(Protocol):
 
     async def send_audio(self, pcm16: bytes) -> None:
         """Microphone audio, at the rate the session was opened with."""
+        ...
+
+    async def send_utterance(self, pcm16: bytes) -> None:
+        """One whole utterance as the user's turn, marked by the client: speech
+        starts, the audio, speech ends - for a session opened with
+        `client_turns`, whose server waits for the end before it answers.
+        Counted in `audio_in_ms` like `send_audio`."""
         ...
 
     async def send_text(self, text: str, *, role: str = "user", turn_complete: bool = True) -> None:

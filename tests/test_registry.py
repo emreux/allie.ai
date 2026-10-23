@@ -28,6 +28,7 @@ from allie.live.registry import (
     RegistryError,
     UnknownProviderError,
     UnsupportedAdapterError,
+    Voice,
     create_provider,
     load_catalog,
     needs_base_url,
@@ -131,6 +132,37 @@ def test_a_field_from_a_later_version_does_not_break_the_catalogue(tmp_path: Pat
     catalogue.write_text(body, "utf-8")
 
     assert load_catalog(catalogue)["x"].adapter == "gemini_live"
+
+
+def test_a_voice_is_read_with_its_gender_and_how_it_sounds(tmp_path: Path) -> None:
+    """D53 (2026-10-09): the settings list offers a man's assistant the men's
+    voices and a woman's the women's, each named with how it sounds."""
+    catalogue = tmp_path / "providers.toml"
+    body = (
+        '[x]\nadapter = "gemini_live"\ndisplay_name = "X"\n\n'
+        '[x.voices]\nKore = { gender = "female", style = "firm" }\n'
+    )
+    catalogue.write_text(body, "utf-8")
+
+    assert load_catalog(catalogue)["x"].voices == {"Kore": Voice(gender="female", style="firm")}
+
+
+def test_an_entry_that_lists_no_voices_offers_none(tmp_path: Path) -> None:
+    catalogue = tmp_path / "providers.toml"
+    catalogue.write_text('[x]\nadapter = "gemini_live"\ndisplay_name = "X"\n', "utf-8")
+
+    assert load_catalog(catalogue)["x"].voices == {}
+
+
+def test_gemini_offers_its_thirty_voices_fourteen_women_s_and_sixteen_men_s() -> None:
+    """Google's Chirp 3 HD page gives the thirty voices' genders; the Live
+    API's own page gives none (checked 2026-10-09)."""
+    voices = load_catalog()["gemini"].voices
+    genders = [voice.gender for voice in voices.values()]
+
+    assert len(voices) == 30
+    assert (genders.count("female"), genders.count("male")) == (14, 16)
+    assert all(voice.style for voice in voices.values())
 
 
 # --------------------------------------------------------------------------

@@ -155,8 +155,8 @@ class GroundedSearch:
             from google import genai
             from google.genai import types as sdk
 
-            # No retry options: the SDK then makes one attempt (as in
-            # `stt/gemini_stt.py`). A second longer than our own deadline,
+            # No retry options: the SDK then makes one attempt (as the
+            # recogniser of D36 did). A second longer than our own deadline,
             # so that ours is the one that says it.
             client = genai.Client(
                 api_key=api_key,

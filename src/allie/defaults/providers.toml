@@ -18,6 +18,8 @@
 #   key_url          where the user gets a key
 #   base_url         the endpoint, for adapters that speak to an address
 #   requires_key     false for a local endpoint (default true)
+#   voices           a table: each voice by the provider's own name, with its
+#                    gender and the provider's word for how it sounds (D53)
 
 # The first adapter (plan.md D1, D13): Google's Live API, on the owner's
 # AI Studio key. The adapter is `live/gemini_live.py`.
@@ -25,3 +27,40 @@
 adapter      = "gemini_live"
 display_name = "Google Gemini Live"
 key_url      = "https://aistudio.google.com/apikey"
+
+# The voices the settings list offers (plan.md D53, 2026-10-09): a man's
+# assistant the men's, a woman's the women's. The style is Google's own word
+# for each (the Live API's voice page); the gender is from Google's Chirp 3 HD
+# page - the same thirty voices - since the Live API's page gives none. Each
+# opened a gemini-3.8-live session and spoke on 2026-10-09.
+[gemini.voices]
+Achernar      = { gender = "female", style = "soft" }
+Achird        = { gender = "male",   style = "friendly" }
+Algenib       = { gender = "male",   style = "gravelly" }
+Algieba       = { gender = "male",   style = "smooth" }
+Alnilam       = { gender = "male",   style = "firm" }
+Aoede         = { gender = "female", style = "breezy" }
+Autonoe       = { gender = "female", style = "bright" }
+Callirrhoe    = { gender = "female", style = "easy_going" }
+Charon        = { gender = "male",   style = "informative" }
+Despina       = { gender = "female", style = "smooth" }
+Enceladus     = { gender = "male",   style = "breathy" }
+Erinome       = { gender = "female", style = "clear" }
+Fenrir        = { gender = "male",   style = "excitable" }
+Gacrux        = { gender = "female", style = "mature" }
+Iapetus       = { gender = "male",   style = "clear" }
+Kore          = { gender = "female", style = "firm" }
+Laomedeia     = { gender = "female", style = "upbeat" }
+Leda          = { gender = "female", style = "youthful" }
+Orus          = { gender = "male",   style = "firm" }
+Pulcherrima   = { gender = "female", style = "forward" }
+Puck          = { gender = "male",   style = "upbeat" }
+Rasalgethi    = { gender = "male",   style = "informative" }
+Sadachbia     = { gender = "male",   style = "lively" }
+Sadaltager    = { gender = "male",   style = "knowledgeable" }
+Schedar       = { gender = "male",   style = "even" }
+Sulafat       = { gender = "female", style = "warm" }
+Umbriel       = { gender = "male",   style = "easy_going" }
+Vindemiatrix  = { gender = "female", style = "gentle" }
+Zephyr        = { gender = "female", style = "bright" }
+Zubenelgenubi = { gender = "male",   style = "casual" }

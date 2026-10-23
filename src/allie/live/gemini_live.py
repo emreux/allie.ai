@@ -1,8 +1,8 @@
 """Google's Live API, translated into the protocol (plan.md section 4.3).
 
 This is the only file in the tree that imports `google.genai` for a
-conversation (`stt/gemini_stt.py` and `tts/gemini_tts.py` import it for the
-yes/no window and the announcements, on trial since September). Everything
+conversation (`web/search.py` and `documents/model.py` import it to search
+and to read the document folders). Everything
 Gemini does differently is absorbed here: the session is configured once at
 the open and never again, audio goes in as `realtime_input` and comes back
 as inline blobs at 24 kHz, a tool result is a *function response* that has
@@ -75,7 +75,14 @@ from allie.live.base import (
     UsageReport,
 )
 
-__all__ = ["DEFAULT_MODEL", "INPUT_MIME", "OUTPUT_RATE", "GeminiLive", "GeminiSession"]
+__all__ = [
+    "DEFAULT_MODEL",
+    "INPUT_MIME",
+    "OUTPUT_RATE",
+    "UTTERANCE_CHUNK_SECONDS",
+    "GeminiLive",
+    "GeminiSession",
+]
 
 DEFAULT_MODEL = "gemini-3.8-live"
 
@@ -91,6 +98,10 @@ INPUT_MIME = "audio/pcm;rate=16000"
 # type. The blob is believed over this constant.
 OUTPUT_RATE = 24_000
 _BYTES_PER_SAMPLE = 2
+
+# How an utterance the client marks is cut on its way up (D54): the
+# recogniser's half-second chunks, which its measurements were made with.
+UTTERANCE_CHUNK_SECONDS = 0.5
 
 # What Gemini refuses a key with. 401 and 403 are the obvious two; the one
 # that actually happens is a 400 whose message says so, which is why the
@@ -209,6 +220,16 @@ class GeminiSession:
         blob = types.Blob(data=pcm16, mime_type=self._input_mime)
         await self._send(self._raw.send_realtime_input(audio=blob))
         self._in_ms += _ms(len(pcm16), self._input_rate)
+
+    async def send_utterance(self, pcm16: bytes) -> None:
+        """Speech starts, the audio in half-second chunks, speech ends (D54) -
+        the way the recogniser sent the window's answer: measured 2026-09-14,
+        without the end a sentence sometimes never finalised."""
+        await self._send(self._raw.send_realtime_input(activity_start=types.ActivityStart()))
+        step = int(UTTERANCE_CHUNK_SECONDS * self._input_rate) * _BYTES_PER_SAMPLE
+        for at in range(0, len(pcm16), step):
+            await self.send_audio(pcm16[at : at + step])
+        await self._send(self._raw.send_realtime_input(activity_end=types.ActivityEnd()))
 
     async def send_text(self, text: str, *, role: str = "user", turn_complete: bool = True) -> None:
         turn = types.Content(role=role, parts=[types.Part(text=text)])
@@ -369,7 +390,13 @@ def _connect_config(config: SessionConfig) -> types.LiveConnectConfig:
         )
 
     detection = None
-    if config.end_sensitivity or config.silence_ms:
+    if config.client_turns:
+        # The client marks the turn (`send_utterance`, D54); the knobs
+        # below belong to the server's detector, which is off.
+        detection = types.RealtimeInputConfig(
+            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True)
+        )
+    elif config.end_sensitivity or config.silence_ms:
         detection = types.RealtimeInputConfig(
             automatic_activity_detection=types.AutomaticActivityDetection(
                 end_of_speech_sensitivity=(
@@ -395,12 +422,15 @@ def _connect_config(config: SessionConfig) -> types.LiveConnectConfig:
         ),
         output_audio_transcription=types.AudioTranscriptionConfig() if config.transcripts else None,
         realtime_input_config=detection,
+        temperature=config.temperature,
         # Asked for on every open so that the handles come (`Resumable`);
         # with a handle, the conversation continues where it left off.
         session_resumption=types.SessionResumptionConfig(handle=config.resume_handle),
         # D25's switch, sent only when asked for; `None` is the server's own
-        # default, as with everything above. Proactive audio is not sent at
-        # all: on this model it is on by the server's own rule.
+        # default, as with everything above. Proactive audio is not sent:
+        # v1beta refuses the field (1007, measured 2026-10-07), and sent on
+        # v1alpha it changed nothing - the model answers every turn aloud,
+        # meant for it or not (plan.md section 9).
         context_window_compression=(
             types.ContextWindowCompressionConfig(sliding_window=types.SlidingWindow())
             if config.compress_context

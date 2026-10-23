@@ -19,13 +19,6 @@ code = "xx"
 # wizard's menu, where somebody who does not read English has to find it.
 name = "Your language"
 
-[stt]
-# The language Google's recogniser is told to expect when it hears the yes
-# or no of a confirmation (plan.md D36). Usually the same as `code`,
-# and separate from it on purpose: this is the language people *speak* to the
-# assistant, not the one it shows them.
-language = "xx"
-
 # There is no list of yes and no words to translate (plan.md D49): what an
 # answer to "shall I?" meant is decided by a model, in any language.
 
@@ -124,6 +117,7 @@ cancelled = "Setup cancelled. Nothing was changed."
 settings = "Settings - choose one to change it"
 settings_close = "Close"
 setting_assistant = "Assistant: {value}"
+setting_voice = "Voice: {value}"
 setting_provider = "Provider: {value}"
 setting_locale = "Language: {value}"
 setting_api_key = "API key: {value}"
@@ -132,6 +126,34 @@ key_missing = "not set"
 setting_model = "Model: {value}"
 setting_microphone = "Microphone: {value}"
 setting_saved = "Saved: {setting}"
+# The voice row (plan.md D53): only the voices of the assistant's gender are
+# offered, each as "{name} - {style}" - {name} the provider's own name for
+# it, {style} one of the words below, the provider's word for how it sounds.
+voice = "Which voice should the assistant speak in?"
+voice_option = "{name} - {style}"
+voice_default = "the model's own"
+voice_style_bright = "bright"
+voice_style_breathy = "breathy"
+voice_style_breezy = "breezy"
+voice_style_casual = "casual"
+voice_style_clear = "clear"
+voice_style_easy_going = "easy-going"
+voice_style_even = "even"
+voice_style_excitable = "excitable"
+voice_style_firm = "firm"
+voice_style_forward = "forward"
+voice_style_friendly = "friendly"
+voice_style_gentle = "gentle"
+voice_style_gravelly = "gravelly"
+voice_style_informative = "informative"
+voice_style_knowledgeable = "knowledgeable"
+voice_style_lively = "lively"
+voice_style_mature = "mature"
+voice_style_smooth = "smooth"
+voice_style_soft = "soft"
+voice_style_upbeat = "upbeat"
+voice_style_warm = "warm"
+voice_style_youthful = "youthful"
 
 # Spoken out loud, so keep them short and easy to hear (item 1.10).
 unreachable = "I could not reach the provider. Will you try again?"
@@ -319,7 +341,6 @@ doctor_key_not_needed = "  API key: not needed"
 doctor_verdict_ok = "  tool calling: passed, checked {days} days ago"
 doctor_verdict_failed = "  tool calling: FAILED, checked {days} days ago - most tools will not work"
 doctor_verdict_none = "  tool calling: not checked yet (checked at the next start)"
-doctor_stt_gemini = "  recogniser: Google ({model})"
 doctor_leaves = "What leaves this machine"
 doctor_voice_goes = "  your voice: goes to Google (the recogniser)"
 doctor_text_goes = "  what you said, as text: goes to {provider}"

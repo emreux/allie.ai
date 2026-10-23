@@ -43,9 +43,8 @@ from allie.agent.policy import (
 from allie.live.base import ToolCall, ToolSpec
 from allie.store.db import open_database
 from allie.store.repos import AuditRepo
-from allie.stt.base import Transcript
 from allie.tools.registry import Tool, ToolRegistry, tool
-from tests.test_app import FakeCapture, FakeSTT, assistant_with, speech
+from tests.test_app import FakeCapture, FakeReferee, assistant_with, speech
 
 TURN = "turn-1"
 
@@ -467,7 +466,7 @@ async def test_without_a_repository_the_gate_writes_nothing_and_still_works() ->
 async def test_a_confirm_tool_does_not_run_when_the_microphone_hears_nothing() -> None:
     """The claim CLAUDE.md names, with the real `Confirm` this time - the
     state machine's own window. Nobody answers, and the tool does not run."""
-    assistant = assistant_with(capture=FakeCapture(), stt=FakeSTT())
+    assistant = assistant_with(capture=FakeCapture(), referee=FakeReferee())
     await assistant.begin()
 
     answer = await gate(call("open_app", name="Spotify"), confirm=assistant.confirm)
@@ -477,9 +476,7 @@ async def test_a_confirm_tool_does_not_run_when_the_microphone_hears_nothing() -
 
 
 async def test_a_confirm_tool_runs_when_the_microphone_hears_yes() -> None:
-    assistant = assistant_with(
-        capture=FakeCapture(answers=[speech()]), stt=FakeSTT(Transcript(text="evet"))
-    )
+    assistant = assistant_with(capture=FakeCapture(answers=[speech()]), referee=FakeReferee("evet"))
     await assistant.begin()
 
     answer = await gate(call("open_app", name="Spotify"), confirm=assistant.confirm)

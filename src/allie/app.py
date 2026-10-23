@@ -17,8 +17,9 @@ order they do it in, and what happens when one of them fails.
 **A session opens on speech and closes on silence** (rule 1). The doorman -
 the local detector inside the capture - reports the onset, the capture has
 already queued the pre-roll, and a session is opened for it; sixty seconds
-of nothing said and nothing played closes it again, because a live model
-bills by the minute while open. An opening that fails is said out loud and
+after the last answer - not after the last voice the doorman heard, which a
+television or a song supplies forever (D51) - closes it again, because a
+live model bills by the minute while open. An opening that fails is said out loud and
 the door is kept; three failures in a row switch the assistant off, so that
 a dead network does not cost a sentence a minute.
 
@@ -39,9 +40,9 @@ hands `confirm` the sentence with the real argument values in it; this file
 waits for the model to finish what it was saying, pauses the session's input
 (D3: nothing said in the window reaches the model), reads the question - and
 only the question (D49) - in the assistant's voice from a session of its own
-(D32), and opens the microphone for six seconds as it ends; Google's
-recogniser reads what was said (D36), and a small model of its own decides
-what it meant: yes, no, or unclear (`agent/judge.py`, D49). It is shown the
+(D32), and opens the microphone for six seconds as it ends; the live model
+itself hears what was said and decides what it meant - yes, no, or unclear -
+from a session of its own (`agent/referee.py`, D54). It is shown the
 question's outline, never the call's values. Silence runs nothing, and
 neither does a voice or the switch while the question is still being read;
 an unclear answer is asked about once more, and a second one runs nothing
@@ -67,7 +68,10 @@ configured the machine starts `SLEEPING`: the capture feeds the detector
 and nothing else, no session can open. The phrase wakes it - a chime or a
 sentence, then a session at once - and the idle close puts it back to
 sleep. The key still switches it off and on; on from off is awake. A
-reminder is said asleep as it is said off.
+reminder is said asleep as it is said off. The user's word puts it there at
+once (D50): `go_to_sleep` asks the `Bedtime` this file hooks, the model's
+voice stops, the result goes back, the session is hung up and the wake chime
+plays turned round; the idle close stays silent.
 
 **What a turn cost is written down** (rule 6) when the model is done with
 it: what the user said and the model answered, the audio minutes both ways,
@@ -84,16 +88,6 @@ means the user has to go and renew it, a provider that cannot be reached
 means try again, and one that took too long means the same. Anything else
 is a bug in this project, and swallowing it into "I could not connect" is
 how it would never get fixed: it comes out of `run` as the exception it is.
-
-**A recording is judged by whether it held speech, never by how sure the
-decoder was of its words.** The local engine this was measured on
-(2026-09-05; gone since D36) answered silence with confident looking words
-and a correct single word with unsure ones - a subtitle credit over silence
-scored 0.54 and "Merhaba." alone 0.48 - while its own estimate of whether
-anything was said separated them (0.86 against 0.06). Google's recogniser
-says the same thing its own way: no final transcript is "nothing to
-decode". `hear` below rests on that and on nothing else, and serves one
-place: the yes-and-no window.
 
 **No user-facing sentence is written here** (rule 8). The pack answers first
 and the English constants below are the end of the chain, exactly as in the
@@ -113,11 +107,11 @@ from typing import Any, Literal, Protocol
 from loguru import logger
 
 from allie.agent.core import Question, ToolRunner
-from allie.agent.judge import Judge
 from allie.agent.prompts import ANNOUNCED_PREFIX
+from allie.agent.referee import Referee
 from allie.announce.queue import Announcement, AnnounceQueue
 from allie.audio.player import LivePlayback, PlaybackError, Speaker
-from allie.audio.wake import CHIME_RATE, chime
+from allie.audio.wake import CHIME_RATE, Bedtime, chime, falling_chime
 from allie.config import LiveSettings
 from allie.live.base import (
     AudioChunk,
@@ -140,25 +134,25 @@ from allie.live.base import (
     UsageReport,
 )
 from allie.locales import Locale
-from allie.stt.base import NO_SPEECH_CEILING, SAMPLE_RATE, Audio, STTProvider, Transcript
+from allie.stt.base import SAMPLE_RATE, Audio
 from allie.tts.base import TTSProvider
 from allie.usage.tracker import UsageTracker
 from allie.web.search import Searched
 
 __all__ = [
+    "BEDTIME_SETTLE_SECONDS",
     "CONFIRM_WINDOW_SECONDS",
     "IDLE_CLOSE_SECONDS",
+    "IDLE_GRACE_SECONDS",
     "MAX_OPEN_FAILURES",
     "MIN_UTTERANCE_SECONDS",
     "RESUME_MINUTES",
     "TEXT",
     "Answer",
     "Capture",
-    "Heard",
     "LiveAssistant",
     "State",
     "Turn",
-    "hear",
 ]
 
 
@@ -187,9 +181,9 @@ class State(StrEnum):
 # after the question has been read; what comes after it is a no.
 CONFIRM_WINDOW_SECONDS = 6.0
 
-# How one confirmation window ended (`LiveAssistant._ask`): the judge's yes
+# How one confirmation window ended (`LiveAssistant._ask`): the referee's yes
 # or no, an unclear answer (worth one more question), nothing heard or
-# nothing the judge could decide, or the exchange stopped from outside.
+# nothing the referee could decide, or the exchange stopped from outside.
 Answer = Literal["yes", "no", "unclear", "unheard", "stopped"]
 
 # Shorter than this and it was a noise rather than a word. Below a syllable,
@@ -201,9 +195,20 @@ MIN_UTTERANCE_SECONDS = 0.35
 IDLE_CLOSE_SECONDS = LiveSettings().idle_close_seconds
 RESUME_MINUTES = LiveSettings().resume_minutes
 
+# D51: a voice the doorman heard since the assistant last did anything - the
+# user may have begun a sentence in the last second - gets this long at the
+# deadline for an answer or a tool to begin; one grace a deadline. A
+# television gets it too, and is closed at its end.
+IDLE_GRACE_SECONDS = 5.0
+
 # Rule 1: how many sessions in a row may fail to open before the assistant
 # switches itself off rather than say the same sentence at every onset.
 MAX_OPEN_FAILURES = 3
+
+# D50: how long the user's word to sleep waits for the tool's result to reach
+# the session - and another call of the same message to finish (D46) -
+# before the session is hung up all the same.
+BEDTIME_SETTLE_SECONDS = 10.0
 
 # What is done at the wake word (D21): the chime, a sentence in the local
 # voice, or nothing. The config validates the word; this is its type.
@@ -219,7 +224,7 @@ TEXT: dict[str, str] = {
     "unreachable": "I could not reach the provider. Will you try again?",
     "key_invalid": "Your API key is not being accepted any more. You need to renew it.",
     "took_too_long": "That took too long. Will you try again?",
-    # Asked once when the judge found the answer unclear (D49). The question
+    # Asked once when the referee found the answer unclear (D49, D54). The question
     # itself is asked alone: a hint after it was talked over, unheard.
     "confirm_again": "I did not catch that. Yes, or no?",
     # Said before a session opens once a spending limit is passed - every
@@ -232,22 +237,6 @@ TEXT: dict[str, str] = {
     # "sentence"` (D21); the chime is the default.
     "wake_greeting": "I am listening.",
 }
-
-
-@dataclass(frozen=True, slots=True)
-class Heard:
-    """What the recogniser made of a recording, and whether it is worth a reply.
-
-    Three outcomes rather than two, because "nothing happened" and "you said
-    something and I could not read it" are different things to the person in
-    the chair. Silence over a quiet room deserves silence; speech that came
-    back as no words deserves to be asked about again, or the assistant
-    looks broken at exactly the moment it is working as designed.
-    """
-
-    text: str = ""
-    missed: bool = False
-    confidence: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -434,16 +423,17 @@ class LiveAssistant:
         session_config: Callable[[], SessionConfig],
         tool_runner: ToolRunner,
         tts: TTSProvider,
-        stt: STTProvider,
-        judge: Judge,
+        referee: Referee,
         speaker: Speaker,
         locale: Locale,
         tracker: UsageTracker | None = None,
         announcements: AnnounceQueue | None = None,
         idle_close_seconds: float = IDLE_CLOSE_SECONDS,
+        idle_grace_seconds: float = IDLE_GRACE_SECONDS,
         resume_minutes: float = RESUME_MINUTES,
         greeting: Greeting = "chime",
         searched: Searched | None = None,
+        bedtime: Bedtime | None = None,
         on_state: Callable[[State], None] | None = None,
         on_turn: Callable[[Turn], None] | None = None,
         on_mode: Callable[[bool], None] | None = None,
@@ -456,14 +446,20 @@ class LiveAssistant:
         # What `look_up` and `x_trends` searched (D29), taken at every
         # turn's end for the screen. Without one, no turn has searches.
         self._searched = searched
+        # The user's word to sleep (D50): hooked at `begin`; without one,
+        # only the idle close puts the machine to sleep.
+        self._bedtime = bedtime
+        # From the user's word until asleep: nothing more of the model's
+        # voice is played, and nothing it says is written down as said.
+        self._dozing = False
         # What a session is opened with, read at every open: the prompt
         # carries the user's facts and the time, and both move.
         self._session_config = session_config
         self._runner = tool_runner
         self._tts = tts
-        self._stt = stt
-        # What an answer to a gate's question meant (D49).
-        self._judge = judge
+        # What an answer to a gate's question meant, heard and judged by
+        # the live model from a session of its own (D49, D54).
+        self._referee = referee
         self._speaker = speaker
         self._locale = locale
         self._tracker = tracker
@@ -472,6 +468,7 @@ class LiveAssistant:
         # is ever announced.
         self._announcements = announcements
         self._idle_close = idle_close_seconds
+        self._idle_grace = idle_grace_seconds
         self._resume_seconds = resume_minutes * 60
         self._on_state = on_state
         self._on_turn = on_turn
@@ -511,6 +508,10 @@ class LiveAssistant:
         self._handle_at = 0.0
         self._failures = 0
         self._last_activity = 0.0
+        # When the doorman last reported a voice beginning or ending. Heard,
+        # not answered: no activity of the assistant's (D51), only a reason
+        # for one grace at the deadline.
+        self._voice_at = 0.0
         self._user_speaking = False
         # When the doorman last heard the user stop, for `first_sound_ms`;
         # kept apart from the turn, which may not exist yet - the user is
@@ -540,6 +541,8 @@ class LiveAssistant:
         self._capture.on_speech = self._speech
         self._capture.on_mode = self._mode_changed
         self._capture.on_wake = self._woken
+        if self._bedtime is not None:
+            self._bedtime.on_ask = self._bed_asked
 
         # Where the machine stands before the microphone opens, so that the
         # mode the capture reports as it starts finds it there (off stays off).
@@ -604,7 +607,7 @@ class LiveAssistant:
             # is asleep is open a session that costs money.
             return
         self._user_speaking = speaking
-        self._active()
+        self._voice_at = _now()
         if not speaking:
             self._quiet_at = _now()
             if self._state is State.USER_SPEAKING:
@@ -685,6 +688,35 @@ class LiveAssistant:
             return
         self._capture.sleep()
         self._enter(State.SLEEPING)
+
+    def _bed_asked(self) -> None:
+        """The user's word to sleep (D50), from `go_to_sleep` on the loop: the
+        model's voice stops now - before its answer to the result can come -
+        and the machine falls asleep once the result has reached the session."""
+        if self._dozing:
+            return
+        self._dozing = True
+        self._playback.stop()
+        self._spawn(self._fall_asleep())
+
+    async def _fall_asleep(self) -> None:
+        """The result first, so that the conversation the server keeps for the
+        handle has the call answered - and another call of the same message
+        finishes (D46); then the hang-up, the sleep, the chime turned round."""
+        logger.info("asleep at the user's word")
+        try:
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(BEDTIME_SETTLE_SECONDS):
+                    await self._runner.settled()
+            conversation = self._conversation
+            self._hang_up()
+            if conversation is not None:
+                await asyncio.wait({conversation})
+            self._doze()
+        finally:
+            self._dozing = False
+        if self._state is State.SLEEPING:
+            await self._sound(falling_chime(), CHIME_RATE)
 
     # ----------------------------------------------------------------------
     # One session, from the onset that opened it to its close
@@ -774,6 +806,9 @@ class LiveAssistant:
         server is about to hang up, or already did with an error.
         """
         self._session = session
+        # A session that opens is the user speaking, or the conversation
+        # going on after a reopen: the idle clock starts here (D51).
+        self._active()
         self._new_turn(session)
         self._tell_session(True)
         if self._state is State.RECONNECTING:
@@ -819,10 +854,12 @@ class LiveAssistant:
     def _on_event(self, event: LiveEvent, session: LiveSession) -> str | None:
         """One event, answered. Returns why the session is over, when it is:
         `"closed"`, `"reopen"`, or the key of the failure to say."""
-        self._active()
         turn = self._turn
         match event:
             case AudioChunk(pcm16=pcm16, sample_rate=rate):
+                if self._dozing:
+                    # Asked to sleep (D50): what the model says now is not heard.
+                    return None
                 turn.open = True
                 if turn.first_sound_ms is None and self._quiet_at is not None:
                     turn.first_sound_ms = (_now() - self._quiet_at) * 1000
@@ -855,7 +892,7 @@ class LiveAssistant:
                 turn.open = True
                 turn.heard.append(text)
             case OutputText(text=text):
-                if not turn.cut:
+                if not turn.cut and not self._dozing:
                     turn.said.append(text)
             case TurnComplete():
                 self._playback.flush()
@@ -895,30 +932,47 @@ class LiveAssistant:
             logger.warning("sending audio failed: {kind}", kind=failure.kind)
 
     async def _idle_watch(self) -> None:
-        """Closes the session after `idle_close_seconds` of nothing said and
-        nothing played (D5): a live session bills by the minute, silent or
-        not."""
+        """Closes the session `idle_close_seconds` after the last thing the
+        assistant did - an answer heard to its end, a question, a reminder,
+        the wake word, the session's opening (D5, D51) - once the machine is
+        at rest: a live session bills by the minute, silent or not. A voice
+        heard since gets one grace of `idle_grace_seconds` for an answer or a
+        tool to begin; one that nothing answers - a television - is closed at
+        its end."""
+        graced: float | None = None
         while True:
-            remaining = self._last_activity + self._idle_close - _now()
+            deadline = self._last_activity + self._idle_close
+            if graced == self._last_activity:
+                deadline += self._idle_grace
+            remaining = deadline - _now()
             if remaining > 0:
                 await asyncio.sleep(remaining)
                 continue
-            if self._quiet():
-                logger.info(
-                    "session closed after {seconds:g} s of silence", seconds=self._idle_close
-                )
-                self._hang_up()
-                self._doze()
-                return
-            self._active()
+            if not self._at_rest():
+                self._active()
+                continue
+            if self._voice_since() and graced != self._last_activity:
+                graced = self._last_activity
+                continue
+            logger.info("session closed after {seconds:g} s of silence", seconds=self._idle_close)
+            self._hang_up()
+            self._doze()
+            return
 
-    def _quiet(self) -> bool:
+    def _at_rest(self) -> bool:
+        """Nothing of the assistant's under way: no answer playing, no tool
+        running, no question or reminder being read. `USER_SPEAKING` is the
+        doorman's opinion alone, and a talking television's (D51)."""
         return (
-            self._state is State.IDLE
-            and not self._user_speaking
+            self._state in (State.IDLE, State.USER_SPEAKING)
             and self._runner.pending == 0
             and not self._playback.playing
         )
+
+    def _voice_since(self) -> bool:
+        """Whether the doorman hears a voice now, or heard one after the last
+        thing the assistant did."""
+        return self._user_speaking or self._voice_at > self._last_activity
 
     # ----------------------------------------------------------------------
     # The turn
@@ -1020,18 +1074,19 @@ class LiveAssistant:
         first - it may have said "let me check" before it asked - and the
         session's input is paused for the whole exchange (D3), so that the
         yes never reaches the model: only the tool's result does. What the
-        answer meant is the judge's to say (`agent/judge.py`), shown the
-        question's outline - never the call's values - and the words heard.
+        answer meant is the referee's to say (`agent/referee.py`, D54) - the
+        live model in a session of its own, shown the question's outline,
+        never the call's values, and hearing the window's recording.
         Nothing runs without a clear yes. `False` is a no the user gave, or
         a voice or the switch while the question is still being read.
         `None` is an answer nobody heard or nobody understood - silence, a
-        noise, two unclear answers, a judge that could not decide - which
+        noise, two unclear answers, a referee that could not decide - which
         the gate tells the model apart from a refusal (2026-09-26). Stopped
         from outside - the model withdrew the call, or the switch went off -
         it lets the microphone go on the way out.
         """
         # The gate asks with the outline; a plain string has none, and is
-        # shown to the judge as it is.
+        # shown to the referee as it is.
         about = question.outline if isinstance(question, Question) else question
         await self._playback.drained()
         self._answered()
@@ -1057,17 +1112,17 @@ class LiveAssistant:
         return False
 
     async def _ask(self, prompt: str, *, about: str) -> Answer:
-        """Reads `prompt`, opens the window, and has the judge say what the
-        answer meant, asked `about` - the question's outline, the first
+        """Reads `prompt`, opens the window, and has the referee say what
+        the answer meant, asked `about` - the question's outline, the first
         question's for the second.
 
         `unclear`: something was said that was neither a yes nor a no, or
-        the recogniser could not read it - worth one more try. `unheard`:
-        silence, a noise the recogniser calls nothing, or a judge that could
-        not decide - not worth one. `stopped`: the user spoke over the
-        question, switched the assistant off, or the call was withdrawn.
-        Every answer the window gets is one line in the log: three declines
-        on 2026-09-25 left no trace of what had been heard.
+        could not be made out - worth one more try. `unheard`: silence, a
+        noise too short to be a word, or a referee that could not decide -
+        not worth one. `stopped`: the user spoke over the question, switched
+        the assistant off, or the call was withdrawn. Every answer the
+        window gets is one line in the log - what the server heard, and what
+        it was taken for: three declines on 2026-09-25 left no trace.
         """
         await self._play([prompt])
         if self._withdrawn():
@@ -1086,29 +1141,23 @@ class LiveAssistant:
             logger.info("confirm answer: nothing within {:.0f} s", CONFIRM_WINDOW_SECONDS)
             return "unheard"
 
-        heard = await self._heard(pcm)
-        if not heard.text:
-            empty: Answer = "unclear" if heard.missed else "unheard"
-            logger.info("confirm answer: no words -> {answer}", answer=empty)
-            return empty
-        verdict = await self._judge.decide(about, heard.text)
-        if verdict is None:
-            # Fail closed (D49): what could not be judged is not a yes, and
-            # asking again would reach the same judge.
-            logger.info("confirm answer: {text!r} -> not judged", text=heard.text)
-            return "unheard"
-        logger.info("confirm answer: {text!r} -> {answer}", text=heard.text, answer=verdict)
-        return verdict
-
-    async def _heard(self, pcm: Audio) -> Heard:
-        """What the user answered, and what to make of it when they said nothing."""
         if len(pcm) < MIN_UTTERANCE_SECONDS * SAMPLE_RATE:
-            # A noise rather than a word. Sending it to Google costs a
-            # second and a half, for nothing - and there is nothing here
-            # to have misheard.
-            return Heard()
+            # A noise rather than a word. Sending it costs a session and a
+            # second and a half, for nothing - and there is nothing here to
+            # have misheard.
+            logger.info("confirm answer: no words -> unheard")
+            return "unheard"
 
-        return hear(await self._stt.transcribe(pcm, hint=self._locale.stt_language))
+        ruling = await self._referee.decide(about, pcm)
+        if ruling.verdict is None:
+            # Fail closed (D49, D54): what could not be judged is not a yes,
+            # and asking again would reach the same referee.
+            logger.info("confirm answer: {text!r} -> not judged", text=ruling.heard)
+            return "unheard"
+        logger.info(
+            "confirm answer: {text!r} -> {answer}", text=ruling.heard, answer=ruling.verdict
+        )
+        return ruling.verdict
 
     # ----------------------------------------------------------------------
     # Reminders (rule 5)
@@ -1232,6 +1281,9 @@ class LiveAssistant:
         listens again, and the machine rests."""
         if self._playback.playing:
             return
+        # Heard to its end: the idle clock starts now (D51), so that a long
+        # answer does not use up the window.
+        self._active()
         if self._answering:
             self._capture.unmute()
             self._answering = False
@@ -1307,37 +1359,6 @@ def _failure_of(error: ProviderError) -> str:
 
 def _now() -> float:
     return asyncio.get_running_loop().time()
-
-
-def hear(transcript: Transcript) -> Heard:
-    """What to make of a transcript: nothing, unreadable speech, or words.
-
-    The decision rests on whether there was speech, never on how sure the
-    decoder was of its words. Measured on the target machine with the local
-    engine (2026-09-05, before D36): a correct single "Merhaba." scores 0.48
-    confidence and silence scores up to
-    0.54, so no confidence floor can tell them apart - but the engine's own
-    no-speech estimate can (0.06 against 0.86). Confidence is still carried,
-    for the log and the screen, because a run of low numbers is how a bad
-    microphone is diagnosed afterwards.
-
-    An engine with no opinion is believed about its words, and its silence is
-    read as speech it could not make out: it cannot tell the two apart, and
-    neither can this. Treating "no opinion" as "nothing was said" would make
-    the assistant deaf: Google's recogniser has no opinion about its words.
-    """
-    no_speech = transcript.no_speech_probability
-    if no_speech is not None and no_speech >= NO_SPEECH_CEILING:
-        # The engine says nothing was said. Words it produced anyway are what
-        # a recogniser makes of silence, and they are not answered.
-        return Heard()
-
-    text = transcript.text.strip()
-    if text:
-        return Heard(text=text, confidence=transcript.confidence)
-
-    # There was speech, or an engine with no opinion, and no words came of it.
-    return Heard(missed=True, confidence=transcript.confidence)
 
 
 async def _one_buffer(pcm16: bytes) -> AsyncIterator[bytes]:

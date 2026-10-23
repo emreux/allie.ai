@@ -109,7 +109,6 @@ def test_the_template_is_a_scaffold_and_not_a_language() -> None:
 def test_every_shipped_pack_answers_what_phase_one_asks_of_it() -> None:
     for pack in available():
         assert pack.name.strip(), f"{pack.code} has no name to show in a menu"
-        assert pack.stt_language, f"{pack.code} gives the speech recogniser no hint"
 
 
 def test_no_pack_names_a_voice_any_more() -> None:
@@ -212,16 +211,8 @@ def test_a_language_with_no_pack_at_all_is_still_a_working_locale(tmp_path: Path
     interface, not a broken product."""
     pack = load("de", directory=tmp_path)
 
-    assert (pack.code, pack.name, pack.stt_language) == ("de", "de", "de")
+    assert (pack.code, pack.name) == ("de", "de")
     assert pack.say("welcome", "Hello.") == "Hello."
-
-
-def test_english_does_not_lend_its_speech_language(tmp_path: Path) -> None:
-    """A recogniser told to expect English would return English-shaped
-    nonsense for every German answer to "shall I?"."""
-    write(tmp_path, "en", '[stt]\nlanguage = "en"\n')
-
-    assert load("de", directory=tmp_path).stt_language == "de"
 
 
 # --------------------------------------------------------------------------
@@ -286,7 +277,7 @@ def test_a_pack_of_the_wrong_shape_is_read_as_far_as_it_makes_sense(tmp_path: Pa
 
     pack = load("de", directory=tmp_path)
 
-    assert (pack.code, pack.name, pack.stt_language) == ("de", "de", "de")
+    assert (pack.code, pack.name) == ("de", "de")
     assert pack.say("model", "Which model?") == "Which model?"
 
 

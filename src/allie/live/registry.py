@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import tomllib
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from importlib import resources
 from pathlib import Path
+from typing import Literal
 
 from allie.config import load_api_key
 from allie.live.base import LiveProvider
@@ -34,6 +35,7 @@ __all__ = [
     "RegistryError",
     "UnknownProviderError",
     "UnsupportedAdapterError",
+    "Voice",
     "create_provider",
     "load_catalog",
     "needs_base_url",
@@ -59,6 +61,17 @@ class MissingAPIKeyError(RegistryError):
 
 
 @dataclass(frozen=True, slots=True)
+class Voice:
+    """One voice a provider speaks in, as the settings list offers it (plan.md
+    D53): its gender, which the list is filtered by - a man's assistant is
+    offered the men's - and the provider's own word for how it sounds, which
+    the packs translate."""
+
+    gender: Literal["male", "female"]
+    style: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderEntry:
     """One row of the catalogue, as the setup command and the adapters see it."""
 
@@ -68,6 +81,8 @@ class ProviderEntry:
     key_url: str | None = None
     base_url: str | None = None
     requires_key: bool = True
+    # By the provider's own name, in the catalogue's order (D53).
+    voices: Mapping[str, Voice] = field(default_factory=dict)
 
 
 # An adapter takes its entry as well as the key: an adapter that speaks to
@@ -95,10 +110,14 @@ def needs_base_url(entry: ProviderEntry) -> bool:
 def load_catalog(path: Path | None = None) -> dict[str, ProviderEntry]:
     """Reads the provider catalogue, from the packaged copy unless told otherwise."""
     raw = tomllib.loads(_read_catalog(path))
-    known = {field.name for field in fields(ProviderEntry)} - {"id"}
+    known = {entry_field.name for entry_field in fields(ProviderEntry)} - {"id", "voices"}
     return {
         provider_id: ProviderEntry(
             id=provider_id,
+            voices={
+                name: Voice(gender=about["gender"], style=about["style"])
+                for name, about in values.get("voices", {}).items()
+            },
             # A field this build does not know is skipped rather than fatal:
             # section 3.2 already foresees an `auth` key, and an older build
             # should still start when a newer catalogue mentions one.

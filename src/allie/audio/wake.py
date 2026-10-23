@@ -33,7 +33,9 @@ threshold` outranks it, set from the owner's own recordings with
 **The chime** is the greeting of D21: two short notes at the speaker's
 rate, generated here so that no file ships for it, faded at both ends so
 that it does not click. A sentence in the local voice is the other choice
-(`[wake] greeting`), the state machine's business.
+(`[wake] greeting`), the state machine's business. Turned round - high,
+then low - it says the assistant went to sleep at the user's word (D50);
+`Bedtime` carries that word from the tool to the state machine.
 
 Fed on the event loop, in order, like the doorman; the model's load is the
 only slow part (three sessions, about a tenth of a second) and goes to a
@@ -57,13 +59,16 @@ from allie.stt.base import SAMPLE_RATE, Audio
 __all__ = [
     "CHIME_RATE",
     "DEBOUNCE_SECONDS",
+    "FALLING_NOTES",
     "HOP_SECONDS",
     "WINDOW_SECONDS",
     "BatchedModel",
+    "Bedtime",
     "LiveKitWakeWord",
     "WakeDetector",
     "WakeModelMissingError",
     "chime",
+    "falling_chime",
     "wake_model_path",
 ]
 
@@ -80,9 +85,12 @@ DEBOUNCE_SECONDS = 2.0
 # MIN_EMBEDDINGS), each over 76 mel frames, eight frames apart.
 _EMBEDDINGS = 16
 
-# The chime: two notes a fifth apart, short, quiet, faded.
+# The chime: two notes a fifth apart, short, quiet, faded - rising at the
+# wake word, and the same two falling when the user puts the assistant to
+# sleep (D50).
 CHIME_RATE = 24_000
 CHIME_NOTES: tuple[tuple[float, float], ...] = ((880.0, 0.09), (1320.0, 0.09))
+FALLING_NOTES: tuple[tuple[float, float], ...] = tuple(reversed(CHIME_NOTES))
 CHIME_DBFS = -12.0
 CHIME_FADE_SECONDS = 0.01
 
@@ -276,15 +284,35 @@ class LiveKitWakeWord:
         self.score = 0.0
 
 
-def chime() -> bytes:
-    """The two notes, as 16-bit PCM at `CHIME_RATE`."""
+def chime(notes: tuple[tuple[float, float], ...] = CHIME_NOTES) -> bytes:
+    """The notes, as 16-bit PCM at `CHIME_RATE`: the wake chime unless told."""
     gain = 10 ** (CHIME_DBFS / 20)
     fade = round(CHIME_FADE_SECONDS * CHIME_RATE)
     pieces: list[np.ndarray[Any, Any]] = []
-    for hertz, seconds in CHIME_NOTES:
+    for hertz, seconds in notes:
         count = round(seconds * CHIME_RATE)
         t = np.arange(count) / CHIME_RATE
         tone = np.sin(2 * np.pi * hertz * t) * gain
         ramp = np.minimum(1.0, np.minimum(np.arange(count), count - 1 - np.arange(count)) / fade)
         pieces.append(tone * ramp)
     return (np.concatenate(pieces) * 32767).astype("<i2").tobytes()
+
+
+def falling_chime() -> bytes:
+    """The wake chime turned round, high to low: asleep at the user's word (D50)."""
+    return chime(FALLING_NOTES)
+
+
+class Bedtime:
+    """The user's word to sleep (plan.md D50). The `go_to_sleep` tool asks;
+    the state machine hooks `on_ask` at its start - as it hooks the
+    capture's `on_wake` - and falls asleep. Made in the composition root and
+    handed to both, the way `Searched` is (D29). Asked with nobody hooked,
+    nothing happens."""
+
+    def __init__(self) -> None:
+        self.on_ask: Callable[[], None] | None = None
+
+    def ask(self) -> None:
+        if self.on_ask is not None:
+            self.on_ask()

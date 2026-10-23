@@ -50,13 +50,15 @@ from loguru import logger
 
 from allie import app
 from allie.agent.core import Confirm, ToolRunner
-from allie.agent.judge import Verdict
 from allie.agent.limits import Limits
 from allie.agent.policy import DECLINED, UNHEARD, dispatch
+from allie.agent.referee import Ruling, Verdict
 from allie.announce.queue import AnnounceQueue
 from allie.app import (
+    BEDTIME_SETTLE_SECONDS,
     CONFIRM_WINDOW_SECONDS,
     IDLE_CLOSE_SECONDS,
+    IDLE_GRACE_SECONDS,
     MAX_OPEN_FAILURES,
     RESUME_MINUTES,
     Greeting,
@@ -66,7 +68,7 @@ from allie.app import (
 )
 from allie.audio.capture import MicrophoneUnavailableError
 from allie.audio.player import PlaybackError
-from allie.audio.wake import CHIME_RATE, chime
+from allie.audio.wake import CHIME_RATE, Bedtime, chime, falling_chime
 from allie.live.base import (
     AudioChunk,
     AuthenticationError,
@@ -89,7 +91,7 @@ from allie.live.base import (
 from allie.locales import Locale
 from allie.store.db import open_database
 from allie.store.repos import UsageRepo
-from allie.stt.base import SAMPLE_RATE, Audio, Transcript
+from allie.stt.base import SAMPLE_RATE, Audio
 from allie.tools.registry import ToolRegistry, tool
 from allie.usage.tracker import Pricing, UsageTracker
 from allie.web.search import Searched
@@ -98,7 +100,6 @@ from tests.live_contract import FakeLiveProvider, FakeLiveSession
 TURKISH = Locale(
     code="tr",
     name="Türkçe",
-    stt_language="tr",
     ui={
         "key_invalid": "API anahtarın geçersiz görünüyor, yenilemen gerekiyor.",
         "unreachable": "Sağlayıcıya bağlanamadım, tekrar dener misin?",
@@ -299,25 +300,13 @@ class FakeCapture:
             self.toggle()
 
 
-class FakeSTT:
-    """A recogniser that hears whatever the test says it hears."""
+class FakeReferee:
+    """Hears each answer in turn - whatever the test says was said - and
+    decides what it meant the way the test says: by its words from
+    `verdicts`, unclear for any it was not told about (D54)."""
 
-    id = "fake_stt"
-
-    def __init__(self, *heard: Transcript) -> None:
-        self.heard = list(heard) or [Transcript(text="evet", confidence=0.9)]
-        self.hints: list[str | None] = []
-
-    async def transcribe(self, pcm: Audio, *, hint: str | None = None) -> Transcript:
-        self.hints.append(hint)
-        return self.heard.pop(0) if len(self.heard) > 1 else self.heard[0]
-
-
-class FakeJudge:
-    """Decides what an answer meant the way the test says: by the answer's
-    words from `verdicts`, and unclear for any it was not told about."""
-
-    def __init__(self, verdicts: Mapping[str, Verdict | None] | None = None) -> None:
+    def __init__(self, *heard: str, verdicts: Mapping[str, Verdict | None] | None = None) -> None:
+        self.heard = list(heard) or ["evet"]
         self.verdicts: dict[str, Verdict | None] = {
             "evet": "yes",
             "yes": "yes",
@@ -325,11 +314,13 @@ class FakeJudge:
             "no": "no",
             **(verdicts or {}),
         }
-        self.asked: list[tuple[str, str]] = []
+        self.asked: list[tuple[str, Audio]] = []
 
-    async def decide(self, question: str, answer: str) -> Verdict | None:
+    async def decide(self, question: str, answer: Audio) -> Ruling:
         self.asked.append((question, answer))
-        return self.verdicts.get(answer.strip().rstrip(".!?").lower(), "unclear")
+        said = self.heard.pop(0) if len(self.heard) > 1 else self.heard[0]
+        meant = self.verdicts.get(said.strip().rstrip(".!?").lower(), "unclear")
+        return Ruling(verdict=meant, heard=said)
 
 
 class FakeTTS:
@@ -472,6 +463,21 @@ class Held(FakeGate):
         return f"{call.name}: done"
 
 
+class Sleepy(FakeGate):
+    """A gate under which `go_to_sleep` asks for bed, as the real tool does
+    (`tools/sleep.py`)."""
+
+    def __init__(self, bedtime: Bedtime) -> None:
+        super().__init__()
+        self.bedtime = bedtime
+
+    async def __call__(self, call: ToolCall, *, turn_id: str, confirm: Confirm) -> str:
+        said = await super().__call__(call, turn_id=turn_id, confirm=confirm)
+        if call.name == "go_to_sleep":
+            self.bedtime.ask()
+        return said
+
+
 @tool(risk="safe")
 async def clock() -> str:
     """Tells the time."""
@@ -493,14 +499,14 @@ def assistant_with(
     provider: Provider | None = None,
     events: Sequence[LiveEvent] = (),
     tts: FakeTTS | None = None,
-    stt: FakeSTT | None = None,
-    judge: FakeJudge | None = None,
+    referee: FakeReferee | None = None,
     speaker: FakeSpeaker | None = None,
     locale: Locale = TURKISH,
     runner: ToolRunner | None = None,
     tracker: UsageTracker | None = None,
     announcements: AnnounceQueue | None = None,
     idle_close_seconds: float = IDLE_CLOSE_SECONDS,
+    idle_grace_seconds: float = IDLE_GRACE_SECONDS,
     resume_minutes: float = RESUME_MINUTES,
     on_state: Callable[[State], None] | None = None,
     on_turn: Callable[[Turn], None] | None = None,
@@ -509,6 +515,7 @@ def assistant_with(
     config: Callable[[], SessionConfig] | None = None,
     greeting: Greeting = "chime",
     searched: Searched | None = None,
+    bedtime: Bedtime | None = None,
 ) -> LiveAssistant:
     """An assistant over fakes. `events` scripts the one session the plain
     provider opens: the model answers with them and hangs up politely."""
@@ -521,13 +528,13 @@ def assistant_with(
         else lambda: SessionConfig(model="fake-1", tools=tools.specs()),
         tool_runner=tools,
         tts=tts if tts is not None else FakeTTS(),
-        stt=stt if stt is not None else FakeSTT(),
-        judge=judge if judge is not None else FakeJudge(),
+        referee=referee if referee is not None else FakeReferee(),
         speaker=speaker if speaker is not None else FakeSpeaker(),
         locale=locale,
         tracker=tracker,
         announcements=announcements,
         idle_close_seconds=idle_close_seconds,
+        idle_grace_seconds=idle_grace_seconds,
         resume_minutes=resume_minutes,
         on_state=on_state,
         on_turn=on_turn,
@@ -535,6 +542,7 @@ def assistant_with(
         on_session=on_session,
         greeting=greeting,
         searched=searched,
+        bedtime=bedtime,
     )
 
 
@@ -986,6 +994,11 @@ async def test_the_idle_close_and_the_resume_window_are_the_config_s_defaults() 
     assert RESUME_MINUTES == 4.0
 
 
+async def test_the_user_s_word_waits_ten_seconds_at_most_for_the_results() -> None:
+    assert BEDTIME_SETTLE_SECONDS == 10.0
+    assert IDLE_GRACE_SECONDS == 5.0
+
+
 # --------------------------------------------------------------------------
 # Rule 2: the model's voice plays as it arrives and stops when the server says so
 # --------------------------------------------------------------------------
@@ -1373,15 +1386,15 @@ def asking(room: Room | None = None, **parts: Any) -> LiveAssistant:
     )
 
 
-def says(*answers: str) -> FakeSTT:
-    """A recogniser that hears each answer in turn."""
-    return FakeSTT(*(Transcript(text=answer, confidence=0.9) for answer in answers))
+def says(*answers: str, verdicts: Mapping[str, Verdict | None] | None = None) -> FakeReferee:
+    """A referee that hears each answer in turn."""
+    return FakeReferee(*answers, verdicts=verdicts)
 
 
 async def test_a_tool_that_asks_runs_when_the_user_says_yes() -> None:
     capture = FakeCapture(answers=[speech()])
 
-    await one_turn(asking(capture=capture, stt=says("Evet.")), capture)
+    await one_turn(asking(capture=capture, referee=says("Evet.")), capture)
 
     assert ran == ["open_app:Spotify"]
     assert capture.windows == [CONFIRM_WINDOW_SECONDS]
@@ -1394,7 +1407,7 @@ async def test_the_question_is_asked_alone() -> None:
     capture = FakeCapture(answers=[speech()])
     tts = FakeTTS()
 
-    await one_turn(asking(capture=capture, stt=says("evet"), tts=tts), capture)
+    await one_turn(asking(capture=capture, referee=says("evet"), tts=tts), capture)
 
     assert tts.said == ["Spotify will be opened."]
     assert ran == ["open_app:Spotify"]
@@ -1403,7 +1416,7 @@ async def test_the_question_is_asked_alone() -> None:
 async def test_a_tool_that_asks_does_not_run_when_the_user_says_no() -> None:
     capture = FakeCapture(answers=[speech()])
 
-    await one_turn(asking(capture=capture, stt=says("Hayır.")), capture)
+    await one_turn(asking(capture=capture, referee=says("Hayır.")), capture)
 
     assert ran == []
 
@@ -1413,7 +1426,7 @@ async def test_the_model_is_told_the_user_declined() -> None:
     capture = FakeCapture(answers=[speech()])
     room = wants_spotify()
 
-    await one_turn(asking(room, capture=capture, stt=says("hayır")), capture)
+    await one_turn(asking(room, capture=capture, referee=says("hayır")), capture)
 
     assert [content for _, content in room.results] == [DECLINED]
 
@@ -1427,7 +1440,7 @@ async def test_silence_in_the_window_runs_nothing_and_is_not_asked_again() -> No
     tts = FakeTTS()
     room = wants_spotify()
 
-    await one_turn(asking(room, capture=capture, stt=says(), tts=tts), capture)
+    await one_turn(asking(room, capture=capture, referee=says(), tts=tts), capture)
 
     assert ran == []
     assert capture.windows == [CONFIRM_WINDOW_SECONDS]
@@ -1444,7 +1457,7 @@ async def test_what_the_window_heard_is_one_line_in_the_log() -> None:
     handle = logger.add(lines.append, level="INFO", format="{message}")
 
     try:
-        await one_turn(asking(capture=capture, stt=says("belki", "Evet.")), capture)
+        await one_turn(asking(capture=capture, referee=says("belki", "Evet.")), capture)
     finally:
         logger.remove(handle)
 
@@ -1461,7 +1474,7 @@ async def test_silence_is_one_line_in_the_log_as_well() -> None:
     handle = logger.add(lines.append, level="INFO", format="{message}")
 
     try:
-        await one_turn(asking(capture=capture, stt=says()), capture)
+        await one_turn(asking(capture=capture, referee=says()), capture)
     finally:
         logger.remove(handle)
 
@@ -1473,7 +1486,7 @@ async def test_an_unclear_answer_is_asked_about_once_more() -> None:
     capture = FakeCapture(answers=[speech(), speech()])
     tts = FakeTTS()
 
-    await one_turn(asking(capture=capture, stt=says("belki", "evet"), tts=tts), capture)
+    await one_turn(asking(capture=capture, referee=says("belki", "evet"), tts=tts), capture)
 
     assert ran == ["open_app:Spotify"]
     assert len(capture.windows) == 2
@@ -1484,55 +1497,22 @@ async def test_two_unclear_answers_run_nothing_and_count_as_unheard() -> None:
     capture = FakeCapture(answers=[speech(), speech()])
     room = wants_spotify()
 
-    await one_turn(asking(room, capture=capture, stt=says("belki", "olabilir")), capture)
+    await one_turn(asking(room, capture=capture, referee=says("belki", "olabilir")), capture)
 
     assert ran == []
     assert len(capture.windows) == 2
     assert [content for _, content in room.results] == [UNHEARD]
 
 
-async def test_speech_that_could_not_be_read_is_asked_about_once_more() -> None:
-    """The engine says there was speech and gives no words for it: worth a
-    second question, unlike silence."""
-    capture = FakeCapture(answers=[speech(), speech()])
-    stt = FakeSTT(Transcript(text="", no_speech_probability=0.0), Transcript(text="evet"))
-
-    await one_turn(asking(capture=capture, stt=stt), capture)
-
-    assert ran == ["open_app:Spotify"]
-    assert len(capture.windows) == 2
-
-
-async def test_a_recording_the_engine_calls_silence_is_silence() -> None:
-    """The detector fired on a cough; the engine says nothing was said. Words
-    it produced anyway are not an answer, and silence is not a reason to ask
-    again."""
-    capture = FakeCapture(answers=[speech(), speech()])
-    stt = FakeSTT(Transcript(text="evet", no_speech_probability=1.0))
-
-    await one_turn(asking(capture=capture, stt=stt), capture)
-
-    assert ran == []
-    assert len(capture.windows) == 1
-
-
 async def test_a_noise_too_short_to_be_a_word_is_not_an_answer() -> None:
+    """Not worth a session: nothing is sent to the referee."""
     capture = FakeCapture(answers=[speech(0.1)])
-    stt = FakeSTT(Transcript(text="evet"))
+    referee = says("evet")
 
-    await one_turn(asking(capture=capture, stt=stt), capture)
+    await one_turn(asking(capture=capture, referee=referee), capture)
 
     assert ran == []
-    assert stt.hints == []
-
-
-async def test_the_recogniser_is_told_which_language_to_expect() -> None:
-    capture = FakeCapture(answers=[speech()])
-    stt = says("evet")
-
-    await one_turn(asking(capture=capture, stt=stt), capture)
-
-    assert stt.hints == ["tr"]
+    assert referee.asked == []
 
 
 @pytest.mark.parametrize(
@@ -1544,44 +1524,47 @@ async def test_the_recogniser_is_told_which_language_to_expect() -> None:
         ("vazgeçtim", "no", False),
     ],
 )
-async def test_the_judge_decides_what_the_answer_meant(
+async def test_the_referee_decides_what_the_answer_meant(
     answer: str, verdict: Verdict, runs: bool
 ) -> None:
-    """D49: no word lists. "tamamdır gönderebilirsin" holds neither "evet"
-    nor "tamam" as a word, and is a yes; "evet ama önce bana oku" holds
-    "evet", and is a no - the lists had both the wrong way round."""
+    """D49, D54: no word lists. "tamamdır gönderebilirsin" holds neither
+    "evet" nor "tamam" as a word, and is a yes; "evet ama önce bana oku"
+    holds "evet", and is a no - the lists had both the wrong way round."""
     capture = FakeCapture(answers=[speech()])
-    judge = FakeJudge({answer: verdict})
+    referee = says(answer, verdicts={answer: verdict})
 
-    await one_turn(asking(capture=capture, stt=says(answer), judge=judge), capture)
+    await one_turn(asking(capture=capture, referee=referee), capture)
 
     assert (ran == ["open_app:Spotify"]) is runs
     assert len(capture.windows) == 1
 
 
-async def test_the_judge_is_shown_the_outline_and_what_was_heard() -> None:
+async def test_the_referee_is_shown_the_outline_and_the_window_s_recording() -> None:
     """Never the call's values (D49), and the second question is judged
     against the first: "Anlayamadım. Evet mi, hayır mı?" is not what the
-    user is saying yes to."""
-    capture = FakeCapture(answers=[speech(), speech()])
-    judge = FakeJudge()
+    user is saying yes to. What it hears is what the window recorded."""
+    first, second = speech(), speech(1.5)
+    capture = FakeCapture(answers=[first, second])
+    referee = says("belki", "evet")
 
-    await one_turn(asking(capture=capture, stt=says("belki", "evet"), judge=judge), capture)
+    await one_turn(asking(capture=capture, referee=referee), capture)
 
-    assert judge.asked == [("… will be opened.", "belki"), ("… will be opened.", "evet")]
+    assert [question for question, _ in referee.asked] == ["… will be opened."] * 2
+    assert [len(audio) for _, audio in referee.asked] == [len(first), len(second)]
 
 
-async def test_an_answer_the_judge_could_not_decide_runs_nothing_and_is_not_asked_again() -> None:
-    """Fail closed: a judge out of reach is not a yes, and asking again would
-    reach the same judge. The model is told the answer was not understood."""
+async def test_an_answer_the_referee_could_not_decide_runs_nothing_and_is_not_asked_again() -> None:
+    """Fail closed: a referee out of reach is not a yes, and asking again
+    would reach the same referee. The model is told the answer was not
+    understood."""
     capture = FakeCapture(answers=[speech(), speech()])
     room = wants_spotify()
     lines: list[str] = []
     handle = logger.add(lines.append, level="INFO", format="{message}")
 
     try:
-        judge = FakeJudge({"evet": None})
-        await one_turn(asking(room, capture=capture, stt=says("Evet."), judge=judge), capture)
+        referee = says("Evet.", verdicts={"evet": None})
+        await one_turn(asking(room, capture=capture, referee=referee), capture)
     finally:
         logger.remove(handle)
 
@@ -1592,13 +1575,13 @@ async def test_an_answer_the_judge_could_not_decide_runs_nothing_and_is_not_aske
     assert heard == ["confirm answer: 'Evet.' -> not judged"]
 
 
-async def test_nothing_heard_is_never_shown_to_the_judge() -> None:
+async def test_nothing_heard_is_never_shown_to_the_referee() -> None:
     capture = FakeCapture()
-    judge = FakeJudge()
+    referee = says()
 
-    await one_turn(asking(capture=capture, stt=says(), judge=judge), capture)
+    await one_turn(asking(capture=capture, referee=referee), capture)
 
-    assert judge.asked == []
+    assert referee.asked == []
 
 
 async def test_the_turn_passes_through_confirming_and_back_to_the_door() -> None:
@@ -1607,7 +1590,7 @@ async def test_the_turn_passes_through_confirming_and_back_to_the_door() -> None
     seen: list[State] = []
     capture = FakeCapture(answers=[speech()])
 
-    await one_turn(asking(capture=capture, stt=says("evet"), on_state=seen.append), capture)
+    await one_turn(asking(capture=capture, referee=says("evet"), on_state=seen.append), capture)
 
     assert seen == [
         State.IDLE,
@@ -1627,7 +1610,7 @@ async def test_the_session_s_input_is_paused_for_the_window_and_not_after() -> N
     capture.on_window = lambda: capture.heard(b"evet")
     room = wants_spotify()
 
-    await one_turn(asking(room, capture=capture, stt=says("evet")), capture)
+    await one_turn(asking(room, capture=capture, referee=says("evet")), capture)
 
     assert capture.pauses == [True, False]
     assert capture.paused_windows == [True]
@@ -1643,7 +1626,7 @@ async def test_the_microphone_is_deaf_while_the_question_is_read_and_not_after()
     during: list[bool] = []
     speaker = FakeSpeaker(on_play=lambda: during.append(capture.deaf))
 
-    await one_turn(asking(capture=capture, stt=says("evet"), speaker=speaker), capture)
+    await one_turn(asking(capture=capture, referee=says("evet"), speaker=speaker), capture)
 
     assert during == [True, True], "the question, then the answer"
     assert capture.deaf_windows == [False]
@@ -1656,7 +1639,7 @@ async def test_the_model_is_heard_to_its_end_before_the_question_is_asked() -> N
     speaker = FakeSpeaker()
     room = wants_spotify(voice("Bakayım. "))
 
-    await one_turn(asking(room, capture=capture, stt=says("evet"), speaker=speaker), capture)
+    await one_turn(asking(room, capture=capture, referee=says("evet"), speaker=speaker), capture)
 
     assert speaker.heard.startswith("Bakayım. Spotify will be opened.")
 
@@ -1669,7 +1652,7 @@ async def test_a_voice_while_the_question_is_read_is_a_no() -> None:
     speaker = FakeSpeaker()
     speaker.on_play = capture.speak
 
-    await one_turn(asking(capture=capture, stt=says("evet"), speaker=speaker), capture)
+    await one_turn(asking(capture=capture, referee=says("evet"), speaker=speaker), capture)
 
     assert ran == []
     assert capture.windows == []
@@ -1679,7 +1662,7 @@ async def test_a_voice_while_the_question_is_read_is_a_no() -> None:
 async def test_switching_off_in_the_window_is_a_no() -> None:
     capture = FakeCapture(answers=[speech()])
     capture.on_window = capture.switch_off
-    assistant = asking(capture=capture, stt=says("evet"))
+    assistant = asking(capture=capture, referee=says("evet"))
 
     await one_turn(assistant, capture)
 
@@ -2018,7 +2001,7 @@ async def test_a_polite_hang_up_ends_the_session_and_the_next_sentence_opens_one
 async def test_the_sentences_it_says_are_the_ones_in_the_locale_pack() -> None:
     """Nothing said out loud is written in this file: the pack answers
     first, `TEXT` last."""
-    english = Locale(code="en", name="English", stt_language="en", ui={})
+    english = Locale(code="en", name="English", ui={})
     capture = FakeCapture()
     tts = FakeTTS()
     provider = Provider(refuse=[ProviderError("down", kind="unreachable")])
@@ -2114,7 +2097,7 @@ async def test_a_sentence_cut_short_lets_the_voice_go() -> None:
     capture = FakeCapture(answers=[speech()])
     tts = FakeTTS()
 
-    await one_turn(asking(capture=capture, stt=says("evet"), tts=tts, speaker=Stops()), capture)
+    await one_turn(asking(capture=capture, referee=says("evet"), tts=tts, speaker=Stops()), capture)
 
     assert tts.said[0] == "Spotify will be opened."
     assert tts.closed >= 1
@@ -2293,3 +2276,288 @@ async def test_without_a_wake_word_the_idle_close_does_not_sleep() -> None:
 
     assert capture.sleeps == 0
     assert assistant.state is State.IDLE
+
+
+async def test_the_user_s_word_puts_it_to_sleep_at_once() -> None:
+    """D50, "kendini uykuya al": the tool's result reaches the session,
+    nothing the model says after it is played, the session is hung up, the
+    capture sleeps, and the wake chime plays turned round."""
+    bedtime = Bedtime()
+    capture = FakeCapture(asleep=True)
+    speaker = FakeSpeaker()
+    room = Room(after_result=[voice("İyi uykular."), OutputText("İyi uykular."), TurnComplete()])
+    turns: list[Turn] = []
+    assistant = assistant_with(
+        capture=capture,
+        provider=Provider(room),
+        runner=runner_with(Sleepy(bedtime)),
+        speaker=speaker,
+        greeting="none",
+        bedtime=bedtime,
+        on_turn=turns.append,
+    )
+    await assistant.begin()
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    room.arrives(InputText("kendini uykuya al"), calls("go_to_sleep"))
+    await until(lambda: assistant.state is State.SLEEPING)
+    await assistant.settled()
+
+    assert [call.name for call, _ in room.results] == ["go_to_sleep"]
+    assert not assistant.session_open
+    assert capture.sleeps == 1 and capture.asleep
+    assert speaker.played == [falling_chime()]
+    assert speaker.rates == [CHIME_RATE]
+    [turn] = turns
+    assert (turn.heard, turn.said, turn.tool_calls) == ("kendini uykuya al", "", 1)
+
+
+async def test_the_other_call_of_the_same_message_is_answered_before_it_sleeps() -> None:
+    """D50 with D46, "müziği durdur ve uyu": both results reach the session,
+    then it sleeps."""
+    bedtime = Bedtime()
+    capture = FakeCapture(asleep=True)
+    room = Room()
+    assistant = assistant_with(
+        capture=capture,
+        provider=Provider(room),
+        runner=runner_with(Sleepy(bedtime)),
+        greeting="none",
+        bedtime=bedtime,
+    )
+    await assistant.begin()
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    room.arrives(calls("go_to_sleep", "c1"), calls("clock", "c2"))
+    await until(lambda: assistant.state is State.SLEEPING)
+    await assistant.settled()
+
+    assert [call.name for call, _ in room.results] == ["go_to_sleep", "clock"]
+
+
+async def test_the_wake_word_after_it_continues_the_conversation() -> None:
+    """D50: the handle is kept - the wake word within the resume window opens
+    the next session where the last one left off."""
+    bedtime = Bedtime()
+    capture = FakeCapture(asleep=True)
+    room = Room(Resumable("h-1"))
+    provider = Provider(room, Room())
+    assistant = assistant_with(
+        capture=capture,
+        provider=provider,
+        runner=runner_with(Sleepy(bedtime)),
+        greeting="none",
+        bedtime=bedtime,
+    )
+    await assistant.begin()
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+    room.arrives(calls("go_to_sleep"))
+    await until(lambda: assistant.state is State.SLEEPING)
+    await assistant.settled()
+
+    capture.call_wake()
+    await until(lambda: len(provider.opened) == 2)
+
+    assert provider.opened[1].resume_handle == "h-1"
+
+
+async def test_without_a_wake_word_the_user_s_word_only_closes_the_session() -> None:
+    """The tool is offered only with a wake word (D50), but the state machine
+    does not lean on that: with nothing to sleep behind, the session closes,
+    the door stays open and nothing chimes."""
+    bedtime = Bedtime()
+    capture = FakeCapture()
+    speaker = FakeSpeaker()
+    room = Room()
+    assistant = assistant_with(
+        capture=capture,
+        provider=Provider(room),
+        runner=runner_with(Sleepy(bedtime)),
+        speaker=speaker,
+        bedtime=bedtime,
+    )
+    await assistant.begin()
+    capture.speak()
+    capture.quiet()
+    await until(lambda: assistant.session_open)
+
+    room.arrives(calls("go_to_sleep"))
+    await until(lambda: not assistant.session_open)
+    await assistant.settled()
+
+    assert capture.sleeps == 0
+    assert assistant.state is State.IDLE
+    assert speaker.played == []
+
+
+# --------------------------------------------------------------------------
+# The idle clock counts answers, not voices (D51)
+# --------------------------------------------------------------------------
+
+
+async def test_a_television_does_not_keep_it_awake() -> None:
+    """The doorman takes a television for speech; until D51 every onset
+    restarted the clock and the session stayed open for as long as it talked
+    (the owner's log, 7 Oct). A voice nobody answers gets one grace."""
+    capture = FakeCapture(asleep=True)
+    assistant = assistant_with(
+        capture=capture,
+        provider=Provider(Room()),
+        idle_close_seconds=0.05,
+        idle_grace_seconds=0.02,
+        greeting="none",
+    )
+    await assistant.begin()
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    for _ in range(60):  # 0.6 s of a television, far past 0.05 + 0.02
+        capture.speak()
+        await asyncio.sleep(0.005)
+        capture.quiet()
+        await asyncio.sleep(0.005)
+
+    assert assistant.state is State.SLEEPING
+    assert capture.sleeps == 1
+    await assistant.settled()
+
+
+async def test_what_the_server_transcribes_alone_does_not_keep_it_awake() -> None:
+    capture = FakeCapture(asleep=True)
+    room = Room()
+    assistant = assistant_with(
+        capture=capture, provider=Provider(room), idle_close_seconds=0.05, greeting="none"
+    )
+    await assistant.begin()
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    for _ in range(40):
+        room.arrives(InputText("hocam"), UsageReport(Usage(input_tokens=10)))
+        await asyncio.sleep(0.01)
+        if assistant.state is State.SLEEPING:
+            break
+
+    assert assistant.state is State.SLEEPING
+    await assistant.settled()
+
+
+async def test_a_voice_nothing_answers_is_closed_when_its_grace_is_over() -> None:
+    """One grace a deadline: a television that never stops is closed at its end."""
+    capture = FakeCapture(asleep=True)
+    assistant = assistant_with(
+        capture=capture,
+        provider=Provider(Room()),
+        idle_close_seconds=0.05,
+        idle_grace_seconds=0.05,
+        greeting="none",
+    )
+    await assistant.begin()
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    capture.speak()
+    await until(lambda: assistant.state is State.SLEEPING)
+
+    assert capture.sleeps == 1
+    await assistant.settled()
+
+
+async def test_a_sentence_still_being_said_at_the_deadline_gets_its_answer() -> None:
+    """The grace is for the user who began a sentence just before the
+    deadline: its answer comes after the deadline and still finds the
+    session open. (Spans of a tenth of a second and more: the whole suite
+    runs on a busy machine.)"""
+    capture = FakeCapture(asleep=True)
+    room = Room()
+    assistant = assistant_with(
+        capture=capture,
+        provider=Provider(room),
+        idle_close_seconds=0.2,
+        idle_grace_seconds=1.0,
+        greeting="none",
+    )
+    await assistant.begin()
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    capture.speak()
+    await asyncio.sleep(0.3)  # the deadline passes while it is said
+    capture.quiet()
+    await asyncio.sleep(0.05)
+    room.arrives(voice("Üçü dört geçiyor."), TurnComplete())
+    await tick()
+
+    assert assistant.session_open
+    await until(lambda: assistant.state is State.SLEEPING)
+    await assistant.settled()
+
+
+async def test_the_clock_starts_when_the_answer_has_been_heard() -> None:
+    """A long answer does not use up the window."""
+    capture = FakeCapture(asleep=True)
+    room = Room()
+    assistant = assistant_with(
+        capture=capture, provider=Provider(room), idle_close_seconds=0.2, greeting="none"
+    )
+    await assistant.begin()
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+
+    for _ in range(15):  # 0.3 s of an answer, longer than the window
+        room.arrives(voice("..."))
+        await asyncio.sleep(0.02)
+    room.arrives(TurnComplete())
+    await asyncio.sleep(0.05)
+
+    assert assistant.session_open
+    await until(lambda: assistant.state is State.SLEEPING)
+    await assistant.settled()
+
+
+async def test_a_session_opened_after_a_long_quiet_is_not_closed_at_once() -> None:
+    """Without a wake word the next onset opens a session; the clock starts
+    at its opening, not at a deadline long gone."""
+    capture = FakeCapture()
+    assistant = assistant_with(
+        capture=capture, provider=Provider(Room(), Room()), idle_close_seconds=0.2
+    )
+    await assistant.begin()
+    capture.speak()
+    capture.quiet()
+    await until(lambda: assistant.session_open)
+    await until(lambda: not assistant.session_open)
+    await asyncio.sleep(0.3)
+
+    capture.speak()
+    capture.quiet()
+    await until(lambda: assistant.session_open)
+    await asyncio.sleep(0.05)
+
+    assert assistant.session_open
+    await until(lambda: not assistant.session_open)
+    await assistant.settled()
+
+
+async def test_a_session_reopened_after_going_away_starts_the_clock_again() -> None:
+    capture = FakeCapture(asleep=True)
+    first = Room()
+    provider = Provider(first, Room())
+    assistant = assistant_with(
+        capture=capture, provider=provider, idle_close_seconds=0.3, greeting="none"
+    )
+    await assistant.begin()
+    capture.call_wake()
+    await until(lambda: assistant.session_open)
+    await asyncio.sleep(0.2)
+
+    first.arrives(GoingAway(time_left="1s"))
+    await until(lambda: len(provider.opened) == 2)
+    await asyncio.sleep(0.2)  # past the wake word's deadline, inside the reopen's
+
+    assert assistant.session_open
+    await until(lambda: assistant.state is State.SLEEPING)
+    await assistant.settled()

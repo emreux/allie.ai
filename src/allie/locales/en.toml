@@ -14,7 +14,3 @@
 code = "en"
 name = "English"
 
-[stt]
-# What Google's recogniser is told to expect (D36). Usually `code`, but not always: this
-# is the language people *speak* to the assistant, not the one it shows them.
-language = "en"

@@ -48,6 +48,33 @@ def test_the_model_is_told_it_hears_the_voice_itself() -> None:
     assert "misheard" not in said
 
 
+def test_the_assistant_has_tastes_of_its_own_and_picks_one() -> None:
+    """D52 (2026-10-09): asked six times which Formula One driver it
+    supported, the assistant said it was neutral, an AI, bound by its
+    programming. A person picks one. At the desk the old paragraph answered
+    six preference questions of six with "taraf tutmuyorum", this one none
+    of seventeen."""
+    said = PERSONALITY.casefold()
+
+    assert "opinions" in said
+    assert "pick one" in said
+    assert "never say that you are neutral" in said
+
+
+def test_the_character_is_a_manner_not_a_disguise() -> None:
+    """D52: whoever asks in earnest whether it is an AI hears the truth."""
+    assert "sincerely asks whether you are an ai, say so honestly" in PERSONALITY.casefold()
+
+
+def test_the_assistant_varies_its_words_and_sends_nobody_off_to_listen() -> None:
+    """D52: "…açtım, dinle." after a song. Having started what the user
+    asked for, a person says what it was and stops."""
+    said = PERSONALITY.casefold()
+
+    assert "vary your wording" in said
+    assert "do not tell the user to listen to it, watch it or enjoy it" in said
+
+
 def test_the_prompt_pins_no_language() -> None:
     """Section 3.12: the reply mirrors whatever language the user just used.
     Naming one here would quietly beat the rule that says so."""

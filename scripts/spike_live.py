@@ -456,7 +456,7 @@ class Spike:
         """Microphone blocks to the server, batched when the socket is slower than 20 ms."""
         from google.genai import types
 
-        from allie.stt.gemini_stt import to_pcm16
+        from allie.stt.base import to_pcm16
 
         while True:
             stamp, chunk = await self.mic_queue.get()

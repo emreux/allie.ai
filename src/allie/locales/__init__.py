@@ -73,11 +73,6 @@ class Locale:
     code: str
     name: str
 
-    # The language the *user speaks*, which is what the recogniser is told to
-    # expect. Usually the code above, and deliberately separate from it: a
-    # locale is free to show one language and listen for another.
-    stt_language: str
-
     # What `[ui]` translated, already merged over `en`. Anything missing here
     # is answered by the caller's own English constant through `say`.
     ui: Mapping[str, str]
@@ -128,7 +123,6 @@ def load(code: str | None = None, *, directory: Path | None = None) -> Locale:
     return Locale(
         code=wanted,
         name=_text(pack, "name") or wanted,
-        stt_language=_text(_table(pack, "stt"), "language") or wanted,
         ui={**_texts(_table(english, "ui")), **_texts(_table(pack, "ui"))},
         probe_question=_text(_table(pack, "probe"), "question").strip(),
         language_code=_text(_table(pack, "live"), "language_code").strip(),

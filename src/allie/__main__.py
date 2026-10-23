@@ -190,6 +190,7 @@ BUILTIN_TOOLS: tuple[str, ...] = (
     "forget",
     "install_app",
     "send_message",
+    "go_to_sleep",
 )
 
 # What `allie doctor` says, line by line. Labels rather than sentences,
@@ -207,7 +208,6 @@ DOCTOR_TEXT: dict[str, str] = {
         "  tool calling: FAILED, checked {days} days ago - most tools will not work"
     ),
     "doctor_verdict_none": "  tool calling: not checked yet (checked at the next start)",
-    "doctor_stt_gemini": "  recogniser: Google ({model})",
     "doctor_leaves": "What leaves this machine",
     "doctor_voice_goes": "  your voice: goes to Google (the recogniser)",
     "doctor_text_goes": "  what you said, as text: goes to {provider}",
@@ -476,7 +476,6 @@ def _doctor() -> int:
     from allie.store.db import database_path, open_database
     from allie.store.memory import MemoryFileError, UserMemory, memory_path
     from allie.store.repos import SettingsRepo
-    from allie.stt.gemini_stt import DEFAULT_MODEL as RECOGNISER
     from allie.tools.local import load_local_tools, local_tools_dir
     from allie.tools.mail import MAIL_ENTRY
 
@@ -528,7 +527,6 @@ def _doctor() -> int:
         say("doctor_verdict_ok", days=age)
     else:
         say("doctor_verdict_failed", days=age)
-    say("doctor_stt_gemini", model=RECOGNISER)
 
     # What leaves this machine.
     lines.append("")
@@ -1074,8 +1072,8 @@ async def _talk(
     from loguru import logger
 
     from allie.agent.core import ToolRunner
-    from allie.agent.judge import GeminiJudge
     from allie.agent.limits import Limits
+    from allie.agent.referee import LiveReferee
     from allie.announce.queue import AnnounceQueue
     from allie.app import LiveAssistant
     from allie.assistants import threshold_for
@@ -1083,7 +1081,7 @@ async def _talk(
     from allie.audio.player import SystemSpeaker
     from allie.audio.vad import Endpoint, SileroVAD
     from allie.audio.volume import SystemVolume
-    from allie.audio.wake import LiveKitWakeWord, wake_model_path
+    from allie.audio.wake import Bedtime, LiveKitWakeWord, wake_model_path
     from allie.computer.files import known_folders
     from allie.computer.power import WindowsPower
     from allie.computer.switches import (
@@ -1115,7 +1113,6 @@ async def _talk(
         UsageRepo,
     )
     from allie.store.retention import blank_old_audit_summaries, delete_old_history
-    from allie.stt.gemini_stt import GeminiSTT
     from allie.tools import computer as computer_tools
     from allie.tools import mail as mail_tools
     from allie.tools import memory as memory_tools
@@ -1139,6 +1136,7 @@ async def _talk(
         set_volume_for,
     )
     from allie.tools.registry import ToolRegistry
+    from allie.tools.sleep import go_to_sleep_for
     from allie.tools.status import system_status_for
     from allie.tools.system import (
         AppCatalog,
@@ -1171,6 +1169,9 @@ async def _talk(
             wake_model_path(settings.wake.model),
             threshold=settings.wake.threshold or threshold_for(settings.wake.model),
         )
+    # The user's word to sleep (D50): only with a wake word to sleep behind.
+    # The tool asks; the state machine, hooked at its start, falls asleep.
+    bedtime = Bedtime() if wake_word is not None else None
     # What the user asked to be kept, and the assistant's name (section
     # 3.7, 2.10): read once here, written by the two tools below, and read
     # into the prompt at every session open. Before the database for the
@@ -1180,17 +1181,17 @@ async def _talk(
     # for the same reason: a `contacts.toml` edited into nonsense - or into
     # two people who answer to one name - is a sentence before anything slow.
     book = AddressBook.load()
-    # Google's key, the Gemini entry of the Credential Manager: it hears the
-    # yes or no of every tool that asks first (D36), looks things up (D29)
-    # and reads the document folders (D35). Nothing on this machine turns
-    # speech into text, so without it no question could ever be answered -
-    # a sentence now, before anything slow and before anything holds a
-    # connection open. The live model's own key, when that is Gemini.
+    # Google's key, the Gemini entry of the Credential Manager: it looks
+    # things up (D29) and reads the document folders (D35), and is the live
+    # model's own key, which also hears the yes or no of every tool that
+    # asks first (D54) - a sentence now, before anything slow and before
+    # anything holds a connection open. Which of these a key of another
+    # provider can take is D55's (the model roles), not built yet.
     google_key = load_api_key("gemini")
     if not google_key:
         raise MissingAPIKeyError(
-            "no API key stored for 'gemini', which hears the yes or no of a "
-            "confirmation - run 'allie setup' to add one"
+            "no API key stored for 'gemini', which looks things up and reads "
+            "the document folders - run 'allie setup' to add one"
         )
     database = open_database()
     # What the audit rows still say (section 3.7, 4.6): a summary older
@@ -1272,14 +1273,6 @@ async def _talk(
         # The apps this machine can open, read once: a few seconds of
         # files and a PowerShell process, on a thread (2.2).
         catalog = await AppCatalog.load()
-        # Google hears the yes or no of the gate's window and nothing else
-        # (D3, D10, D36): nothing on this machine turns speech into text,
-        # and there is no setting for it.
-        speech = GeminiSTT(google_key)
-        # And a small model of its own says what the answer meant - yes, no
-        # or unclear - shown the question's outline and never the call's
-        # values (D49). No word lists.
-        judge = GeminiJudge(google_key)
         # The program's own voice (D3, D4, D10, D32): the live model itself,
         # in the conversation's voice, reading from a session of its own -
         # the gate's questions, the reminders and the three failure
@@ -1294,6 +1287,11 @@ async def _talk(
             directory=data_dir() / "voice",
             on_unsaid=screen.notice,
         )
+        # The yes or no of the gate's window, heard and judged by the live
+        # model as well, from a session of its own (D54): shown the
+        # question's outline and never the call's values (D49), no word
+        # lists, and nothing on this machine turns speech into text (D36).
+        referee = LiveReferee(provider, model=live.model, language_code=pack.language_code)
         # The Microsoft Store, asked last by `open_app` and installed from
         # by `install_app` - the one tool that changes what is on the
         # machine, and asks first (2026-09-13).
@@ -1464,6 +1462,8 @@ async def _talk(
                         messaging_tools.TEXT["send_message_confirm"],
                     ),
                 ),
+                # Asleep at the user's word (D50), only with a wake word.
+                *([go_to_sleep_for(bedtime)] if bedtime is not None else []),
                 # The owner's own, from %APPDATA%\allie\tools:
                 # read here, through the same gate, never in the repository.
                 *load_local_tools(),
@@ -1558,8 +1558,7 @@ async def _talk(
             session_config=session_config,
             tool_runner=runner,
             tts=voice,
-            stt=speech,
-            judge=judge,
+            referee=referee,
             # The sound both ways goes to the screen's meter (D20).
             speaker=SystemSpeaker(on_level=screen.level),
             locale=pack,
@@ -1579,6 +1578,8 @@ async def _talk(
             greeting=settings.wake.greeting,
             # What `look_up` and `x_trends` searched, for the screen (D29).
             searched=searched,
+            # The user's word to sleep, from `go_to_sleep` (D50).
+            bedtime=bedtime,
             on_state=screen.state if icon is None else _each(screen.state, icon.state),
             on_turn=_finished(screen, history),
             # The toggle's news goes to the state machine first - off is

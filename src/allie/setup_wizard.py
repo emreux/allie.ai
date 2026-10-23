@@ -223,6 +223,7 @@ TEXT: dict[str, str] = {
     "settings": "Settings - choose one to change it",
     "settings_close": "Close",
     "setting_assistant": "Assistant: {value}",
+    "setting_voice": "Voice: {value}",
     "setting_provider": "Provider: {value}",
     "setting_locale": "Language: {value}",
     "setting_api_key": "API key: {value}",
@@ -231,6 +232,33 @@ TEXT: dict[str, str] = {
     "setting_model": "Model: {value}",
     "setting_microphone": "Microphone: {value}",
     "setting_saved": "Saved: {setting}",
+    # The voice row (D53): each voice by its name and the provider's word
+    # for how it sounds, of the assistant's gender only.
+    "voice": "Which voice should the assistant speak in?",
+    "voice_option": "{name} - {style}",
+    "voice_default": "the model's own",
+    "voice_style_bright": "bright",
+    "voice_style_breathy": "breathy",
+    "voice_style_breezy": "breezy",
+    "voice_style_casual": "casual",
+    "voice_style_clear": "clear",
+    "voice_style_easy_going": "easy-going",
+    "voice_style_even": "even",
+    "voice_style_excitable": "excitable",
+    "voice_style_firm": "firm",
+    "voice_style_forward": "forward",
+    "voice_style_friendly": "friendly",
+    "voice_style_gentle": "gentle",
+    "voice_style_gravelly": "gravelly",
+    "voice_style_informative": "informative",
+    "voice_style_knowledgeable": "knowledgeable",
+    "voice_style_lively": "lively",
+    "voice_style_mature": "mature",
+    "voice_style_smooth": "smooth",
+    "voice_style_soft": "soft",
+    "voice_style_upbeat": "upbeat",
+    "voice_style_warm": "warm",
+    "voice_style_youthful": "youthful",
 }
 
 
@@ -498,6 +526,8 @@ class _Setting:
 
         assistant = self._current(settings)
         rows = [row("assistant", assistant.name if assistant else settings.wake.model)]
+        if entry is not None and entry.voices:
+            rows.append(row("voice", _voice_words(said, entry, settings.live.voice)))
         if len(self._buildable) > 1:
             rows.append(row("provider", entry.display_name if entry else provider_id))
         rows.append(row("locale", locales.load(settings.locale.code).name))
@@ -528,6 +558,10 @@ class _Setting:
                 },
             )
             _name(assistant.name)
+            return True
+
+        if key == "voice":
+            _save(live={"voice": await self._pick_voice(settings)})
             return True
 
         if key == "locale":
@@ -626,6 +660,22 @@ class _Setting:
         _remember(self._database, provider_id, model, verdict)
         return True
 
+    async def _pick_voice(self, settings: Settings) -> str:
+        """One of the provider's voices, of the assistant's gender (plan.md
+        D53, the owner: Jarvis and Vesper speak as men, so their list shows
+        men's voices only). An assistant of the user's own making has no
+        gender to go by and is offered every one. Choosing the assistant
+        again gives it back its own voice (D31)."""
+        said = wording()
+        assistant = self._current(settings)
+        entry = self._entries[settings.live.provider]
+        options = [
+            Option(name, _voice_words(said, entry, name))
+            for name, voice in entry.voices.items()
+            if assistant is None or voice.gender == assistant.gender
+        ]
+        return _answered(await self._prompter.choose("voice", options))
+
     def _current(self, settings: Settings) -> Assistant | None:
         """The assistant whose wake phrase the settings name."""
         return next(
@@ -638,6 +688,19 @@ class _Setting:
             if option.value == setting:
                 return option.label
         return setting
+
+
+def _voice_words(said: Mapping[str, str], entry: ProviderEntry, name: str) -> str:
+    """A voice as the list shows it: its name and how it sounds. A voice the
+    catalogue does not list - written by hand - is its name alone, and no
+    voice at all is the model's own."""
+    if not name:
+        return said["voice_default"]
+    voice = entry.voices.get(name)
+    if voice is None:
+        return name
+    sounds = said.get(f"voice_style_{voice.style}", voice.style)
+    return said["voice_option"].format(name=name, style=sounds)
 
 
 def _save(**changes: Mapping[str, object]) -> Path:

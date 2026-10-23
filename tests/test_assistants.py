@@ -14,6 +14,7 @@ from allie.assistants import (
     load_assistants,
     threshold_for,
 )
+from allie.live.registry import load_catalog
 
 WAKE = resources.files("allie.wake")
 
@@ -56,6 +57,16 @@ def test_each_assistant_has_a_voice_of_its_own_on_gemini() -> None:
 
     assert all(voices)
     assert len(set(voices)) == len(voices)
+
+
+def test_each_assistant_s_own_voice_is_among_those_offered_to_it() -> None:
+    """D53: the settings list offers only voices of the assistant's gender,
+    so its own voice must be one of them - or the voice chosen with the
+    assistant could not be chosen again from the list."""
+    voices = load_catalog()["gemini"].voices
+
+    for assistant in load_assistants().values():
+        assert voices[assistant.voice_for("gemini")].gender == assistant.gender
 
 
 def test_a_provider_the_entry_names_no_voice_for_speaks_in_its_default() -> None:

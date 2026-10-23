@@ -50,7 +50,6 @@ from allie.tools.web import fetch_page_for, read_clipboard_for
 from allie.web.page import PageReader, read_html
 from tests.test_app import (
     FakeCapture,
-    FakeJudge,
     FakeSpeaker,
     FakeTTS,
     Provider,
@@ -161,8 +160,7 @@ class Listener:
 
     def __init__(self, *answers: str) -> None:
         self.capture = FakeCapture(answers=[speech() for _ in answers])
-        self.stt = says(*answers)
-        self.judge = FakeJudge()
+        self.referee = says(*answers)
         self.tts = FakeTTS()
         self.speaker = FakeSpeaker()
 
@@ -172,8 +170,7 @@ class Listener:
             provider=Provider(room),
             runner=runner,
             tts=self.tts,
-            stt=self.stt,
-            judge=self.judge,
+            referee=self.referee,
             speaker=self.speaker,
         )
 
@@ -298,9 +295,8 @@ async def test_the_no_is_heard_locally_and_never_reaches_the_session(
 
     assert user.capture.windows == [CONFIRM_WINDOW_SECONDS]
     assert user.capture.paused_windows == [True]
-    assert user.stt.hints == ["tr"]
-    # D49: the model that judged the answer saw nothing the page chose.
-    assert user.judge.asked == [(OUTLINE, "hayır")]
+    # D49, D54: the model that judged the answer saw nothing the page chose.
+    assert [question for question, _ in user.referee.asked] == [OUTLINE]
 
 
 async def test_a_model_that_reads_the_page_as_content_answers_in_words(

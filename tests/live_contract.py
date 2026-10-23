@@ -237,6 +237,7 @@ class FakeLiveSession:
     def __init__(self, events: Sequence[LiveEvent] = (), *, input_rate: int = 16_000) -> None:
         self.script = list(events)
         self.audio: list[bytes] = []
+        self.utterances: list[bytes] = []
         self.texts: list[tuple[str, str, bool]] = []
         self.results: list[tuple[ToolCall, str]] = []
         self.interrupts = 0
@@ -247,6 +248,10 @@ class FakeLiveSession:
 
     async def send_audio(self, pcm16: bytes) -> None:
         self.audio.append(pcm16)
+        self.audio_in_ms += len(pcm16) * 1000 // (self._input_rate * 2)
+
+    async def send_utterance(self, pcm16: bytes) -> None:
+        self.utterances.append(pcm16)
         self.audio_in_ms += len(pcm16) * 1000 // (self._input_rate * 2)
 
     async def send_text(self, text: str, *, role: str = "user", turn_complete: bool = True) -> None:

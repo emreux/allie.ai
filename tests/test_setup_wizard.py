@@ -38,6 +38,7 @@ import asyncio
 import sqlite3
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -74,7 +75,7 @@ from allie.live.base import (
     TurnComplete,
 )
 from allie.live.probe import NO_TOOL_CALL, QUESTION, ProbeResult, remembered
-from allie.live.registry import ADAPTERS, ProviderEntry
+from allie.live.registry import ADAPTERS, ProviderEntry, Voice, load_catalog
 from allie.setup_wizard import (
     TEXT,
     Option,
@@ -1190,12 +1191,12 @@ async def test_mic_with_nothing_to_choose_from_gives_up(
 # --------------------------------------------------------------------------
 
 
-def set_up(*, key: str | None = GOOD_KEY) -> None:
+def set_up(*, key: str | None = GOOD_KEY, wake: str = "hey_vesper", voice: str = "Orus") -> None:
     """A machine the first setup has run on: Vesper, Turkish, `fast`."""
     save_settings(
         Settings(
-            live=LiveSettings(primary="gemini:fast", voice="Orus", idle_close_seconds=30.0),
-            wake=WakeSettings(enabled=True, model="hey_vesper", threshold=0.5),
+            live=LiveSettings(primary="gemini:fast", voice=voice, idle_close_seconds=30.0),
+            wake=WakeSettings(enabled=True, model=wake, threshold=0.5),
             locale=LocaleSettings(code="tr"),
         )
     )
@@ -1276,6 +1277,112 @@ async def test_changing_the_assistant_asks_that_one_question_and_keeps_the_rest(
     assert settings.locale.code == "tr"
     assert vault.vault == {(KEYRING_SERVICE, "gemini"): GOOD_KEY}
     assert fake_adapter == []
+
+
+# Two of each, in the catalogue's order (D53).
+VOICES = {
+    "Achird": Voice(gender="male", style="friendly"),
+    "Kore": Voice(gender="female", style="firm"),
+    "Orus": Voice(gender="male", style="firm"),
+    "Sulafat": Voice(gender="female", style="warm"),
+}
+
+
+async def voiced_run(prompter: ScriptedPrompter) -> int:
+    """The settings list over a provider that names its voices."""
+    catalog = {"gemini": replace(fake_catalog()["gemini"], voices=VOICES)}
+    return await run_settings(prompter, catalog=catalog, microphones=LAPTOP)
+
+
+def voice(name: str) -> str:
+    """A voice as the Turkish pack words it: its name and how it sounds."""
+    pack = locales.load("tr")
+    style = VOICES[name].style
+    sounds = pack.say(f"voice_style_{style}", TEXT[f"voice_style_{style}"])
+    return pack.say("voice_option", TEXT["voice_option"]).format(name=name, style=sounds)
+
+
+async def test_the_voice_row_names_the_voice_and_how_it_sounds(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """D53: under the assistant, its voice - "Ses: Orus — sert"."""
+    set_up()
+    prompter = settings_list()
+
+    await voiced_run(prompter)
+
+    assert prompter.offered["settings"][:2] == ["assistant", "voice"]
+    assert prompter.labelled["settings"][1] == row("voice", voice("Orus"))
+
+
+async def test_a_man_s_assistant_is_offered_the_men_s_voices_only(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """The owner (2026-10-09): Jarvis and Vesper speak as men, so their list
+    shows men's voices only."""
+    set_up()
+    prompter = settings_list(settings=["voice"], voice="Achird")
+
+    await voiced_run(prompter)
+
+    settings = load_settings()
+    assert prompter.offered["voice"] == ["Achird", "Orus"]
+    assert prompter.labelled["voice"] == [voice("Achird"), voice("Orus")]
+    assert settings.live.voice == "Achird"
+    # The voice alone: the assistant, its wake word and the rest stay.
+    assert (settings.wake.model, settings.wake.threshold) == ("hey_vesper", 0.5)
+    assert settings.live.primary == "gemini:fast"
+    assert ("setting_saved", {"setting": row("voice", voice("Achird"))}) in prompter.said
+
+
+async def test_a_woman_s_assistant_is_offered_the_women_s_voices_only(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """...and Friday and Allie speak as women."""
+    set_up(wake="hey_friday", voice="Kore")
+    prompter = settings_list(settings=["voice"], voice="Sulafat")
+
+    await voiced_run(prompter)
+
+    assert prompter.offered["voice"] == ["Kore", "Sulafat"]
+    assert load_settings().live.voice == "Sulafat"
+
+
+async def test_a_wake_model_of_the_user_s_own_is_offered_every_voice(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """No assistant of the catalogue, no gender to go by."""
+    set_up(wake="my_own_phrase")
+    prompter = settings_list(settings=["voice"], voice="Kore")
+
+    await voiced_run(prompter)
+
+    assert prompter.offered["voice"] == list(VOICES)
+
+
+def test_every_shipped_voice_says_how_it_sounds_in_turkish() -> None:
+    styles = {sound.style for sound in load_catalog()["gemini"].voices.values()}
+    turkish = locales.load("tr")
+
+    for style in styles:
+        assert f"voice_style_{style}" in TEXT, style
+        assert turkish.say(f"voice_style_{style}", "") != "", style
+
+
+async def test_a_voice_the_catalogue_does_not_list_is_shown_by_its_name(
+    config_home: Path, vault: MemoryKeyring
+) -> None:
+    """A hand-edited `[live] voice`; an empty one is the model's own."""
+    set_up(voice="Puck")
+    prompter = settings_list()
+    await voiced_run(prompter)
+    assert prompter.labelled["settings"][1] == row("voice", "Puck")
+
+    set_up(voice="")
+    prompter = settings_list()
+    await voiced_run(prompter)
+    own = locales.load("tr").say("voice_default", TEXT["voice_default"])
+    assert prompter.labelled["settings"][1] == row("voice", own)
 
 
 async def test_a_saved_row_is_said_with_what_it_says_now(

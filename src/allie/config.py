@@ -149,9 +149,10 @@ class LiveSettings(BaseModel):
     The three numbers are the session policy of D5 and D6. `barge_in` keeps
     the microphone streaming while the model speaks, so that talking over it
     stops it; off, the microphone is deaf while it speaks, as the old
-    pipeline was. `idle_close_seconds` of no speech and no model output
-    closes the session - a live session bills by the minute while open,
-    silent or not - and `resume_minutes` is how long the provider's
+    pipeline was. `idle_close_seconds` after the assistant's last answer
+    closes the session (D51: a voice nobody answers does not count) - a
+    live session bills by the minute while open, silent or not - and
+    `resume_minutes` is how long the provider's
     resumption handle is reused when it reopens, so that the conversation
     continues. Four, not the ten of D5: measured 2026-09-21, Gemini takes
     the handle four minutes after the close and refuses it at five (close
